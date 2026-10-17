@@ -1,0 +1,552 @@
+"use client";
+
+import { Info, Loader2 } from "lucide-react";
+import Link from "next/link";
+import { useActionState } from "react";
+import { useFormStatus } from "react-dom";
+
+import { Button, buttonVariants } from "@/components/ui/button";
+import { Field, Input, Select, Textarea } from "@/components/ui/field";
+import { Panel } from "@/components/ui/panel";
+import {
+  BookingPriority,
+  BookingStatus,
+  McoStatus,
+  PassengerType,
+  TicketStatus,
+} from "@/generated/prisma/enums";
+
+import type { BookingFormState } from "./actions";
+import { Repeater } from "./repeater";
+
+export interface BookingFormOptions {
+  customers: { id: string; reference: string; firstName: string; lastName: string }[];
+  agents: { id: string; name: string }[];
+  suppliers: { id: string; name: string }[];
+  mcoSuppliers: { id: string; name: string }[];
+  bookingTypes: { id: string; label: string }[];
+  tfns: { id: string; number: string; label: string }[];
+  currencies: string[];
+  defaultCurrency: string;
+}
+
+function humanise(value: string): string {
+  const lower = value.replace(/_/g, " ").toLowerCase();
+  return lower.charAt(0).toUpperCase() + lower.slice(1);
+}
+
+function SubmitButton() {
+  const { pending } = useFormStatus();
+
+  return (
+    <Button type="submit" size="lg" disabled={pending}>
+      {pending ? <Loader2 className="animate-spin" /> : null}
+      {pending ? "Saving…" : "Create booking"}
+    </Button>
+  );
+}
+
+export function FlightBookingForm({
+  action,
+  options,
+  preselectedCustomerId,
+}: {
+  action: (
+    state: BookingFormState,
+    formData: FormData,
+  ) => Promise<BookingFormState>;
+  options: BookingFormOptions;
+  preselectedCustomerId?: string | undefined;
+}) {
+  const [state, formAction] = useActionState<BookingFormState, FormData>(action, {});
+
+  const value = (field: string, fallback = ""): string =>
+    state.values?.[field] ?? fallback;
+  const error = (field: string) => state.fieldErrors?.[field];
+
+  // Row-level errors are keyed `passengers.0.firstName`; surface a summary on
+  // the section header so a collapsed section still shows it has a problem.
+  const sectionHasError = (prefix: string): boolean =>
+    Object.keys(state.fieldErrors ?? {}).some((key) => key.startsWith(prefix));
+
+  return (
+    <form action={formAction} className="flex flex-col gap-4">
+      {state.error ? (
+        <p
+          role="alert"
+          className="rounded-md bg-status-danger-bg px-3 py-2 text-sm text-status-danger"
+        >
+          {state.error}
+        </p>
+      ) : null}
+
+      {/* A — Booking details */}
+      <Panel title="Booking details" collapsible={false}>
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+          <Field id="bookingTypeId" label="Booking type" error={error("bookingTypeId")}>
+            {(props) => (
+              <Select {...props} name="bookingTypeId" defaultValue={value("bookingTypeId")}>
+                <option value="">— Select —</option>
+                {options.bookingTypes.map((type) => (
+                  <option key={type.id} value={type.id}>
+                    {type.label}
+                  </option>
+                ))}
+              </Select>
+            )}
+          </Field>
+
+          <Field id="language" label="Language" error={error("language")}>
+            {(props) => (
+              <Select {...props} name="language" defaultValue={value("language", "en")}>
+                <option value="en">English</option>
+                <option value="es">Spanish</option>
+                <option value="fr">French</option>
+              </Select>
+            )}
+          </Field>
+
+          <Field id="bookedAt" label="Booking date" hint="Defaults to now." error={error("bookedAt")}>
+            {(props) => (
+              <Input {...props} name="bookedAt" type="datetime-local" defaultValue={value("bookedAt")} />
+            )}
+          </Field>
+
+          <Field id="assignedAgentId" label="Assigned agent" error={error("assignedAgentId")}>
+            {(props) => (
+              <Select {...props} name="assignedAgentId" defaultValue={value("assignedAgentId")}>
+                <option value="">— Unassigned —</option>
+                {options.agents.map((agent) => (
+                  <option key={agent.id} value={agent.id}>
+                    {agent.name}
+                  </option>
+                ))}
+              </Select>
+            )}
+          </Field>
+
+          <Field id="source" label="Booking source" error={error("source")}>
+            {(props) => (
+              <Input {...props} name="source" placeholder="Phone, web, partner" defaultValue={value("source")} />
+            )}
+          </Field>
+
+          <Field id="priority" label="Priority" error={error("priority")}>
+            {(props) => (
+              <Select {...props} name="priority" defaultValue={value("priority", BookingPriority.NORMAL)}>
+                {Object.values(BookingPriority).map((level) => (
+                  <option key={level} value={level}>
+                    {humanise(level)}
+                  </option>
+                ))}
+              </Select>
+            )}
+          </Field>
+
+          <Field
+            id="status"
+            label="Initial status"
+            hint="Confirmed and Ticketed are reached later, once the evidence exists."
+            error={error("status")}
+          >
+            {(props) => (
+              <Select {...props} name="status" defaultValue={value("status", BookingStatus.PENDING)}>
+                <option value={BookingStatus.DRAFT}>Draft</option>
+                <option value={BookingStatus.PENDING}>Pending</option>
+              </Select>
+            )}
+          </Field>
+        </div>
+      </Panel>
+
+      {/* B — Flight information */}
+      <Panel title="Flight information" collapsible={false}>
+        <div className="mb-4 flex items-start gap-2 rounded-md bg-status-info-bg px-3 py-2 text-sm text-status-info">
+          <Info className="mt-0.5 size-4 shrink-0" />
+          <p>
+            Automatic PNR decoding is unavailable — no airline or GDS
+            integration is configured. Paste the PNR for reference and enter the
+            flight segments below.
+          </p>
+        </div>
+
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+          <Field id="pnrLocator" label="PNR / record locator" error={error("pnrLocator")}>
+            {(props) => (
+              <Input {...props} name="pnrLocator" defaultValue={value("pnrLocator")} />
+            )}
+          </Field>
+
+          <Field id="airline" label="Airline" error={error("airline")}>
+            {(props) => <Input {...props} name="airline" defaultValue={value("airline")} />}
+          </Field>
+
+          <Field id="bookingClass" label="Class of booking" error={error("bookingClass")}>
+            {(props) => (
+              <Input {...props} name="bookingClass" placeholder="Economy, Business" defaultValue={value("bookingClass")} />
+            )}
+          </Field>
+
+          <Field id="origin" label="Origin" error={error("origin")}>
+            {(props) => (
+              <Input {...props} name="origin" maxLength={3} placeholder="JFK" defaultValue={value("origin")} />
+            )}
+          </Field>
+
+          <Field id="destination" label="Destination" error={error("destination")}>
+            {(props) => (
+              <Input {...props} name="destination" maxLength={3} placeholder="LHR" defaultValue={value("destination")} />
+            )}
+          </Field>
+
+          <Field id="supplierId" label="Supplier" error={error("supplierId")}>
+            {(props) => (
+              <Select {...props} name="supplierId" defaultValue={value("supplierId")}>
+                <option value="">— Select —</option>
+                {options.suppliers.map((supplier) => (
+                  <option key={supplier.id} value={supplier.id}>
+                    {supplier.name}
+                  </option>
+                ))}
+              </Select>
+            )}
+          </Field>
+
+          <Field id="departureDate" label="Travelling date" error={error("departureDate")}>
+            {(props) => (
+              <Input {...props} name="departureDate" type="date" defaultValue={value("departureDate")} />
+            )}
+          </Field>
+
+          <Field id="returnDate" label="Returning date" error={error("returnDate")}>
+            {(props) => (
+              <Input {...props} name="returnDate" type="date" defaultValue={value("returnDate")} />
+            )}
+          </Field>
+
+          <Field id="tfnId" label="TFN" error={error("tfnId")}>
+            {(props) => (
+              <Select {...props} name="tfnId" defaultValue={value("tfnId")}>
+                <option value="">— Select —</option>
+                {options.tfns.map((tfn) => (
+                  <option key={tfn.id} value={tfn.id}>
+                    {tfn.label} ({tfn.number})
+                  </option>
+                ))}
+              </Select>
+            )}
+          </Field>
+        </div>
+
+        <div className="mt-4">
+          <Field
+            id="pnrText"
+            label="PNR text"
+            hint="Stored as pasted, for reference only."
+            error={error("pnrText")}
+          >
+            {(props) => (
+              <Textarea {...props} name="pnrText" rows={5} className="font-mono text-xs" defaultValue={value("pnrText")} />
+            )}
+          </Field>
+        </div>
+
+        <div className="mt-5">
+          <h3 className="mb-2 text-sm font-semibold text-ink">
+            Flight segments
+            {sectionHasError("segments.") ? (
+              <span className="ml-2 text-xs font-normal text-status-danger">
+                Check the highlighted fields
+              </span>
+            ) : null}
+          </h3>
+
+          <Repeater name="segments" legend="Segment" addLabel="Add segment" minRows={1}>
+            {({ index, field }) => (
+              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                <Field id={field("airline")} label="Airline" error={error(`segments.${index}.airline`)}>
+                  {(props) => <Input {...props} name={field("airline")} defaultValue={value(field("airline"))} />}
+                </Field>
+                <Field id={field("flightNumber")} label="Flight no." error={error(`segments.${index}.flightNumber`)}>
+                  {(props) => <Input {...props} name={field("flightNumber")} defaultValue={value(field("flightNumber"))} />}
+                </Field>
+                <Field id={field("origin")} label="From" error={error(`segments.${index}.origin`)}>
+                  {(props) => <Input {...props} name={field("origin")} maxLength={3} defaultValue={value(field("origin"))} />}
+                </Field>
+                <Field id={field("destination")} label="To" error={error(`segments.${index}.destination`)}>
+                  {(props) => <Input {...props} name={field("destination")} maxLength={3} defaultValue={value(field("destination"))} />}
+                </Field>
+                <Field id={field("departureAt")} label="Departs" error={error(`segments.${index}.departureAt`)}>
+                  {(props) => <Input {...props} name={field("departureAt")} type="datetime-local" defaultValue={value(field("departureAt"))} />}
+                </Field>
+                <Field id={field("arrivalAt")} label="Arrives" error={error(`segments.${index}.arrivalAt`)}>
+                  {(props) => <Input {...props} name={field("arrivalAt")} type="datetime-local" defaultValue={value(field("arrivalAt"))} />}
+                </Field>
+                <Field id={field("bookingClass")} label="Class" error={error(`segments.${index}.bookingClass`)}>
+                  {(props) => <Input {...props} name={field("bookingClass")} defaultValue={value(field("bookingClass"))} />}
+                </Field>
+                <Field id={field("cabin")} label="Cabin" error={error(`segments.${index}.cabin`)}>
+                  {(props) => <Input {...props} name={field("cabin")} defaultValue={value(field("cabin"))} />}
+                </Field>
+              </div>
+            )}
+          </Repeater>
+        </div>
+      </Panel>
+
+      {/* C — Passenger information */}
+      <Panel
+        title="Passenger information"
+        description="Passport details are restricted and visible only to authorised roles."
+        collapsible={false}
+      >
+        <Repeater name="passengers" legend="Passenger" addLabel="Add passenger" minRows={1}>
+          {({ index, field }) => (
+            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+              <Field id={field("firstName")} label="First name" required error={error(`passengers.${index}.firstName`)}>
+                {(props) => <Input {...props} name={field("firstName")} defaultValue={value(field("firstName"))} />}
+              </Field>
+              <Field id={field("middleName")} label="Middle name" error={error(`passengers.${index}.middleName`)}>
+                {(props) => <Input {...props} name={field("middleName")} defaultValue={value(field("middleName"))} />}
+              </Field>
+              <Field id={field("lastName")} label="Last name" required error={error(`passengers.${index}.lastName`)}>
+                {(props) => <Input {...props} name={field("lastName")} defaultValue={value(field("lastName"))} />}
+              </Field>
+              <Field id={field("type")} label="Passenger type" error={error(`passengers.${index}.type`)}>
+                {(props) => (
+                  <Select {...props} name={field("type")} defaultValue={value(field("type"), PassengerType.ADULT)}>
+                    {Object.values(PassengerType).map((type) => (
+                      <option key={type} value={type}>
+                        {humanise(type)}
+                      </option>
+                    ))}
+                  </Select>
+                )}
+              </Field>
+              <Field id={field("gender")} label="Gender" error={error(`passengers.${index}.gender`)}>
+                {(props) => (
+                  <Select {...props} name={field("gender")} defaultValue={value(field("gender"))}>
+                    <option value="">— Select —</option>
+                    <option value="Female">Female</option>
+                    <option value="Male">Male</option>
+                    <option value="X">X</option>
+                    <option value="Undisclosed">Prefer not to say</option>
+                  </Select>
+                )}
+              </Field>
+              <Field id={field("dateOfBirth")} label="Date of birth" error={error(`passengers.${index}.dateOfBirth`)}>
+                {(props) => <Input {...props} name={field("dateOfBirth")} type="date" defaultValue={value(field("dateOfBirth"))} />}
+              </Field>
+              <Field id={field("passportNumber")} label="Passport no." error={error(`passengers.${index}.passportNumber`)}>
+                {(props) => <Input {...props} name={field("passportNumber")} defaultValue={value(field("passportNumber"))} />}
+              </Field>
+              <Field id={field("ticketNumber")} label="Ticket no." error={error(`passengers.${index}.ticketNumber`)}>
+                {(props) => <Input {...props} name={field("ticketNumber")} defaultValue={value(field("ticketNumber"))} />}
+              </Field>
+            </div>
+          )}
+        </Repeater>
+      </Panel>
+
+      {/* D — Customer and billing */}
+      <Panel title="Customer and billing" collapsible={false}>
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+          <Field
+            id="customerId"
+            label="Customer"
+            required
+            hint={
+              options.customers.length === 0
+                ? "No customers yet — create one first."
+                : undefined
+            }
+            error={error("customerId")}
+            className="sm:col-span-2"
+          >
+            {(props) => (
+              <Select
+                {...props}
+                name="customerId"
+                required
+                defaultValue={value("customerId", preselectedCustomerId ?? "")}
+              >
+                <option value="">— Select a customer —</option>
+                {options.customers.map((customer) => (
+                  <option key={customer.id} value={customer.id}>
+                    {customer.reference} — {customer.firstName} {customer.lastName}
+                  </option>
+                ))}
+              </Select>
+            )}
+          </Field>
+
+          <Field id="contactName" label="Contact name" error={error("contactName")}>
+            {(props) => <Input {...props} name="contactName" defaultValue={value("contactName")} />}
+          </Field>
+
+          <Field id="contactEmail" label="Email" error={error("contactEmail")}>
+            {(props) => <Input {...props} name="contactEmail" type="email" defaultValue={value("contactEmail")} />}
+          </Field>
+
+          <Field id="contactPhone" label="Phone" error={error("contactPhone")}>
+            {(props) => <Input {...props} name="contactPhone" type="tel" defaultValue={value("contactPhone")} />}
+          </Field>
+
+          <Field id="billingCountry" label="Billing country" error={error("billingCountry")}>
+            {(props) => <Input {...props} name="billingCountry" defaultValue={value("billingCountry")} />}
+          </Field>
+
+          <Field id="billingAddressLine1" label="Billing address" error={error("billingAddressLine1")} className="sm:col-span-2">
+            {(props) => <Input {...props} name="billingAddressLine1" defaultValue={value("billingAddressLine1")} />}
+          </Field>
+
+          <Field id="billingCity" label="City" error={error("billingCity")}>
+            {(props) => <Input {...props} name="billingCity" defaultValue={value("billingCity")} />}
+          </Field>
+
+          <Field id="billingState" label="State" error={error("billingState")}>
+            {(props) => <Input {...props} name="billingState" defaultValue={value("billingState")} />}
+          </Field>
+
+          <Field id="billingPostalCode" label="Postal code" error={error("billingPostalCode")}>
+            {(props) => <Input {...props} name="billingPostalCode" defaultValue={value("billingPostalCode")} />}
+          </Field>
+        </div>
+
+        <p className="mt-3 text-xs text-ink-muted">
+          Card numbers, CVV and expiry dates are not collected. Payments are
+          recorded against a provider transaction reference.
+        </p>
+      </Panel>
+
+      {/* E — Ticketing */}
+      <Panel title="Ticketing information" defaultOpen={false}>
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+          <Field id="ticketStatus" label="Ticket status" error={error("ticketStatus")}>
+            {(props) => (
+              <Select {...props} name="ticketStatus" defaultValue={value("ticketStatus", TicketStatus.PENDING)}>
+                {Object.values(TicketStatus).map((status) => (
+                  <option key={status} value={status}>
+                    {humanise(status)}
+                  </option>
+                ))}
+              </Select>
+            )}
+          </Field>
+
+          <Field id="airlineConfirmation" label="Airline confirmation" error={error("airlineConfirmation")}>
+            {(props) => <Input {...props} name="airlineConfirmation" defaultValue={value("airlineConfirmation")} />}
+          </Field>
+
+          <Field id="ticketingReference" label="Supplier reference" error={error("ticketingReference")}>
+            {(props) => <Input {...props} name="ticketingReference" defaultValue={value("ticketingReference")} />}
+          </Field>
+
+          <Field id="ticketingNotes" label="Ticketing notes" error={error("ticketingNotes")} className="sm:col-span-2 lg:col-span-3">
+            {(props) => <Textarea {...props} name="ticketingNotes" rows={3} defaultValue={value("ticketingNotes")} />}
+          </Field>
+        </div>
+      </Panel>
+
+      {/* F — Accounting */}
+      <Panel title="Accounting information" defaultOpen={false}>
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+          <Field id="currency" label="Currency" required error={error("currency")}>
+            {(props) => (
+              <Select {...props} name="currency" defaultValue={value("currency", options.defaultCurrency)}>
+                {options.currencies.map((code) => (
+                  <option key={code} value={code}>
+                    {code}
+                  </option>
+                ))}
+              </Select>
+            )}
+          </Field>
+
+          <Field id="baseFare" label="Base fare" error={error("baseFare")}>
+            {(props) => <Input {...props} name="baseFare" inputMode="decimal" placeholder="0.00" defaultValue={value("baseFare")} />}
+          </Field>
+
+          <Field id="taxesFees" label="Taxes and fees" error={error("taxesFees")}>
+            {(props) => <Input {...props} name="taxesFees" inputMode="decimal" placeholder="0.00" defaultValue={value("taxesFees")} />}
+          </Field>
+
+          <Field id="total" label="Total booking amount" error={error("total")}>
+            {(props) => <Input {...props} name="total" inputMode="decimal" placeholder="0.00" defaultValue={value("total")} />}
+          </Field>
+
+          <Field id="supplierCost" label="Supplier cost" error={error("supplierCost")}>
+            {(props) => <Input {...props} name="supplierCost" inputMode="decimal" placeholder="0.00" defaultValue={value("supplierCost")} />}
+          </Field>
+
+          <Field id="grossMco" label="Gross MCO" error={error("grossMco")}>
+            {(props) => <Input {...props} name="grossMco" inputMode="decimal" placeholder="0.00" defaultValue={value("grossMco")} />}
+          </Field>
+
+          <Field id="netMco" label="Net MCO" error={error("netMco")}>
+            {(props) => <Input {...props} name="netMco" inputMode="decimal" placeholder="0.00" defaultValue={value("netMco")} />}
+          </Field>
+
+          <Field id="mcoSupplierId" label="MCO supplier" error={error("mcoSupplierId")}>
+            {(props) => (
+              <Select {...props} name="mcoSupplierId" defaultValue={value("mcoSupplierId")}>
+                <option value="">— Select —</option>
+                {options.mcoSuppliers.map((supplier) => (
+                  <option key={supplier.id} value={supplier.id}>
+                    {supplier.name}
+                  </option>
+                ))}
+              </Select>
+            )}
+          </Field>
+
+          <Field id="mcoStatus" label="MCO status" error={error("mcoStatus")}>
+            {(props) => (
+              <Select {...props} name="mcoStatus" defaultValue={value("mcoStatus", McoStatus.NOT_APPLICABLE)}>
+                {Object.values(McoStatus).map((status) => (
+                  <option key={status} value={status}>
+                    {humanise(status)}
+                  </option>
+                ))}
+              </Select>
+            )}
+          </Field>
+
+          <Field id="splitCharges" label="Split charges" error={error("splitCharges")}>
+            {(props) => (
+              <Select {...props} name="splitCharges" defaultValue={value("splitCharges", "false")}>
+                <option value="false">No</option>
+                <option value="true">Yes</option>
+              </Select>
+            )}
+          </Field>
+
+          <Field id="financialNotes" label="Financial notes" error={error("financialNotes")} className="sm:col-span-2 lg:col-span-3">
+            {(props) => <Textarea {...props} name="financialNotes" rows={3} defaultValue={value("financialNotes")} />}
+          </Field>
+        </div>
+      </Panel>
+
+      {/* H — Comments and follow-up. Payments (G) are recorded against the
+          saved booking, so the booking exists before money is attached to it. */}
+      <Panel title="Comments and follow-up" defaultOpen={false}>
+        <div className="grid gap-4 sm:grid-cols-3">
+          <Field id="comment" label="Internal note" error={error("comment")} className="sm:col-span-2">
+            {(props) => <Textarea {...props} name="comment" rows={3} defaultValue={value("comment")} />}
+          </Field>
+
+          <Field id="followUpAt" label="Follow-up date" error={error("followUpAt")}>
+            {(props) => <Input {...props} name="followUpAt" type="date" defaultValue={value("followUpAt")} />}
+          </Field>
+        </div>
+      </Panel>
+
+      <div className="flex items-center gap-2 pb-8">
+        <SubmitButton />
+        <Link href="/admin/bookings" className={buttonVariants({ variant: "secondary" })}>
+          Cancel
+        </Link>
+      </div>
+    </form>
+  );
+}

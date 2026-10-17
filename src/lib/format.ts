@@ -71,6 +71,19 @@ export function toDateInputValue(
   }).format(date);
 }
 
+/**
+ * True when a due date has passed.
+ *
+ * Lives here rather than inline in a component because React's purity rule
+ * forbids calling `Date.now()` during render — the result would change between
+ * renders of the same component.
+ */
+export function isOverdue(value: Date | string | null | undefined): boolean {
+  if (!value) return false;
+  const date = typeof value === "string" ? new Date(value) : value;
+  return !Number.isNaN(date.getTime()) && date.getTime() < Date.now();
+}
+
 /** "3 days overdue" / "in 2 days" / "today". */
 export function formatRelativeDays(value: Date | string): string {
   const date = typeof value === "string" ? new Date(value) : value;

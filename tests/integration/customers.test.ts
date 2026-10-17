@@ -163,23 +163,23 @@ describe("createCustomer", () => {
 
 describe("findPotentialDuplicates", () => {
   it("matches a phone number written in a different format", async () => {
+    // Derived from the run suffix so the number cannot collide with seeded
+    // data — a collision would make this pass or fail for the wrong reason.
+    const digits = `9${String(SUFFIX).slice(-9)}`.slice(0, 10);
+    const grouped = `+1 (${digits.slice(0, 3)}) ${digits.slice(3, 6)}-${digits.slice(6)}`;
+
     const id = await makeCustomer({
       firstName: "Phone",
       lastName: "Match",
-      phone: "+1 (813) 021-2413",
+      phone: digits,
       status: CustomerStatus.ACTIVE,
       confirmedDuplicate: false,
     });
 
-    // Stored with punctuation; searched without. Both are the same number.
-    await prisma.customer.update({
-      where: { id },
-      data: { phone: "8130212413" },
-    });
-
+    // Stored as bare digits; searched with punctuation. Same number either way.
     const matches = await findPotentialDuplicates({
       email: undefined,
-      phone: "+1 813-021-2413",
+      phone: grouped,
     });
 
     expect(matches.map((match) => match.id)).toContain(id);
