@@ -50,6 +50,26 @@ const serverEnvSchema = z.object({
 
   /** Default business timezone for date bucketing in reports. */
   BUSINESS_TIMEZONE: z.string().default("UTC"),
+
+  /**
+   * Where uploaded documents are stored. Only `local` is implemented; add `s3`
+   * here and in `getStorage()` once S3-compatible credentials exist.
+   */
+  STORAGE_DRIVER: z.enum(["local"]).default("local"),
+
+  /**
+   * Root directory for the local driver.
+   *
+   * Must sit outside `public/` — anything under `public/` is served statically
+   * by URL, which would make every uploaded document world-readable.
+   */
+  STORAGE_LOCAL_ROOT: z
+    .string()
+    .default("./storage")
+    .refine(
+      (value) => !/(^|[\\/])public([\\/]|$)/.test(value),
+      "STORAGE_LOCAL_ROOT must not live under public/ — files there are served to anyone by URL.",
+    ),
 });
 
 export type ServerEnv = z.infer<typeof serverEnvSchema>;

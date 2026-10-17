@@ -61,7 +61,6 @@ export const NAV_SECTIONS: readonly NavSection[] = [
         href: "/admin/bookings/new/cruise",
         permission: PERMISSIONS.BOOKING_CREATE,
         icon: "Ship",
-        plannedInPhase: 3,
       },
       {
         label: "High Priority",
@@ -133,7 +132,6 @@ export const NAV_SECTIONS: readonly NavSection[] = [
         href: "/admin/documents",
         permission: PERMISSIONS.DOCUMENT_VIEW,
         icon: "FileText",
-        plannedInPhase: 3,
       },
     ],
   },

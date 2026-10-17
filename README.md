@@ -147,6 +147,25 @@ assert that an external action occurred:
 
 ## Build status
 
-Phase 1 (foundation): schema, authentication, authorization, admin shell,
-logging and error handling are implemented. See the implementation plan for the
-remaining phases.
+| Phase | Scope | Status |
+|---|---|---|
+| 1 | Foundation, schema, auth, admin shell | Complete |
+| 2 | Dashboard, flight bookings, customers | Complete |
+| 3 | Cruise bookings, documents, protected viewing | Complete |
+| 4 | Payments, refunds, chargebacks | Not started |
+| 5 | High-priority, agents, suppliers, TFN, service, settings | Not started |
+| 6 | Messaging, notifications, reports, CSV export | Not started |
+| 7 | QA, security testing, deployment, backups | Not started |
+
+Sidebar entries for unbuilt modules render as non-navigable labels carrying
+their phase number, so the intended structure stays visible without any link
+leading to a 404. `tests/unit/navigation.test.ts` enforces this.
+
+### Document storage
+
+Documents are stored through `src/lib/storage`, which currently uses a
+local-disk adapter rooted at `STORAGE_LOCAL_ROOT` — outside `public/`, because
+anything under `public/` is served to anyone by URL. Bytes leave the server only
+through `/api/admin/documents/[id]/view`, which re-checks `document.view` on
+every fetch; there is no public or pre-signed URL. Adding an S3 adapter is a
+change to `getStorage()` alone.

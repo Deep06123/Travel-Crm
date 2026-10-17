@@ -11,9 +11,17 @@ import {
 } from "@/lib/bookings/status";
 import { loggerFor } from "@/lib/logging/logger";
 import { PERMISSIONS } from "@/lib/permissions";
-import { createFlightBooking } from "@/server/services/booking-service";
+import {
+  createCruiseBooking,
+  createFlightBooking,
+} from "@/server/services/booking-service";
 import { transitionBooking } from "@/server/services/booking-status-service";
 
+import {
+  cruiseBookingSchema,
+  cruiseGuestSchema,
+  type CruiseGuestInput,
+} from "./cruise-schemas";
 import {
   flightBookingSchema,
   flightSegmentSchema,
@@ -270,4 +278,107 @@ export async function changeBookingStatusAction(
     );
     return { error: "The status could not be changed. Try again." };
   }
+}
+
+export async function createCruiseBookingAction(
+  _previous: BookingFormState,
+  formData: FormData,
+): Promise<BookingFormState> {
+  const user = await requirePermission(PERMISSIONS.BOOKING_CREATE);
+
+  const base = Object.fromEntries(
+    [...formData.entries()].filter(
+      ([key]) => !key.includes(".") && typeof formData.get(key) === "string",
+    ),
+  );
+
+  const parsed = cruiseBookingSchema.safeParse(base);
+
+  if (!parsed.success) {
+    return {
+      fieldErrors: collectFieldErrors(parsed.error.issues),
+      values: formValues(formData),
+    };
+  }
+
+  const booking = parsed.data;
+  const fieldErrors: Record<string, string> = {};
+
+  // --- Guests ---------------------------------------------------------------
+  const guests: CruiseGuestInput[] = [];
+
+  for (const group of extractGroup(formData, "guests")) {
+    const hasContent = Object.values(group.data).some((value) => value.trim() !== "");
+    if (!hasContent) continue;
+
+    const result = cruiseGuestSchema.safeParse(group.data);
+
+    if (!result.success) {
+      Object.assign(
+        fieldErrors,
+        collectFieldErrors(result.error.issues, `guests.${group.index}.`),
+      );
+      continue;
+    }
+
+    guests.push(result.data);
+  }
+
+  if (guests.length === 0) {
+    fieldErrors["guests.0.firstName"] = "Add at least one guest.";
+  }
+
+  // --- Money ---------------------------------------------------------------
+  const moneyFields = [
+    ["baseFare", booking.baseFare],
+    ["taxesFees", booking.taxesFees],
+    ["total", booking.total],
+    ["supplierCost", booking.supplierCost],
+    ["grossMco", booking.grossMco],
+    ["netMco", booking.netMco],
+  ] as const;
+
+  const amounts: Record<string, number> = {};
+
+  for (const [field, raw] of moneyFields) {
+    const result = moneyFieldToMinor(raw, booking.currency, field);
+    if (!result.ok) {
+      fieldErrors[result.field] = result.message;
+      continue;
+    }
+    amounts[field] = result.minor;
+  }
+
+  if (Object.keys(fieldErrors).length > 0) {
+    return { fieldErrors, values: formValues(formData) };
+  }
+
+  let created: { id: string; bookingNumber: string };
+
+  try {
+    created = await createCruiseBooking(
+      {
+        booking,
+        amounts: {
+          baseFareMinor: amounts["baseFare"] ?? 0,
+          taxesFeesMinor: amounts["taxesFees"] ?? 0,
+          totalMinor: amounts["total"] ?? 0,
+          supplierCostMinor: amounts["supplierCost"] ?? 0,
+          grossMcoMinor: amounts["grossMco"] ?? 0,
+          netMcoMinor: amounts["netMco"] ?? 0,
+        },
+        guests,
+      },
+      user.id,
+    );
+  } catch (error) {
+    log.error({ err: error }, "Failed to create cruise booking");
+    return {
+      error: "The booking could not be saved. Try again.",
+      values: formValues(formData),
+    };
+  }
+
+  revalidatePath("/admin/bookings");
+  redirect(`/admin/bookings/${created.id}`);
 }

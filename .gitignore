@@ -50,3 +50,6 @@ skills-lock.json
 # Commit the template, never the filled-in copy
 !.env.example
 /.claude/skills/
+
+# Uploaded documents (local storage driver)
+/storage/

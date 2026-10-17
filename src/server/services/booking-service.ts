@@ -6,7 +6,7 @@ import {
   type BookingPriority,
   type BookingStatus,
   type McoStatus,
-  type TicketStatus,
+  TicketStatus,
 } from "@/generated/prisma/enums";
 import type { Prisma } from "@/generated/prisma/client";
 import { recordAudit } from "@/lib/audit";
@@ -25,6 +25,10 @@ import {
   type FlightSegmentInput,
   type PassengerInput,
 } from "@/features/bookings/schemas";
+import type {
+  CruiseBookingInput,
+  CruiseGuestInput,
+} from "@/features/bookings/cruise-schemas";
 
 /**
  * Bookings.
@@ -508,4 +512,162 @@ export function redactPassengers(
     passportCountry: null,
     passportExpiry: null,
   }));
+}
+
+// --- Cruise bookings --------------------------------------------------------
+
+export interface CreateCruiseBookingInput {
+  booking: CruiseBookingInput;
+  /** Minor-unit amounts, already converted against the booking's currency. */
+  amounts: {
+    baseFareMinor: number;
+    taxesFeesMinor: number;
+    totalMinor: number;
+    supplierCostMinor: number;
+    grossMcoMinor: number;
+    netMcoMinor: number;
+  };
+  guests: CruiseGuestInput[];
+}
+
+/**
+ * Creates a cruise booking.
+ *
+ * Shares Booking with flights but writes CruiseDetail instead of FlightDetail,
+ * and leaves every airline column untouched: a cruise record carries no PNR, no
+ * airline confirmation and no ticket status. `ticketStatus` is set to
+ * NOT_APPLICABLE rather than PENDING so cruise bookings never appear in the
+ * ticketing backlog.
+ */
+export async function createCruiseBooking(
+  { booking, amounts, guests }: CreateCruiseBookingInput,
+  actorId: string,
+): Promise<{ id: string; bookingNumber: string }> {
+  return prisma.$transaction(async (tx) => {
+    const bookingNumber = await nextBookingNumber(tx);
+
+    const created = await tx.booking.create({
+      data: {
+        bookingNumber,
+        product: BookingProduct.CRUISE,
+        status: booking.status,
+        priority: booking.priority,
+        bookingTypeId: booking.bookingTypeId ?? null,
+        customerId: booking.customerId,
+        createdById: actorId,
+        assignedAgentId: booking.assignedAgentId ?? null,
+        supplierId: booking.supplierId ?? null,
+        mcoSupplierId: booking.mcoSupplierId ?? null,
+        source: booking.source ?? null,
+        language: booking.language ?? null,
+
+        contactName: booking.contactName ?? null,
+        contactEmail: booking.contactEmail ?? null,
+        contactPhone: booking.contactPhone ?? null,
+        billingAddressLine1: booking.billingAddressLine1 ?? null,
+        billingCity: booking.billingCity ?? null,
+        billingState: booking.billingState ?? null,
+        billingPostalCode: booking.billingPostalCode ?? null,
+        billingCountry: booking.billingCountry ?? null,
+
+        // Cruise bookings are confirmed by the cruise line, not ticketed by an
+        // airline, so the ticketing lifecycle does not apply to them.
+        ticketStatus: TicketStatus.NOT_APPLICABLE,
+        airlineConfirmation: booking.confirmationReference ?? null,
+
+        mcoStatus: booking.mcoStatus,
+
+        currency: booking.currency,
+        baseFareMinor: amounts.baseFareMinor,
+        taxesFeesMinor: amounts.taxesFeesMinor,
+        totalMinor: amounts.totalMinor,
+        supplierCostMinor: amounts.supplierCostMinor,
+        grossMcoMinor: amounts.grossMcoMinor,
+        netMcoMinor: amounts.netMcoMinor,
+        splitCharges: booking.splitCharges,
+        financialNotes: booking.financialNotes ?? null,
+
+        travelStartDate: booking.sailDate ?? null,
+        travelEndDate: booking.returnDate ?? null,
+        followUpAt: booking.followUpAt ?? null,
+        ...(booking.bookedAt ? { bookedAt: booking.bookedAt } : {}),
+
+        cruiseDetail: {
+          create: {
+            cruiseLine: booking.cruiseLine,
+            ship: booking.ship ?? null,
+            reservationNumber: booking.reservationNumber ?? null,
+            itinerary: booking.itinerary ?? null,
+            departurePort: booking.departurePort ?? null,
+            arrivalPort: booking.arrivalPort ?? null,
+            sailDate: booking.sailDate ?? null,
+            returnDate: booking.returnDate ?? null,
+            nights: booking.nights ?? null,
+            cabinNumber: booking.cabinNumber ?? null,
+            cabinCategory: booking.cabinCategory ?? null,
+            cabinCount: booking.cabinCount,
+            diningPreference: booking.diningPreference ?? null,
+            gratuitiesIncluded: booking.gratuitiesIncluded,
+            insuranceIncluded: booking.insuranceIncluded,
+            assistanceNotes: booking.assistanceNotes ?? null,
+          },
+        },
+
+        // Guests reuse the Passenger table; ticketNumber stays null because a
+        // cruise guest does not hold an air ticket.
+        passengers: {
+          create: guests.map((guest, index) => ({
+            sequence: index + 1,
+            title: guest.title ?? null,
+            firstName: guest.firstName,
+            middleName: guest.middleName ?? null,
+            lastName: guest.lastName,
+            type: guest.type,
+            gender: guest.gender ?? null,
+            dateOfBirth: guest.dateOfBirth ?? null,
+            passportNumber: guest.passportNumber ?? null,
+            passportCountry: guest.passportCountry ?? null,
+            passportExpiry: guest.passportExpiry ?? null,
+            cabinNumber: guest.cabinNumber ?? booking.cabinNumber ?? null,
+            notes: guest.notes ?? null,
+          })),
+        },
+
+        statusHistory: {
+          create: {
+            fromStatus: null,
+            toStatus: booking.status,
+            reason: "Booking created",
+            changedById: actorId,
+          },
+        },
+
+        ...(booking.comment
+          ? {
+              comments: {
+                create: {
+                  body: booking.comment,
+                  authorId: actorId,
+                  followUpAt: booking.followUpAt ?? null,
+                },
+              },
+            }
+          : {}),
+      },
+      select: { id: true, bookingNumber: true },
+    });
+
+    await recordAudit(
+      {
+        action: AuditAction.CREATE,
+        entityType: "Booking",
+        entityId: created.id,
+        adminUserId: actorId,
+        summary: `Created cruise booking ${created.bookingNumber}`,
+      },
+      tx,
+    );
+
+    return created;
+  });
 }

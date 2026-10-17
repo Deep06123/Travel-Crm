@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { Info } from "lucide-react";
+import { Eye, Info } from "lucide-react";
 
 import { PageHeader } from "@/components/layout/admin-shell";
 import {
@@ -26,6 +26,7 @@ import {
 } from "@/components/ui/status-badge";
 import { CommentVisibility, DocumentOrigin } from "@/generated/prisma/enums";
 import { CommentForm, FollowUpForm } from "@/features/bookings/comment-form";
+import { DocumentUploadForm } from "@/features/documents/upload-form";
 import { StatusControl } from "@/features/bookings/status-control";
 import { currentUserCan, requirePermission } from "@/lib/auth/dal";
 import { allowedTransitionsFrom } from "@/lib/bookings/status";
@@ -68,6 +69,8 @@ export default async function BookingDetailPage({
     canViewRefunds,
     canComment,
     canManageFollowUps,
+    canViewDocuments,
+    canUploadDocuments,
   ] = await Promise.all([
     currentUserCan(PERMISSIONS.BOOKING_CHANGE_STATUS),
     currentUserCan(PERMISSIONS.PASSENGER_VIEW_SENSITIVE),
@@ -75,6 +78,8 @@ export default async function BookingDetailPage({
     currentUserCan(PERMISSIONS.REFUND_VIEW),
     currentUserCan(PERMISSIONS.COMMENT_CREATE),
     currentUserCan(PERMISSIONS.FOLLOW_UP_MANAGE),
+    currentUserCan(PERMISSIONS.DOCUMENT_VIEW),
+    currentUserCan(PERMISSIONS.DOCUMENT_UPLOAD),
   ]);
 
   const { id } = await params;
@@ -96,6 +101,9 @@ export default async function BookingDetailPage({
     : [];
 
   const margin = booking.totalMinor - booking.supplierCostMinor;
+  // A cruise is confirmed by the cruise line rather than ticketed by an
+  // airline, so the ticketing panel and ticket-number column do not apply.
+  const isCruise = booking.product === "CRUISE";
 
   return (
     <>
@@ -115,7 +123,7 @@ export default async function BookingDetailPage({
         actions={
           <div className="flex items-center gap-2">
             <BookingStatusBadge status={booking.status} />
-            <TicketStatusBadge status={booking.ticketStatus} />
+            {isCruise ? null : <TicketStatusBadge status={booking.ticketStatus} />}
             <PriorityBadge level={booking.priority} />
           </div>
         }
@@ -232,8 +240,76 @@ export default async function BookingDetailPage({
             </Panel>
           ) : null}
 
+          {booking.cruiseDetail ? (
+            <Panel title="Sailing" collapsible={false}>
+              <dl className="grid gap-x-6 sm:grid-cols-2 lg:grid-cols-4">
+                <DetailRow label="Cruise line" value={booking.cruiseDetail.cruiseLine} />
+                <DetailRow label="Ship" value={booking.cruiseDetail.ship} />
+                <DetailRow
+                  label="Reservation no."
+                  value={booking.cruiseDetail.reservationNumber}
+                />
+                <DetailRow
+                  label="Nights"
+                  value={booking.cruiseDetail.nights?.toString()}
+                />
+                <DetailRow
+                  label="Departs from"
+                  value={booking.cruiseDetail.departurePort}
+                />
+                <DetailRow label="Arrives at" value={booking.cruiseDetail.arrivalPort} />
+                <DetailRow
+                  label="Sail date"
+                  value={formatDate(booking.cruiseDetail.sailDate)}
+                />
+                <DetailRow
+                  label="Return date"
+                  value={formatDate(booking.cruiseDetail.returnDate)}
+                />
+                <DetailRow label="Cabin" value={booking.cruiseDetail.cabinNumber} />
+                <DetailRow
+                  label="Cabin category"
+                  value={booking.cruiseDetail.cabinCategory}
+                />
+                <DetailRow
+                  label="Cabins held"
+                  value={booking.cruiseDetail.cabinCount.toString()}
+                />
+                <DetailRow
+                  label="Dining"
+                  value={booking.cruiseDetail.diningPreference}
+                />
+                <DetailRow
+                  label="Gratuities"
+                  value={booking.cruiseDetail.gratuitiesIncluded ? "Included" : "Not included"}
+                />
+                <DetailRow
+                  label="Insurance"
+                  value={booking.cruiseDetail.insuranceIncluded ? "Included" : "Not included"}
+                />
+              </dl>
+
+              {booking.cruiseDetail.itinerary ? (
+                <div className="mt-3">
+                  <p className="text-xs font-medium tracking-wide text-ink-muted uppercase">
+                    Itinerary
+                  </p>
+                  <p className="mt-0.5 text-sm whitespace-pre-wrap text-ink">
+                    {booking.cruiseDetail.itinerary}
+                  </p>
+                </div>
+              ) : null}
+
+              {booking.cruiseDetail.assistanceNotes ? (
+                <p className="mt-3 rounded-md bg-surface-muted p-3 text-sm whitespace-pre-wrap text-ink">
+                  {booking.cruiseDetail.assistanceNotes}
+                </p>
+              ) : null}
+            </Panel>
+          ) : null}
+
           <Panel
-            title="Passengers"
+            title={isCruise ? "Guests" : "Passengers"}
             description={
               canViewSensitive
                 ? undefined
@@ -249,7 +325,7 @@ export default async function BookingDetailPage({
                   <Th>Type</Th>
                   {canViewSensitive ? <Th>Date of birth</Th> : null}
                   {canViewSensitive ? <Th>Passport</Th> : null}
-                  <Th>Ticket no.</Th>
+                  <Th>{isCruise ? "Cabin" : "Ticket no."}</Th>
                 </Tr>
               </Thead>
               <Tbody>
@@ -271,7 +347,9 @@ export default async function BookingDetailPage({
                           {passenger.passportNumber ?? "—"}
                         </Td>
                       ) : null}
-                      <Td className="text-ink-muted">{passenger.ticketNumber ?? "—"}</Td>
+                      <Td className="text-ink-muted">
+                        {(isCruise ? passenger.cabinNumber : passenger.ticketNumber) ?? "—"}
+                      </Td>
                     </Tr>
                   ))
                 )}
@@ -279,6 +357,7 @@ export default async function BookingDetailPage({
             </TableShell>
           </Panel>
 
+          {!isCruise ? (
           <Panel title="Ticketing" collapsible={false}>
             <dl className="grid gap-x-6 sm:grid-cols-2 lg:grid-cols-3">
               <DetailRow
@@ -295,6 +374,7 @@ export default async function BookingDetailPage({
               </p>
             ) : null}
           </Panel>
+          ) : null}
 
           {canViewPayments ? (
             <Panel title="Accounting" collapsible={false}>
@@ -455,26 +535,45 @@ export default async function BookingDetailPage({
 
           <Panel title="Documents" defaultOpen={booking.documents.length > 0}>
             {booking.documents.length === 0 ? (
-              <p className="text-sm text-ink-muted">
-                No documents attached. Uploads arrive in Phase 3.
-              </p>
+              <p className="text-sm text-ink-muted">No documents attached.</p>
             ) : (
-              <ul className="divide-y divide-line">
+              <ul className="mb-4 divide-y divide-line">
                 {booking.documents.map((document) => (
-                  <li key={document.id} className="flex items-center justify-between py-2">
-                    <div>
-                      <p className="text-sm text-ink">{document.title}</p>
+                  <li key={document.id} className="flex items-center justify-between gap-3 py-2">
+                    <div className="min-w-0">
+                      <p className="truncate text-sm text-ink">{document.title}</p>
                       <p className="text-xs text-ink-muted">
                         {humanise(document.category)} · {formatDate(document.createdAt)}
                       </p>
                     </div>
-                    {document.origin === DocumentOrigin.INTERNALLY_GENERATED ? (
-                      <Badge tone="neutral">Internally generated</Badge>
-                    ) : null}
+                    <div className="flex shrink-0 items-center gap-2">
+                      {/* A self-generated PDF is labelled as such; it is never
+                          presented as something the provider issued. */}
+                      {document.origin === DocumentOrigin.INTERNALLY_GENERATED ? (
+                        <Badge tone="warning">Internally generated</Badge>
+                      ) : null}
+                      {canViewDocuments ? (
+                        <a
+                          href={`/api/admin/documents/${document.id}/view`}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="rounded p-1.5 text-ink-muted hover:bg-surface-sunken hover:text-navy-500"
+                        >
+                          <Eye className="size-4" />
+                          <span className="sr-only">View {document.title}</span>
+                        </a>
+                      ) : null}
+                    </div>
                   </li>
                 ))}
               </ul>
             )}
+
+            {canUploadDocuments ? (
+              <div className="border-t border-line pt-4">
+                <DocumentUploadForm bookingId={booking.id} />
+              </div>
+            ) : null}
           </Panel>
         </div>
 
