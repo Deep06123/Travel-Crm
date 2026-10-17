@@ -126,13 +126,6 @@ export default async function BookingsPage({
                 <Plane />
                 New flight
               </Link>
-              <Link
-                href="/admin/bookings/new/cruise"
-                className={buttonVariants({ variant: "secondary" })}
-              >
-                <Ship />
-                New cruise
-              </Link>
             </>
           ) : null
         }

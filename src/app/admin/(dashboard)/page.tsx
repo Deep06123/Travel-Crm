@@ -264,13 +264,13 @@ export default async function DashboardPage({
           label="High priority open"
           value={metrics.highPriorityOpen.toLocaleString()}
           tone="danger"
-          href="/admin/high-priority"
+          note="Module arrives in phase 5"
         />
         <KpiCard
           label="Refunds needing attention"
           value={metrics.refundsAwaitingAttention.toLocaleString()}
           tone="warning"
-          href="/admin/refunds"
+          note="Module arrives in phase 4"
         />
       </div>
 

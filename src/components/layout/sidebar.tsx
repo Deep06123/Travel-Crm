@@ -29,6 +29,24 @@ function Icon({ name, className }: { name: string; className?: string }) {
 function NavLink({ item, onNavigate }: { item: NavItem; onNavigate: () => void }) {
   const pathname = usePathname();
 
+  // A module whose page does not exist yet is shown but not navigable. Keeping
+  // it visible communicates the intended structure; keeping it unclickable
+  // avoids sending anyone to a 404.
+  if (item.plannedInPhase !== undefined) {
+    return (
+      <span
+        className="flex cursor-default items-center gap-2.5 rounded-md px-3 py-2 text-sm text-ink-subtle"
+        title={`Planned for phase ${item.plannedInPhase}`}
+      >
+        <Icon name={item.icon} className="size-4 shrink-0" />
+        <span className="flex-1 truncate">{item.label}</span>
+        <span className="shrink-0 rounded bg-surface-sunken px-1.5 py-0.5 text-[10px] font-semibold text-ink-subtle">
+          P{item.plannedInPhase}
+        </span>
+      </span>
+    );
+  }
+
   // "/admin" would otherwise match every admin route, so the dashboard is
   // compared exactly while section roots match their descendants.
   const isActive =
