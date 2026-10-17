@@ -1,0 +1,1318 @@
+// Travel Booking Admin CRM — database schema.
+//
+// Conventions used throughout this file:
+//
+//   * Money is stored as an integer number of MINOR UNITS (cents) in a field
+//     suffixed `...Minor`, always paired with an ISO-4217 `currency` column on
+//     the same row. Amounts in different currencies are never summed without an
+//     explicit exchange-rate policy. Int holds roughly ±21,000,000.00 per row,
+//     which is well above any single booking; Postgres widens to bigint when
+//     aggregating, so report totals do not overflow.
+//   * Historical and financial rows are never cascade-deleted. Cancelling a
+//     booking or deactivating a customer must leave the payment, refund,
+//     chargeback and audit trail intact, so those relations use Restrict.
+//   * Lifecycle states that reports and workflow rules depend on are enums, not
+//     free-text. Operator-configurable vocabulary (booking types, document
+//     categories, priority labels) lives in tables instead.
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ---------------------------------------------------------------------------
+// Identity and access
+// ---------------------------------------------------------------------------
+
+/// Coarse role assigned to an administrator. Fine-grained capability checks
+/// resolve through RolePermission so permissions can be tuned without a deploy.
+enum AdminRole {
+  SUPER_ADMIN
+  OPERATIONS
+  FINANCE
+  SUPPORT
+  READ_ONLY
+}
+
+enum AdminUserStatus {
+  ACTIVE
+  SUSPENDED
+  DEACTIVATED
+}
+
+model AdminUser {
+  id           String          @id @default(cuid())
+  email        String          @unique
+  /// Operational login handle shown in the agent list. Distinct from email so
+  /// staff can keep the short dialer-style usernames used by the call floor.
+  username     String?         @unique
+  name         String
+  phone        String?
+  /// Argon2/bcrypt digest. Plaintext passwords are never stored or displayed.
+  passwordHash String
+  role         AdminRole       @default(READ_ONLY)
+  status       AdminUserStatus @default(ACTIVE)
+
+  /// Consecutive failed logins; reset on success. Drives temporary lockout.
+  failedLoginAttempts Int       @default(0)
+  lockedUntil         DateTime?
+  lastLoginAt         DateTime?
+  passwordChangedAt   DateTime  @default(now())
+  /// Forces a password change on next sign-in, used for provisioned accounts.
+  mustChangePassword  Boolean   @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  sessions            AdminSession[]
+  loginEvents         LoginEvent[]
+  auditLogs           AuditLog[]
+  agentProfile        Agent?
+  createdBookings     Booking[]              @relation("BookingCreatedBy")
+  assignedBookings    Booking[]              @relation("BookingAssignedAgent")
+  statusChanges       BookingStatusHistory[]
+  comments            BookingComment[]
+  followUpsAssigned   BookingFollowUp[]      @relation("FollowUpAssignee")
+  followUpsCreated    BookingFollowUp[]      @relation("FollowUpCreatedBy")
+  documentsUploaded   Document[]             @relation("DocumentUploadedBy")
+  documentsVerified   Document[]             @relation("DocumentVerifiedBy")
+  documentVersions    DocumentVersion[]
+  paymentsRecorded    Payment[]
+  refundsRequested    Refund[]               @relation("RefundRequestedBy")
+  refundsApproved     Refund[]               @relation("RefundApprovedBy")
+  chargebacksAssigned Chargeback[]
+  serviceCasesOwned   CustomerServiceCase[]
+  callRecords         CallRecord[]
+  messagesSent        Message[]
+  messagesReceived    MessageRecipient[]
+  customerNotes       CustomerNote[]
+  adjustments         FinancialAdjustment[]
+
+  @@index([role, status])
+  @@index([status])
+}
+
+/// Database-backed session. Storing sessions server-side means an administrator
+/// can be signed out immediately when suspended, which a stateless JWT cannot
+/// guarantee before its expiry.
+model AdminSession {
+  id           String    @id @default(cuid())
+  /// SHA-256 of the opaque session token. The raw token only ever exists in the
+  /// user's cookie, so a database leak does not yield usable sessions.
+  tokenHash    String    @unique
+  adminUserId  String
+  adminUser    AdminUser @relation(fields: [adminUserId], references: [id], onDelete: Cascade)
+  expiresAt    DateTime
+  lastActiveAt DateTime  @default(now())
+  revokedAt    DateTime?
+  ipAddress    String?
+  userAgent    String?
+  createdAt    DateTime  @default(now())
+
+  @@index([adminUserId, revokedAt])
+  @@index([expiresAt])
+}
+
+enum LoginEventType {
+  SUCCESS
+  FAILED_PASSWORD
+  FAILED_UNKNOWN_USER
+  LOCKED_OUT
+  LOGOUT
+  SESSION_REVOKED
+}
+
+/// Security event history. Rows are written for unknown-user attempts too, in
+/// which case `adminUserId` is null and `identifier` records what was tried.
+model LoginEvent {
+  id          String         @id @default(cuid())
+  type        LoginEventType
+  identifier  String
+  adminUserId String?
+  adminUser   AdminUser?     @relation(fields: [adminUserId], references: [id], onDelete: SetNull)
+  ipAddress   String?
+  userAgent   String?
+  reason      String?
+  createdAt   DateTime       @default(now())
+
+  @@index([adminUserId, createdAt])
+  @@index([identifier, createdAt])
+  @@index([createdAt])
+}
+
+/// Capability a role may hold, e.g. `booking.update` or `refund.approve`.
+model Permission {
+  id          String   @id @default(cuid())
+  key         String   @unique
+  description String
+  /// Grouping label used to lay out the role configuration screen.
+  category    String
+  createdAt   DateTime @default(now())
+
+  roles RolePermission[]
+
+  @@index([category])
+}
+
+/// Grants a Permission to an AdminRole. Absence of a row denies the capability.
+model RolePermission {
+  id           String     @id @default(cuid())
+  role         AdminRole
+  permissionId String
+  permission   Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+  createdAt    DateTime   @default(now())
+
+  @@unique([role, permissionId])
+  @@index([role])
+}
+
+enum AuditAction {
+  CREATE
+  UPDATE
+  DELETE
+  STATUS_CHANGE
+  LOGIN
+  LOGOUT
+  APPROVE
+  REJECT
+  EXPORT
+  VIEW_SENSITIVE
+}
+
+/// Append-only record of consequential administrative actions. Rows are never
+/// updated or deleted; corrections are expressed as new entries.
+model AuditLog {
+  id          String      @id @default(cuid())
+  action      AuditAction
+  /// Model name the action applied to, e.g. "Booking".
+  entityType  String
+  entityId    String
+  adminUserId String?
+  adminUser   AdminUser?  @relation(fields: [adminUserId], references: [id], onDelete: SetNull)
+  summary     String
+  /// Redacted before/after field values. Never contains passwords, full card
+  /// numbers or passport numbers.
+  changes     Json?
+  ipAddress   String?
+  userAgent   String?
+  createdAt   DateTime    @default(now())
+
+  @@index([entityType, entityId, createdAt])
+  @@index([adminUserId, createdAt])
+  @@index([createdAt])
+}
+
+// ---------------------------------------------------------------------------
+// Customers
+// ---------------------------------------------------------------------------
+
+enum CustomerStatus {
+  ACTIVE
+  INACTIVE
+  BLOCKED
+}
+
+model Customer {
+  id        String         @id @default(cuid())
+  /// Human-facing reference shown in the UI and on documents, e.g. CUS-100042.
+  reference String         @unique
+  firstName String
+  lastName  String
+  email     String?
+  phone     String?
+  status    CustomerStatus @default(ACTIVE)
+
+  billingAddressLine1 String?
+  billingAddressLine2 String?
+  billingCity         String?
+  billingState        String?
+  billingPostalCode   String?
+  billingCountry      String?
+
+  preferredLanguage String? @default("en")
+  notes             String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  bookings     Booking[]
+  documents    Document[]
+  serviceCases CustomerServiceCase[]
+  callRecords  CallRecord[]
+  customerNotes CustomerNote[]
+  payments     Payment[]
+
+  // Duplicate detection queries filter on normalised email and phone. A name
+  // match alone is deliberately not treated as identifying.
+  @@index([email])
+  @@index([phone])
+  @@index([lastName, firstName])
+  @@index([status])
+}
+
+model CustomerNote {
+  id          String    @id @default(cuid())
+  customerId  String
+  customer    Customer  @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  body        String
+  authorId    String?
+  author      AdminUser? @relation(fields: [authorId], references: [id], onDelete: SetNull)
+  createdAt   DateTime  @default(now())
+
+  @@index([customerId, createdAt])
+}
+
+// ---------------------------------------------------------------------------
+// Bookings
+// ---------------------------------------------------------------------------
+
+/// Overall lifecycle of a booking. Payment, ticketing, refund and cancellation
+/// state are tracked separately so a cancelled booking can still carry a
+/// completed payment and a pending refund.
+enum BookingStatus {
+  DRAFT
+  PENDING
+  NEEDS_REVIEW
+  CONFIRMED
+  TICKETED
+  CANCELLED
+  COMPLETED
+}
+
+enum BookingProduct {
+  FLIGHT
+  CRUISE
+}
+
+enum TicketStatus {
+  NOT_APPLICABLE
+  PENDING
+  IN_PROGRESS
+  ISSUED
+  VOIDED
+  EXCHANGED
+  FAILED
+}
+
+enum McoStatus {
+  NOT_APPLICABLE
+  PENDING
+  SUBMITTED
+  CONFIRMED
+  REJECTED
+}
+
+enum BookingPriority {
+  LOW
+  NORMAL
+  HIGH
+  URGENT
+}
+
+/// Operator-configurable booking category: "New Booking", "Re-Booking",
+/// "Changes", "Cancelation & Refund", and so on.
+model BookingType {
+  id        String   @id @default(cuid())
+  code      String   @unique
+  label     String
+  product   BookingProduct?
+  isActive  Boolean  @default(true)
+  sortOrder Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  bookings Booking[]
+
+  @@index([isActive, sortOrder])
+}
+
+model Booking {
+  id            String         @id @default(cuid())
+  /// Operator-facing booking number, e.g. MV70056.
+  bookingNumber String         @unique
+  product       BookingProduct
+  status        BookingStatus  @default(DRAFT)
+  priority      BookingPriority @default(NORMAL)
+
+  bookingTypeId String?
+  bookingType   BookingType? @relation(fields: [bookingTypeId], references: [id], onDelete: Restrict)
+
+  customerId String
+  customer   Customer @relation(fields: [customerId], references: [id], onDelete: Restrict)
+
+  createdById String?
+  createdBy   AdminUser? @relation("BookingCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+
+  assignedAgentId String?
+  assignedAgent   AdminUser? @relation("BookingAssignedAgent", fields: [assignedAgentId], references: [id], onDelete: SetNull)
+
+  supplierId String?
+  supplier   Supplier? @relation(fields: [supplierId], references: [id], onDelete: Restrict)
+
+  mcoSupplierId String?
+  mcoSupplier   McoSupplier? @relation(fields: [mcoSupplierId], references: [id], onDelete: Restrict)
+
+  tfnId String?
+  tfn   Tfn?   @relation(fields: [tfnId], references: [id], onDelete: Restrict)
+
+  /// Where the booking originated: phone, web, partner, and so on.
+  source   String?
+  language String? @default("en")
+
+  // --- Contact snapshot -----------------------------------------------------
+  // Captured on the booking so historical records keep the details actually
+  // used at the time, even if the customer profile is later edited.
+  contactName  String?
+  contactEmail String?
+  contactPhone String?
+
+  billingAddressLine1 String?
+  billingAddressLine2 String?
+  billingCity         String?
+  billingState        String?
+  billingPostalCode   String?
+  billingCountry      String?
+
+  // --- Ticketing ------------------------------------------------------------
+  ticketStatus        TicketStatus @default(PENDING)
+  airlineConfirmation String?
+  ticketingReference  String?
+  ticketedAt          DateTime?
+  ticketingNotes      String?
+
+  // --- MCO ------------------------------------------------------------------
+  mcoStatus McoStatus @default(NOT_APPLICABLE)
+
+  // --- Money ----------------------------------------------------------------
+  // All `...Minor` fields are in minor units of `currency`.
+  currency       String @default("USD") @db.Char(3)
+  baseFareMinor  Int    @default(0)
+  taxesFeesMinor Int    @default(0)
+  /// Gross booking value charged to the customer.
+  totalMinor     Int    @default(0)
+  /// What the supplier charges us; the margin is totalMinor - supplierCostMinor.
+  supplierCostMinor Int @default(0)
+  grossMcoMinor  Int    @default(0)
+  netMcoMinor    Int    @default(0)
+  /// Whether the total is collected across multiple card charges.
+  splitCharges   Boolean @default(false)
+  financialNotes String?
+
+  travelStartDate DateTime?
+  travelEndDate   DateTime?
+  followUpAt      DateTime?
+
+  bookedAt  DateTime @default(now())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  flightDetail   FlightDetail?
+  cruiseDetail   CruiseDetail?
+  segments       FlightSegment[]
+  passengers     Passenger[]
+  comments       BookingComment[]
+  statusHistory  BookingStatusHistory[]
+  followUps      BookingFollowUp[]
+  documents      Document[]
+  payments       Payment[]
+  refunds        Refund[]
+  chargebacks    Chargeback[]
+  adjustments    FinancialAdjustment[]
+  serviceCases   CustomerServiceCase[]
+  callRecords    CallRecord[]
+  messages       Message[]
+
+  @@index([status, bookedAt])
+  @@index([customerId, bookedAt])
+  @@index([assignedAgentId, status])
+  @@index([supplierId, bookedAt])
+  @@index([ticketStatus, status])
+  @@index([priority, status])
+  @@index([bookedAt])
+  @@index([followUpAt])
+  @@index([airlineConfirmation])
+  @@index([product, status])
+}
+
+/// Flight-specific attributes. Kept out of Booking so cruise records do not
+/// carry unused airline columns.
+model FlightDetail {
+  id        String  @id @default(cuid())
+  bookingId String  @unique
+  booking   Booking @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+
+  /// Raw PNR text as supplied by the agent. Parsing into structured segments is
+  /// a separate, explicit step — this field is never assumed to be decoded.
+  pnrText       String?
+  pnrLocator    String?
+  airline       String?
+  bookingClass  String?
+  origin        String? @db.Char(3)
+  destination   String? @db.Char(3)
+  departureDate DateTime?
+  returnDate    DateTime?
+  isRoundTrip   Boolean @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([pnrLocator])
+}
+
+model FlightSegment {
+  id        String  @id @default(cuid())
+  bookingId String
+  booking   Booking @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+
+  /// 1-based position of this leg within the itinerary.
+  sequence        Int
+  airline         String
+  flightNumber    String
+  origin          String   @db.Char(3)
+  destination     String   @db.Char(3)
+  departureAt     DateTime
+  arrivalAt       DateTime
+  bookingClass    String?
+  cabin           String?
+  operatingCarrier String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([bookingId, sequence])
+  @@index([bookingId])
+  @@index([departureAt])
+}
+
+model CruiseDetail {
+  id        String  @id @default(cuid())
+  bookingId String  @unique
+  booking   Booking @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+
+  cruiseLine        String
+  ship              String?
+  reservationNumber String?
+  itinerary         String?
+  departurePort     String?
+  arrivalPort       String?
+  sailDate          DateTime?
+  returnDate        DateTime?
+  nights            Int?
+
+  cabinNumber   String?
+  cabinCategory String?
+  diningPreference String?
+  /// Count of cabins held under this booking.
+  cabinCount    Int     @default(1)
+
+  gratuitiesIncluded Boolean @default(false)
+  insuranceIncluded  Boolean @default(false)
+  assistanceNotes    String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([cruiseLine, sailDate])
+  @@index([reservationNumber])
+}
+
+enum PassengerType {
+  ADULT
+  CHILD
+  INFANT
+  SENIOR
+}
+
+/// Traveller on a booking. Passport and date-of-birth columns are restricted to
+/// roles holding `passenger.viewSensitive`; they are stripped in DTOs for
+/// everyone else and never written to logs.
+model Passenger {
+  id        String  @id @default(cuid())
+  bookingId String
+  booking   Booking @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+
+  sequence   Int
+  title      String?
+  firstName  String
+  middleName String?
+  lastName   String
+  type       PassengerType @default(ADULT)
+  gender     String?
+  dateOfBirth DateTime?
+
+  passportNumber     String?
+  passportCountry    String?
+  passportExpiry     DateTime?
+  frequentFlyerNumber String?
+
+  /// Cabin assignment for cruise bookings.
+  cabinNumber String?
+  ticketNumber String?
+  notes        String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([bookingId, sequence])
+  @@index([bookingId])
+  @@index([lastName, firstName])
+  @@index([ticketNumber])
+}
+
+/// Immutable record of every booking status transition, written by the single
+/// server-side transition service.
+model BookingStatusHistory {
+  id        String  @id @default(cuid())
+  bookingId String
+  booking   Booking @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+
+  fromStatus BookingStatus?
+  toStatus   BookingStatus
+  reason     String?
+
+  changedById String?
+  changedBy   AdminUser? @relation(fields: [changedById], references: [id], onDelete: SetNull)
+  createdAt   DateTime   @default(now())
+
+  @@index([bookingId, createdAt])
+  @@index([createdAt])
+}
+
+enum CommentVisibility {
+  INTERNAL
+  CUSTOMER_FACING
+}
+
+model BookingComment {
+  id        String  @id @default(cuid())
+  bookingId String
+  booking   Booking @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+
+  body       String
+  category   String?
+  visibility CommentVisibility @default(INTERNAL)
+
+  authorId String?
+  author   AdminUser? @relation(fields: [authorId], references: [id], onDelete: SetNull)
+
+  followUpAt DateTime?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  @@index([bookingId, createdAt])
+  @@index([createdAt])
+  @@index([followUpAt])
+}
+
+enum FollowUpStatus {
+  OPEN
+  IN_PROGRESS
+  COMPLETED
+  CANCELLED
+}
+
+model BookingFollowUp {
+  id        String  @id @default(cuid())
+  bookingId String
+  booking   Booking @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+
+  reason   String
+  priority BookingPriority @default(NORMAL)
+  status   FollowUpStatus  @default(OPEN)
+  dueAt    DateTime
+
+  assigneeId String?
+  assignee   AdminUser? @relation("FollowUpAssignee", fields: [assigneeId], references: [id], onDelete: SetNull)
+
+  createdById String?
+  createdBy   AdminUser? @relation("FollowUpCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+
+  lastActionAt    DateTime?
+  lastActionNote  String?
+  resolutionNotes String?
+  completedAt     DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Drives the overdue follow-up panels on the dashboard.
+  @@index([status, dueAt])
+  @@index([assigneeId, status, dueAt])
+  @@index([bookingId])
+}
+
+// ---------------------------------------------------------------------------
+// Documents
+// ---------------------------------------------------------------------------
+
+enum DocumentCategory {
+  BOOKING_CONFIRMATION
+  FLIGHT_ITINERARY
+  E_TICKET
+  CRUISE_CONFIRMATION
+  INVOICE
+  RECEIPT
+  REFUND_EVIDENCE
+  CHARGEBACK_EVIDENCE
+  GENERAL_ATTACHMENT
+}
+
+enum DocumentOrigin {
+  /// Uploaded by staff from a file the provider issued.
+  PROVIDER_ISSUED
+  /// Rendered by this application. Must be labelled as internally generated.
+  INTERNALLY_GENERATED
+  /// Supplied by the customer.
+  CUSTOMER_SUPPLIED
+}
+
+enum DocumentVerificationStatus {
+  UNVERIFIED
+  VERIFIED
+  REJECTED
+}
+
+model Document {
+  id       String           @id @default(cuid())
+  category DocumentCategory
+  origin   DocumentOrigin   @default(PROVIDER_ISSUED)
+  title    String
+
+  bookingId  String?
+  booking    Booking?  @relation(fields: [bookingId], references: [id], onDelete: Restrict)
+  customerId String?
+  customer   Customer? @relation(fields: [customerId], references: [id], onDelete: Restrict)
+
+  /// Pointer to the current version. Bytes always live in private object
+  /// storage; only the key is kept here, and it is never exposed to the client.
+  currentVersionId String?          @unique
+  currentVersion   DocumentVersion? @relation("CurrentVersion", fields: [currentVersionId], references: [id], onDelete: SetNull)
+
+  verificationStatus DocumentVerificationStatus @default(UNVERIFIED)
+  verifiedById       String?
+  verifiedBy         AdminUser?                 @relation("DocumentVerifiedBy", fields: [verifiedById], references: [id], onDelete: SetNull)
+  verifiedAt         DateTime?
+  verificationNotes  String?
+
+  uploadedById String?
+  uploadedBy   AdminUser? @relation("DocumentUploadedBy", fields: [uploadedById], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  versions           DocumentVersion[]  @relation("DocumentVersions")
+  refundEvidence     Refund[]
+  chargebackEvidence ChargebackEvidence[]
+
+  @@index([bookingId, category])
+  @@index([customerId, category])
+  @@index([category, createdAt])
+  @@index([verificationStatus])
+}
+
+model DocumentVersion {
+  id         String   @id @default(cuid())
+  documentId String
+  document   Document @relation("DocumentVersions", fields: [documentId], references: [id], onDelete: Cascade)
+
+  version Int
+  /// Object storage key. Deliberately opaque — it must not embed passport
+  /// numbers, customer names or other traveller detail.
+  storageKey  String @unique
+  fileName    String
+  contentType String
+  sizeBytes   Int
+  /// SHA-256 of the stored bytes, used to detect duplicate uploads.
+  checksum    String?
+
+  uploadedById String?
+  uploadedBy   AdminUser? @relation(fields: [uploadedById], references: [id], onDelete: SetNull)
+  createdAt    DateTime   @default(now())
+
+  currentFor Document? @relation("CurrentVersion")
+
+  @@unique([documentId, version])
+  @@index([documentId])
+}
+
+// ---------------------------------------------------------------------------
+// Payments, refunds and chargebacks
+// ---------------------------------------------------------------------------
+
+enum PaymentMethod {
+  CREDIT_CARD
+  DEBIT_CARD
+  BANK_TRANSFER
+  CASH
+  MCO
+  OTHER
+}
+
+/// Distinguishes a payment confirmed by an integrated provider from one an
+/// operator typed in. A manually recorded payment is never treated as
+/// provider-verified.
+enum PaymentCaptureMode {
+  MANUAL_RECORD
+  PROVIDER_CONFIRMED
+}
+
+enum PaymentStatus {
+  PENDING
+  AUTHORIZED
+  CAPTURED
+  FAILED
+  CANCELLED
+  REFUNDED
+  PARTIALLY_REFUNDED
+}
+
+enum ReconciliationStatus {
+  UNRECONCILED
+  MATCHED
+  DISPUTED
+  WRITTEN_OFF
+}
+
+model Payment {
+  id        String  @id @default(cuid())
+  reference String  @unique
+  bookingId String
+  booking   Booking @relation(fields: [bookingId], references: [id], onDelete: Restrict)
+
+  customerId String?
+  customer   Customer? @relation(fields: [customerId], references: [id], onDelete: Restrict)
+
+  amountMinor Int
+  currency    String @db.Char(3)
+
+  method      PaymentMethod
+  captureMode PaymentCaptureMode @default(MANUAL_RECORD)
+  status      PaymentStatus      @default(PENDING)
+
+  /// Provider name, e.g. "stripe". Null for manually recorded payments.
+  provider              String?
+  providerTransactionId String?
+  /// Payment link sent to the customer. Its presence says nothing about
+  /// whether money was collected — only `status` does.
+  paymentUrl            String?
+  failureReason         String?
+
+  /// Last four digits only. Full card numbers and CVV are never stored.
+  cardLast4 String? @db.Char(4)
+  cardBrand String?
+
+  reconciliationStatus ReconciliationStatus @default(UNRECONCILED)
+  reconciledAt         DateTime?
+
+  /// Caller-supplied key that makes payment creation safe to retry.
+  idempotencyKey String? @unique
+
+  recordedById String?
+  recordedBy   AdminUser? @relation(fields: [recordedById], references: [id], onDelete: SetNull)
+
+  capturedAt DateTime?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  refunds     Refund[]
+  chargebacks Chargeback[]
+
+  @@unique([provider, providerTransactionId])
+  @@index([bookingId, createdAt])
+  @@index([status, createdAt])
+  @@index([reconciliationStatus])
+  @@index([customerId])
+}
+
+enum RefundStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  PROCESSING
+  COMPLETED
+  FAILED
+}
+
+/// A void cancels an unsettled charge; a refund returns settled funds. They
+/// carry different authorisation rules, so the kind is recorded explicitly.
+enum RefundKind {
+  REFUND
+  VOID
+}
+
+model Refund {
+  id        String  @id @default(cuid())
+  reference String  @unique
+  kind      RefundKind @default(REFUND)
+
+  bookingId String
+  booking   Booking @relation(fields: [bookingId], references: [id], onDelete: Restrict)
+
+  paymentId String?
+  payment   Payment? @relation(fields: [paymentId], references: [id], onDelete: Restrict)
+
+  requestedAmountMinor Int
+  approvedAmountMinor  Int?
+  currency             String @db.Char(3)
+
+  reason String
+  status RefundStatus @default(PENDING)
+
+  requestedById String?
+  requestedBy   AdminUser? @relation("RefundRequestedBy", fields: [requestedById], references: [id], onDelete: SetNull)
+  requestedAt   DateTime   @default(now())
+
+  approvedById String?
+  approvedBy   AdminUser? @relation("RefundApprovedBy", fields: [approvedById], references: [id], onDelete: SetNull)
+  approvedAt   DateTime?
+  decisionNote String?
+
+  /// Null until an integrated provider returns a reference. A manual refund
+  /// records the operator action instead and stays clearly labelled as such.
+  provider           String?
+  providerRefundId   String?
+  providerResponse   Json?
+  failureReason      String?
+  completedAt        DateTime?
+
+  /// Guards against duplicate refunds from retried or concurrent submissions.
+  idempotencyKey String? @unique
+
+  evidenceDocumentId String?
+  evidenceDocument   Document? @relation(fields: [evidenceDocumentId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([provider, providerRefundId])
+  @@index([bookingId, createdAt])
+  @@index([status, requestedAt])
+  @@index([paymentId])
+}
+
+enum ChargebackStatus {
+  RECEIVED
+  EVIDENCE_REQUIRED
+  EVIDENCE_SUBMITTED
+  UNDER_REVIEW
+  WON
+  LOST
+  ACCEPTED
+}
+
+model Chargeback {
+  id        String  @id @default(cuid())
+  reference String  @unique
+
+  bookingId String
+  booking   Booking @relation(fields: [bookingId], references: [id], onDelete: Restrict)
+
+  paymentId String?
+  payment   Payment? @relation(fields: [paymentId], references: [id], onDelete: Restrict)
+
+  disputedAmountMinor Int
+  currency            String @db.Char(3)
+  reasonCode          String?
+  reason              String
+
+  status       ChargebackStatus @default(RECEIVED)
+  receivedAt   DateTime
+  /// Processor deadline for a response. Drives the deadline-monitoring views.
+  respondBy    DateTime?
+  submittedAt  DateTime?
+  /// Reference returned when evidence is submitted to the processor. Null while
+  /// the case is only prepared and tracked inside the CRM.
+  submissionReference String?
+  resolvedAt   DateTime?
+  resolution   String?
+  /// Net financial effect once resolved; negative when funds are lost.
+  outcomeAmountMinor Int?
+
+  assignedToId String?
+  assignedTo   AdminUser? @relation(fields: [assignedToId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  evidence ChargebackEvidence[]
+
+  @@index([status, respondBy])
+  @@index([bookingId])
+  @@index([assignedToId, status])
+}
+
+model ChargebackEvidence {
+  id           String     @id @default(cuid())
+  chargebackId String
+  chargeback   Chargeback @relation(fields: [chargebackId], references: [id], onDelete: Cascade)
+  documentId   String
+  document     Document   @relation(fields: [documentId], references: [id], onDelete: Restrict)
+  note         String?
+  createdAt    DateTime   @default(now())
+
+  @@unique([chargebackId, documentId])
+}
+
+enum AdjustmentKind {
+  SUPPLIER_CREDIT
+  SUPPLIER_DEBIT
+  WRITE_OFF
+  CORRECTION
+  FEE
+}
+
+/// Manual correction to a booking's financial position. Used instead of editing
+/// historical payment or refund rows, so the trail stays reconstructable.
+model FinancialAdjustment {
+  id        String  @id @default(cuid())
+  bookingId String
+  booking   Booking @relation(fields: [bookingId], references: [id], onDelete: Restrict)
+
+  kind        AdjustmentKind
+  /// Signed amount in minor units: positive increases what we collect.
+  amountMinor Int
+  currency    String @db.Char(3)
+  reason      String
+
+  createdById String?
+  createdBy   AdminUser? @relation(fields: [createdById], references: [id], onDelete: SetNull)
+  createdAt   DateTime   @default(now())
+
+  @@index([bookingId, createdAt])
+  @@index([kind, createdAt])
+}
+
+// ---------------------------------------------------------------------------
+// Operational configuration
+// ---------------------------------------------------------------------------
+
+/// Booking-floor staff profile attached to an AdminUser. Authentication always
+/// goes through AdminUser; this table only carries floor-specific attributes.
+model Agent {
+  id          String    @id @default(cuid())
+  adminUserId String    @unique
+  adminUser   AdminUser @relation(fields: [adminUserId], references: [id], onDelete: Cascade)
+
+  /// Identifier used by the telephony dialer.
+  dialerId  String?  @unique
+  team      String?
+  isActive  Boolean  @default(true)
+  /// Optional CIDR allowlist. A network control only — never a substitute for
+  /// authentication.
+  allowedIpRanges String[] @default([])
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([isActive])
+}
+
+enum SupplierType {
+  AIRLINE
+  CRUISE_LINE
+  CONSOLIDATOR
+  OTA
+  OTHER
+}
+
+model Supplier {
+  id       String       @id @default(cuid())
+  name     String       @unique
+  type     SupplierType
+  /// Identifier used by the supplier's own systems.
+  externalId   String?
+  contactName  String?
+  contactEmail String?
+  contactPhone String?
+  isActive     Boolean  @default(true)
+  /// Products this supplier can be selected for.
+  supportedProducts BookingProduct[] @default([])
+  notes        String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  bookings Booking[]
+
+  @@index([isActive, type])
+}
+
+/// Supplier used to settle MCO balances. Tracked separately from Supplier
+/// because the reference CRM reports on the two independently.
+model McoSupplier {
+  id           String  @id @default(cuid())
+  name         String  @unique
+  /// Address outbound confirmations are sent from for this supplier.
+  mailFrom     String?
+  contactEmail String?
+  contactPhone String?
+  isActive     Boolean @default(true)
+  notes        String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  bookings Booking[]
+
+  @@index([isActive])
+}
+
+/// Toll-free number routed to the booking floor.
+model Tfn {
+  id          String  @id @default(cuid())
+  number      String  @unique
+  label       String
+  category    String?
+  isActive    Boolean @default(true)
+  notes       String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  bookings Booking[]
+
+  @@index([isActive])
+}
+
+enum ServiceCaseStatus {
+  OPEN
+  IN_PROGRESS
+  WAITING_ON_CUSTOMER
+  RESOLVED
+  CLOSED
+}
+
+model CustomerServiceCase {
+  id         String @id @default(cuid())
+  caseNumber String @unique
+
+  customerId String
+  customer   Customer @relation(fields: [customerId], references: [id], onDelete: Restrict)
+
+  bookingId String?
+  booking   Booking? @relation(fields: [bookingId], references: [id], onDelete: Restrict)
+
+  category    String
+  description String
+  priority    BookingPriority   @default(NORMAL)
+  status      ServiceCaseStatus @default(OPEN)
+
+  assignedToId String?
+  assignedTo   AdminUser? @relation(fields: [assignedToId], references: [id], onDelete: SetNull)
+
+  resolution String?
+  resolvedAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([status, priority, createdAt])
+  @@index([customerId])
+  @@index([assignedToId, status])
+}
+
+enum CallDirection {
+  INBOUND
+  OUTBOUND
+}
+
+enum CallOutcome {
+  CONNECTED
+  NO_ANSWER
+  VOICEMAIL
+  BUSY
+  WRONG_NUMBER
+  CALLBACK_REQUESTED
+}
+
+/// Manually logged call activity. Live telephony capture and call recording
+/// require a separate integration and a consent review before being enabled.
+model CallRecord {
+  id String @id @default(cuid())
+
+  bookingId String?
+  booking   Booking? @relation(fields: [bookingId], references: [id], onDelete: SetNull)
+
+  customerId String?
+  customer   Customer? @relation(fields: [customerId], references: [id], onDelete: SetNull)
+
+  agentId String?
+  agent   AdminUser? @relation(fields: [agentId], references: [id], onDelete: SetNull)
+
+  direction       CallDirection
+  outcome         CallOutcome
+  occurredAt      DateTime
+  durationSeconds Int?
+  notes           String?
+
+  followUpRequired Boolean   @default(false)
+  followUpAt       DateTime?
+
+  createdAt DateTime @default(now())
+
+  @@index([occurredAt])
+  @@index([agentId, occurredAt])
+  @@index([bookingId])
+  @@index([followUpRequired, followUpAt])
+}
+
+// ---------------------------------------------------------------------------
+// Messaging, notifications and integrations
+// ---------------------------------------------------------------------------
+
+enum MessageStatus {
+  DRAFT
+  QUEUED
+  SENDING
+  SENT
+  FAILED
+}
+
+/// Internal message. `status` reflects what actually happened to the message —
+/// persisting a row leaves it DRAFT or QUEUED, never SENT.
+model Message {
+  id      String @id @default(cuid())
+  subject String
+  body    String
+
+  senderId String?
+  sender   AdminUser? @relation(fields: [senderId], references: [id], onDelete: SetNull)
+
+  bookingId String?
+  booking   Booking? @relation(fields: [bookingId], references: [id], onDelete: SetNull)
+
+  groupId String?
+  group   MessageGroup? @relation(fields: [groupId], references: [id], onDelete: SetNull)
+
+  status MessageStatus @default(DRAFT)
+  sentAt DateTime?
+  failureReason String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  recipients MessageRecipient[]
+
+  @@index([senderId, createdAt])
+  @@index([status, createdAt])
+  @@index([groupId])
+}
+
+model MessageRecipient {
+  id        String  @id @default(cuid())
+  messageId String
+  message   Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
+
+  recipientId String
+  recipient   AdminUser @relation(fields: [recipientId], references: [id], onDelete: Cascade)
+
+  readAt     DateTime?
+  archivedAt DateTime?
+  createdAt  DateTime  @default(now())
+
+  @@unique([messageId, recipientId])
+  @@index([recipientId, readAt])
+}
+
+model MessageGroup {
+  id          String   @id @default(cuid())
+  name        String   @unique
+  description String?
+  /// AdminUser ids belonging to the group, expanded into MessageRecipient rows
+  /// at send time so delivery state stays per-recipient.
+  memberIds   String[] @default([])
+  isActive    Boolean  @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  messages Message[]
+}
+
+enum NotificationChannel {
+  IN_APP
+  EMAIL
+  SMS
+}
+
+enum NotificationStatus {
+  PENDING
+  SENT
+  DELIVERED
+  FAILED
+  SUPPRESSED
+}
+
+/// Outbound notification attempt. DELIVERED is only set from a provider
+/// callback; writing the row sets PENDING.
+model Notification {
+  id        String              @id @default(cuid())
+  eventType String
+  channel   NotificationChannel
+  status    NotificationStatus  @default(PENDING)
+
+  /// Email address, phone number or AdminUser id depending on `channel`.
+  recipient String
+  template  String?
+  payload   Json?
+
+  provider          String?
+  providerReference String?
+  attemptCount      Int     @default(0)
+  lastError         String?
+
+  sentAt    DateTime?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  @@index([status, createdAt])
+  @@index([eventType, createdAt])
+  @@index([recipient])
+}
+
+/// Inbound provider event. The unique constraint on (provider, externalId)
+/// makes webhook handling idempotent under redelivery.
+model WebhookEvent {
+  id         String  @id @default(cuid())
+  provider   String
+  externalId String
+  eventType  String
+  payload    Json
+
+  processedAt  DateTime?
+  processError String?
+  receivedAt   DateTime  @default(now())
+
+  @@unique([provider, externalId])
+  @@index([provider, processedAt])
+}
+
+/// Non-secret configuration for an external integration. Credentials live in
+/// server environment variables and are never written to this table.
+model IntegrationConfiguration {
+  id       String  @id @default(cuid())
+  key      String  @unique
+  label    String
+  isEnabled Boolean @default(false)
+  /// Non-secret settings only: endpoints, feature toggles, account identifiers.
+  settings Json?
+  notes    String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+/// Key-value business settings editable at runtime, e.g. supported currencies
+/// or the refund approval threshold.
+model BusinessSetting {
+  id          String   @id @default(cuid())
+  key         String   @unique
+  value       Json
+  description String?
+  updatedAt   DateTime @updatedAt
+  createdAt   DateTime @default(now())
+}

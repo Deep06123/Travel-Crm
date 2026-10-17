@@ -1,26 +1,84 @@
 @import "tailwindcss";
 
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
+/**
+ * Design tokens for the Travel Booking CRM.
+ *
+ * The palette comes from the reference prototypes and the fsCRM screenshots:
+ * a navy primary (#0754A6) with an amber accent (#FFC928) over a cool grey
+ * page background. The interface is light-only by design — operations staff
+ * work from the same dense tables all day, and a single theme keeps status
+ * colours meaning exactly one thing.
+ */
+@theme {
+  /* Brand */
+  --color-navy-50: #eef4fb;
+  --color-navy-100: #d6e4f5;
+  --color-navy-200: #aec9ea;
+  --color-navy-300: #7ea8dd;
+  --color-navy-400: #4583c9;
+  --color-navy-500: #0754a6;
+  --color-navy-600: #064a93;
+  --color-navy-700: #053c78;
+  --color-navy-800: #042e5c;
+  --color-navy-900: #032444;
+
+  --color-amber-accent: #ffc928;
+  --color-amber-accent-dark: #d99523;
+
+  /* Surfaces */
+  --color-surface: #ffffff;
+  --color-surface-muted: #f4f7fb;
+  --color-surface-sunken: #eaf0f8;
+  --color-line: #dce5ef;
+  --color-line-strong: #c3d2e4;
+
+  /* Text */
+  --color-ink: #263748;
+  --color-ink-muted: #738195;
+  --color-ink-subtle: #95a1b2;
+
+  /* Status — each hue carries one meaning across the whole application. */
+  --color-status-success: #1b8a5a;
+  --color-status-success-bg: #e3f5ec;
+  --color-status-warning: #b26a04;
+  --color-status-warning-bg: #fdf1dc;
+  --color-status-danger: #c0392f;
+  --color-status-danger-bg: #fbe6e4;
+  --color-status-info: #0754a6;
+  --color-status-info-bg: #e5eff9;
+  --color-status-neutral: #5b6b7f;
+  --color-status-neutral-bg: #eef1f5;
+
+  /* Typography */
+  --font-sans: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-geist-mono), ui-monospace, monospace;
+
+  /* Dense operational tables need a tighter rhythm than Tailwind's default. */
+  --spacing-cell-x: 0.75rem;
+  --spacing-cell-y: 0.5rem;
 }
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+@layer base {
+  html {
+    color-scheme: light;
   }
-}
 
-body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  body {
+    background-color: var(--color-surface-muted);
+    color: var(--color-ink);
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* Visible keyboard focus everywhere, since this is a form-heavy application
+     that staff tab through rather than click. */
+  :focus-visible {
+    outline: 2px solid var(--color-navy-500);
+    outline-offset: 2px;
+  }
+
+  /* Numeric columns line up only with tabular figures. */
+  .tabular {
+    font-variant-numeric: tabular-nums;
+  }
 }
