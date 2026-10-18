@@ -166,13 +166,26 @@ assert that an external action occurred:
 | 2 | Dashboard, flight bookings, customers | Complete |
 | 3 | Cruise bookings, documents, protected viewing | Complete |
 | 4 | Payments, refunds, chargebacks | Complete |
-| 5 | High-priority, agents, suppliers, TFN, service, settings | Not started |
+| 5 | High-priority, agents, suppliers, TFN, service, settings | Complete |
 | 6 | Messaging, notifications, reports, CSV export | Not started |
 | 7 | QA, security testing, deployment, backups | Not started |
 
 Sidebar entries for unbuilt modules render as non-navigable labels carrying
 their phase number, so the intended structure stays visible without any link
 leading to a 404. `tests/unit/navigation.test.ts` enforces this.
+
+### Agent passwords
+
+The reference CRM renders every agent's password in a plaintext column. That is
+not reproduced and cannot be. Passwords exist only as bcrypt digests on
+`AdminUser`; no read path in the agent module selects `passwordHash`, and there
+is no "view password" anywhere. Restoring access issues a one-time password
+shown exactly once — it is verifiable against the stored digest but not
+recoverable, including by a super administrator. Resetting also revokes every
+live session for that account.
+
+IP allowlisting is recorded per agent as a network control. It never replaces
+authentication.
 
 ### Financial definitions
 
