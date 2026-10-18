@@ -165,7 +165,7 @@ assert that an external action occurred:
 | 1 | Foundation, schema, auth, admin shell | Complete |
 | 2 | Dashboard, flight bookings, customers | Complete |
 | 3 | Cruise bookings, documents, protected viewing | Complete |
-| 4 | Payments, refunds, chargebacks | Not started |
+| 4 | Payments, refunds, chargebacks | Complete |
 | 5 | High-priority, agents, suppliers, TFN, service, settings | Not started |
 | 6 | Messaging, notifications, reports, CSV export | Not started |
 | 7 | QA, security testing, deployment, backups | Not started |
@@ -173,6 +173,38 @@ assert that an external action occurred:
 Sidebar entries for unbuilt modules render as non-navigable labels carrying
 their phase number, so the intended structure stays visible without any link
 leading to a 404. `tests/unit/navigation.test.ts` enforces this.
+
+### Financial definitions
+
+Every financial term has one documented meaning, in
+`src/lib/financial/booking-balance.ts`. The ones that are routinely confused:
+
+- **Gross booking value** — what the customer is contracted to pay. Independent
+  of whether any money moved.
+- **Collected** — captured payments only. A pending payment, an authorisation,
+  or a saved payment link contributes nothing.
+- **Refunded** — completed refunds only. An approved-but-unexecuted refund has
+  not left the account.
+- **Outstanding** — gross booking value less net collected, less adjustments.
+- **Refundable** — collected less already refunded, floored at zero.
+
+A booking's position is always derived from its payment, refund, chargeback and
+adjustment rows; it is never stored, so it cannot drift from what it summarises.
+
+### Refunds cannot be duplicated
+
+Three independent mechanisms, all of them needed:
+
+1. A unique index on `idempotencyKey`, so a retried submission returns the
+   original refund instead of creating a second.
+2. A `SELECT … FOR UPDATE` row lock on the booking held across the
+   check-and-write, so two simultaneous requests cannot both read the same
+   balance and both pass.
+3. In-flight refunds counted against the refundable balance, so a second
+   request for the same money is refused on its merits.
+
+A refund also cannot be approved by the person who requested it, and amounts at
+or above the configured threshold require a `SUPER_ADMIN`.
 
 ### Document storage
 

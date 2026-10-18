@@ -74,7 +74,6 @@ export const NAV_SECTIONS: readonly NavSection[] = [
         href: "/admin/refunds",
         permission: PERMISSIONS.REFUND_VIEW,
         icon: "Undo2",
-        plannedInPhase: 4,
       },
     ],
   },
@@ -118,14 +117,12 @@ export const NAV_SECTIONS: readonly NavSection[] = [
         href: "/admin/payments",
         permission: PERMISSIONS.PAYMENT_VIEW,
         icon: "CreditCard",
-        plannedInPhase: 4,
       },
       {
         label: "Chargebacks",
         href: "/admin/chargebacks",
         permission: PERMISSIONS.CHARGEBACK_VIEW,
         icon: "ShieldAlert",
-        plannedInPhase: 4,
       },
       {
         label: "Documents",

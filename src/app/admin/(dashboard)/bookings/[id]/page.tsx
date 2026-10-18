@@ -26,6 +26,10 @@ import {
 } from "@/components/ui/status-badge";
 import { CommentVisibility, DocumentOrigin } from "@/generated/prisma/enums";
 import { CommentForm, FollowUpForm } from "@/features/bookings/comment-form";
+import {
+  RecordPaymentForm,
+  RequestRefundForm,
+} from "@/features/finance/booking-finance-forms";
 import { DocumentUploadForm } from "@/features/documents/upload-form";
 import { StatusControl } from "@/features/bookings/status-control";
 import { currentUserCan, requirePermission } from "@/lib/auth/dal";
@@ -38,6 +42,8 @@ import {
   getBookingDetail,
   redactPassengers,
 } from "@/server/services/booking-service";
+import { getBookingPosition } from "@/server/services/payment-service";
+import { IN_FLIGHT_REFUND_STATUSES } from "@/lib/financial/refund-rules";
 
 export const metadata: Metadata = { title: "Booking · Travel CRM" };
 
@@ -71,6 +77,8 @@ export default async function BookingDetailPage({
     canManageFollowUps,
     canViewDocuments,
     canUploadDocuments,
+    canRecordPayments,
+    canRequestRefunds,
   ] = await Promise.all([
     currentUserCan(PERMISSIONS.BOOKING_CHANGE_STATUS),
     currentUserCan(PERMISSIONS.PASSENGER_VIEW_SENSITIVE),
@@ -80,6 +88,8 @@ export default async function BookingDetailPage({
     currentUserCan(PERMISSIONS.FOLLOW_UP_MANAGE),
     currentUserCan(PERMISSIONS.DOCUMENT_VIEW),
     currentUserCan(PERMISSIONS.DOCUMENT_UPLOAD),
+    currentUserCan(PERMISSIONS.PAYMENT_RECORD),
+    currentUserCan(PERMISSIONS.REFUND_REQUEST),
   ]);
 
   const { id } = await params;
@@ -101,6 +111,23 @@ export default async function BookingDetailPage({
     : [];
 
   const margin = booking.totalMinor - booking.supplierCostMinor;
+
+  // Derived from the stored payment, refund, chargeback and adjustment rows —
+  // never cached, so it cannot drift from what it summarises.
+  const position = canViewPayments ? await getBookingPosition(booking.id) : null;
+
+  // Refunds already raised still lay claim to this money, so the ceiling shown
+  // to the operator accounts for them.
+  const inFlightRefundMinor = booking.refunds
+    .filter((refund) =>
+      (IN_FLIGHT_REFUND_STATUSES as readonly string[]).includes(refund.status),
+    )
+    .reduce((sum, refund) => sum + refund.requestedAmountMinor, 0);
+
+  const availableToRefundMinor = Math.max(
+    0,
+    (position?.refundableAmountMinor ?? 0) - inFlightRefundMinor,
+  );
   // A cruise is confirmed by the cruise line rather than ticketed by an
   // airline, so the ticketing panel and ticket-number column do not apply.
   const isCruise = booking.product === "CRUISE";
@@ -420,9 +447,57 @@ export default async function BookingDetailPage({
                 />
               </dl>
 
+              {position ? (
+                <>
+                  <h3 className="mt-4 mb-1 text-sm font-semibold text-ink">
+                    Position
+                  </h3>
+                  <dl className="grid gap-x-6 sm:grid-cols-2 lg:grid-cols-3">
+                    <DetailRow
+                      label="Collected"
+                      value={formatMoney(position.amountCollectedMinor, position.currency)}
+                    />
+                    <DetailRow
+                      label="Refunded"
+                      value={formatMoney(position.amountRefundedMinor, position.currency)}
+                    />
+                    <DetailRow
+                      label="Net collected"
+                      value={formatMoney(position.netCollectedMinor, position.currency)}
+                    />
+                    <DetailRow
+                      label="Outstanding"
+                      value={
+                        <span
+                          className={
+                            position.outstandingBalanceMinor > 0
+                              ? "font-medium text-status-warning"
+                              : undefined
+                          }
+                        >
+                          {formatMoney(
+                            position.outstandingBalanceMinor,
+                            position.currency,
+                          )}
+                        </span>
+                      }
+                    />
+                    <DetailRow
+                      label="Refundable"
+                      value={formatMoney(availableToRefundMinor, position.currency)}
+                    />
+                    <DetailRow
+                      label="Disputed"
+                      value={formatMoney(position.amountDisputedMinor, position.currency)}
+                    />
+                  </dl>
+                </>
+              ) : null}
+
               <p className="mt-3 text-xs text-ink-muted">
-                Gross booking value is what the customer is charged. It is not
-                the same as the amount collected — see Payments.
+                Gross booking value is what the customer is charged. Collected is
+                what has actually been captured. The two are tracked separately
+                and routinely differ.
               </p>
 
               {booking.financialNotes ? (
@@ -487,6 +562,18 @@ export default async function BookingDetailPage({
                   )}
                 </Tbody>
               </TableShell>
+
+              {canRecordPayments ? (
+                <div className="mt-4 border-t border-line pt-4">
+                  <h3 className="mb-3 text-sm font-semibold text-ink">
+                    Record a payment
+                  </h3>
+                  <RecordPaymentForm
+                    bookingId={booking.id}
+                    currency={booking.currency}
+                  />
+                </div>
+              ) : null}
             </Panel>
           ) : null}
 
@@ -530,6 +617,30 @@ export default async function BookingDetailPage({
                   )}
                 </Tbody>
               </TableShell>
+
+              {canRequestRefunds && position ? (
+                <div className="mt-4 border-t border-line pt-4">
+                  <h3 className="mb-3 text-sm font-semibold text-ink">
+                    Request a refund or void
+                  </h3>
+                  <RequestRefundForm
+                    bookingId={booking.id}
+                    currency={booking.currency}
+                    refundableMinor={availableToRefundMinor}
+                    payments={booking.payments
+                      .filter(
+                        (payment) =>
+                          payment.status === "CAPTURED" ||
+                          payment.status === "PARTIALLY_REFUNDED",
+                      )
+                      .map((payment) => ({
+                        id: payment.id,
+                        reference: payment.reference,
+                        amountMinor: payment.amountMinor,
+                      }))}
+                  />
+                </div>
+              ) : null}
             </Panel>
           ) : null}
 

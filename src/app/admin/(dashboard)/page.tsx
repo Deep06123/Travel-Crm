@@ -270,7 +270,7 @@ export default async function DashboardPage({
           label="Refunds needing attention"
           value={metrics.refundsAwaitingAttention.toLocaleString()}
           tone="warning"
-          note="Module arrives in phase 4"
+          href="/admin/refunds"
         />
       </div>
 
