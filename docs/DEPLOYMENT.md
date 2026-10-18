@@ -160,6 +160,21 @@ Worth alerting on:
 
 Run after every deploy. Each line is pass/fail, not a judgement call.
 
+The checklist is executable:
+
+```bash
+BASE_URL=https://crm.example.com DATABASE_URL=<connection-string> npm run smoke
+```
+
+It exits non-zero on any failure, so it can gate a deploy. Checks that need to
+arrange a precondition — a role lacking a permission, a passport number to look
+for — require `DATABASE_URL`; without it they report SKIPPED and the rest still
+run. Every fixture it creates is removed afterwards, verified by re-running and
+confirming no residue.
+
+Last run: **31 of 31 passed** against the local stack (see the caveat at the top
+of this document — local is not production).
+
 **Access**
 - [ ] `https://<host>/` redirects to `/admin/login`
 - [ ] `/admin` while signed out redirects to `/admin/login`

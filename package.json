@@ -17,7 +17,8 @@
     "test:watch": "vitest",
     "test:e2e": "playwright test",
     "dev:db": "bash scripts/start-local-postgres.sh start",
-    "dev:db:stop": "bash scripts/start-local-postgres.sh stop"
+    "dev:db:stop": "bash scripts/start-local-postgres.sh stop",
+    "smoke": "tsx scripts/smoke-test.mts"
   },
   "prisma": {
     "seed": "tsx prisma/seed.ts"
