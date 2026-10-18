@@ -1,3 +1,8 @@
+// Build-time guard. `assertServerOnly()` below still catches a runtime slip,
+// but importing this from a Client Component should fail the build rather than
+// wait until someone loads the page.
+import "server-only";
+
 import { z } from "zod";
 
 /**

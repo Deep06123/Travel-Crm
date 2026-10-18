@@ -168,7 +168,7 @@ assert that an external action occurred:
 | 4 | Payments, refunds, chargebacks | Complete |
 | 5 | High-priority, agents, suppliers, TFN, service, settings | Complete |
 | 6 | Messaging, notifications, reports, CSV export | Complete |
-| 7 | QA, security testing, deployment, backups | Not started |
+| 7 | QA, security testing, deployment, backups | Complete |
 
 Every sidebar entry now resolves to a real page. The `plannedInPhase` mechanism
 remains for future work: an entry carrying it renders as a non-navigable label
@@ -188,6 +188,20 @@ with an apostrophe to force text interpretation.
 Exports carry the list's active filters, omit financial columns for roles
 without `payment.view`, cap at 10,000 rows while stating in the file itself
 that it was truncated, and write an EXPORT audit entry.
+
+### Testing
+
+```bash
+npm test          # 228 unit and integration tests, against real PostgreSQL
+npm run test:e2e  # 22 browser tests, against a real server and database
+```
+
+Integration tests run against the development database rather than a mock, so
+constraints, transactions and row locks are genuinely exercised. Browser tests
+drive the real UI; only preconditions are arranged directly.
+
+See `docs/DEPLOYMENT.md` for configuration, the deployment sequence, backups,
+rollback and the production smoke-test checklist.
 
 ### Agent passwords
 

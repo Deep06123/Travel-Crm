@@ -7,6 +7,11 @@ const nextConfig: NextConfig = {
   // Leaving it on would mean annotating each page with `instant = false` to say
   // the same thing, and a page that forgot the annotation would fail the build
   // rather than render.
+  // Lets a page call forbidden()/unauthorized() so a permission denial renders
+  // the matching UI with a 403/401 status, instead of surfacing as a 500 that
+  // monitoring would read as a server fault.
+  experimental: { authInterrupts: true },
+
   cacheComponents: false,
   // Partial prefetching depends on Cache Components, so it goes with it.
   partialPrefetching: false,

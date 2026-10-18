@@ -1,18 +1,14 @@
 import "server-only";
 
 import { cache } from "react";
-import { redirect } from "next/navigation";
+import { forbidden, redirect } from "next/navigation";
 
 import { AdminUserStatus } from "@/generated/prisma/enums";
 import type { AdminRole } from "@/generated/prisma/enums";
 import { prisma } from "@/lib/db/prisma";
 import { isDatabaseUnavailable } from "@/lib/db/errors";
 import { loggerFor } from "@/lib/logging/logger";
-import {
-  ForbiddenError,
-  getPermissionsForRole,
-  type PermissionKey,
-} from "@/lib/permissions";
+import { getPermissionsForRole, type PermissionKey } from "@/lib/permissions";
 
 import { readSessionToken, resolveSession } from "./session";
 
@@ -125,7 +121,10 @@ export async function requirePermission(
   const granted = await getPermissionsForRole(user.role);
 
   if (!granted.has(permission)) {
-    throw new ForbiddenError(permission);
+    // `forbidden()` renders forbidden.tsx with a 403. Throwing instead
+    // produced a 500, which is wrong — a denial is not a server fault, and it
+    // buried real faults in monitoring noise.
+    forbidden();
   }
 
   return user;
@@ -139,7 +138,7 @@ export async function requireAllPermissions(
   const granted = await getPermissionsForRole(user.role);
 
   for (const permission of permissions) {
-    if (!granted.has(permission)) throw new ForbiddenError(permission);
+    if (!granted.has(permission)) forbidden();
   }
 
   return user;
