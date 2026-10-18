@@ -167,12 +167,27 @@ assert that an external action occurred:
 | 3 | Cruise bookings, documents, protected viewing | Complete |
 | 4 | Payments, refunds, chargebacks | Complete |
 | 5 | High-priority, agents, suppliers, TFN, service, settings | Complete |
-| 6 | Messaging, notifications, reports, CSV export | Not started |
+| 6 | Messaging, notifications, reports, CSV export | Complete |
 | 7 | QA, security testing, deployment, backups | Not started |
 
-Sidebar entries for unbuilt modules render as non-navigable labels carrying
-their phase number, so the intended structure stays visible without any link
-leading to a 404. `tests/unit/navigation.test.ts` enforces this.
+Every sidebar entry now resolves to a real page. The `plannedInPhase` mechanism
+remains for future work: an entry carrying it renders as a non-navigable label
+with its phase number rather than a link that would 404, and
+`tests/unit/navigation.test.ts` enforces that a built route is never left
+marked as planned.
+
+### CSV export
+
+`src/lib/export/csv.ts` neutralises spreadsheet formula injection. A cell
+beginning `=`, `+`, `-`, `@`, tab or carriage return is executed by Excel,
+LibreOffice and Sheets, so a customer named
+`=HYPERLINK("http://evil","click")` would run the moment someone opened the
+file. Escaping quotes does not prevent this; the leading character is prefixed
+with an apostrophe to force text interpretation.
+
+Exports carry the list's active filters, omit financial columns for roles
+without `payment.view`, cap at 10,000 rows while stating in the file itself
+that it was truncated, and write an EXPORT audit entry.
 
 ### Agent passwords
 

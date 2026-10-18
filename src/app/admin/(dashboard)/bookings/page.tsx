@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import Link from "next/link";
-import { Plane, Search, Ship } from "lucide-react";
+import { Download, Plane, Search, Ship } from "lucide-react";
 
 import { PageHeader } from "@/components/layout/admin-shell";
 import {
@@ -48,9 +48,10 @@ export default async function BookingsPage({
   searchParams,
 }: PageProps<"/admin/bookings">) {
   await requirePermission(PERMISSIONS.BOOKING_VIEW);
-  const [canCreate, canViewMoney] = await Promise.all([
+  const [canCreate, canViewMoney, canExport] = await Promise.all([
     currentUserCan(PERMISSIONS.BOOKING_CREATE),
     currentUserCan(PERMISSIONS.PAYMENT_VIEW),
+    currentUserCan(PERMISSIONS.BOOKING_EXPORT),
   ]);
 
   const params = await searchParams;
@@ -111,13 +112,30 @@ export default async function BookingsPage({
 
   const columnCount = canViewMoney ? 9 : 8;
 
+  // The export carries exactly the filters the list is showing, so the file
+  // matches the screen rather than silently being everything.
+  const exportQuery = new URLSearchParams();
+  for (const [key, value] of Object.entries(params)) {
+    if (typeof value === "string" && value !== "" && key !== "page" && key !== "pageSize") {
+      exportQuery.set(key, value);
+    }
+  }
+  const exportHref = `/api/admin/bookings/export${exportQuery.toString() ? `?${exportQuery}` : ""}`;
+
   return (
     <>
       <PageHeader
         title="All bookings"
         description={`${result.total.toLocaleString()} booking${result.total === 1 ? "" : "s"}`}
         actions={
-          canCreate ? (
+          <>
+            {canExport ? (
+              <a href={exportHref} className={buttonVariants({ variant: "secondary" })}>
+                <Download />
+                Export CSV
+              </a>
+            ) : null}
+            {canCreate ? (
             <>
               <Link
                 href="/admin/bookings/new/flight"
@@ -134,7 +152,8 @@ export default async function BookingsPage({
                 New cruise
               </Link>
             </>
-          ) : null
+            ) : null}
+          </>
         }
       />
 
