@@ -30,10 +30,23 @@ over.
 ```bash
 npm install
 cp .env.example .env     # then fill in DATABASE_URL and AUTH_SECRET
+npm run dev:db           # only if using the bundled Prisma Postgres (see below)
 npm run db:migrate       # applies migrations
 npm run db:seed          # permissions, roles, reference data, first admin
 npm run dev
 ```
+
+### The database must be running
+
+`npm run dev` does not start a database. If `DATABASE_URL` points at the
+bundled Prisma Postgres, `npm run dev:db` has to be running in its own terminal
+alongside it — it is a foreground process, and closing that terminal stops the
+database. Pointing `DATABASE_URL` at a system PostgreSQL service avoids this
+entirely.
+
+When the database is unreachable the application degrades rather than crashing:
+the sign-in page still renders and reports the outage in plain words, and
+protected routes redirect to sign-in instead of returning a stack trace.
 
 The seed prints a one-time password for the first administrator when
 `INITIAL_ADMIN_PASSWORD` is not set. The account is flagged to change it at

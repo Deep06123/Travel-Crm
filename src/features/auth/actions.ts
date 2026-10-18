@@ -5,6 +5,10 @@ import { redirect } from "next/navigation";
 import { z } from "zod";
 
 import { getCurrentUser } from "@/lib/auth/dal";
+import {
+  DATABASE_UNAVAILABLE_MESSAGE,
+  isDatabaseUnavailable,
+} from "@/lib/db/errors";
 import { MIN_PASSWORD_LENGTH } from "@/lib/auth/password";
 import {
   clearSessionCookie,
@@ -81,11 +85,26 @@ export async function loginAction(
   }
 
   const context = await requestContext();
-  const result = await login({
-    identifier: parsed.data.identifier,
-    password: parsed.data.password,
-    context,
-  });
+
+  let result: Awaited<ReturnType<typeof login>>;
+
+  try {
+    result = await login({
+      identifier: parsed.data.identifier,
+      password: parsed.data.password,
+      context,
+    });
+  } catch (error) {
+    // An outage is not a failed sign-in. Without this the raw Prisma error —
+    // internal paths, query shape and all — reaches the browser as a 500.
+    if (isDatabaseUnavailable(error)) {
+      log.error({ err: error }, "Sign-in failed: database unreachable");
+      return { error: DATABASE_UNAVAILABLE_MESSAGE };
+    }
+
+    log.error({ err: error }, "Sign-in failed unexpectedly");
+    return { error: "Sign-in could not be completed. Try again." };
+  }
 
   if (!result.ok) {
     return { error: result.message };
@@ -158,11 +177,23 @@ export async function changePasswordAction(
     return { fieldErrors };
   }
 
-  const result = await changePassword(
-    user.id,
-    parsed.data.currentPassword,
-    parsed.data.newPassword,
-  );
+  let result: Awaited<ReturnType<typeof changePassword>>;
+
+  try {
+    result = await changePassword(
+      user.id,
+      parsed.data.currentPassword,
+      parsed.data.newPassword,
+    );
+  } catch (error) {
+    if (isDatabaseUnavailable(error)) {
+      log.error({ err: error }, "Password change failed: database unreachable");
+      return { error: DATABASE_UNAVAILABLE_MESSAGE };
+    }
+
+    log.error({ err: error }, "Password change failed unexpectedly");
+    return { error: "The password could not be changed. Try again." };
+  }
 
   if (!result.ok) {
     return { error: result.message };

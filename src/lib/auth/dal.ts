@@ -6,6 +6,8 @@ import { redirect } from "next/navigation";
 import { AdminUserStatus } from "@/generated/prisma/enums";
 import type { AdminRole } from "@/generated/prisma/enums";
 import { prisma } from "@/lib/db/prisma";
+import { isDatabaseUnavailable } from "@/lib/db/errors";
+import { loggerFor } from "@/lib/logging/logger";
 import {
   ForbiddenError,
   getPermissionsForRole,
@@ -13,6 +15,8 @@ import {
 } from "@/lib/permissions";
 
 import { readSessionToken, resolveSession } from "./session";
+
+const log = loggerFor("auth-dal");
 
 /**
  * Data Access Layer for authentication and authorization.
@@ -44,29 +48,42 @@ export const getCurrentUser = cache(async (): Promise<CurrentUser | null> => {
   const token = await readSessionToken();
   if (!token) return null;
 
-  const session = await resolveSession(token);
-  if (!session) return null;
+  try {
+    const session = await resolveSession(token);
+    if (!session) return null;
 
-  const user = await prisma.adminUser.findUnique({
-    where: { id: session.adminUserId },
-    select: {
-      id: true,
-      email: true,
-      username: true,
-      name: true,
-      role: true,
-      status: true,
-      mustChangePassword: true,
-    },
-  });
+    const user = await prisma.adminUser.findUnique({
+      where: { id: session.adminUserId },
+      select: {
+        id: true,
+        email: true,
+        username: true,
+        name: true,
+        role: true,
+        status: true,
+        mustChangePassword: true,
+      },
+    });
 
-  if (!user) return null;
+    if (!user) return null;
 
-  // A suspended or deactivated account is rejected even while holding a session
-  // that has not yet expired.
-  if (user.status !== AdminUserStatus.ACTIVE) return null;
+    // A suspended or deactivated account is rejected even while holding a
+    // session that has not yet expired.
+    if (user.status !== AdminUserStatus.ACTIVE) return null;
 
-  return { ...user, sessionId: session.sessionId };
+    return { ...user, sessionId: session.sessionId };
+  } catch (error) {
+    // An unreachable database must not render a Prisma stack trace into the
+    // browser. Failing closed — treating the caller as signed out — sends them
+    // to the login page, where the action reports the outage in plain words.
+    // Only infrastructure failures are swallowed; a genuine bug still throws.
+    if (isDatabaseUnavailable(error)) {
+      log.error({ err: error }, "Session lookup failed: database unreachable");
+      return null;
+    }
+
+    throw error;
+  }
 });
 
 /** Returns the current administrator, or redirects to the login page. */
