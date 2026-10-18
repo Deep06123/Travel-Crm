@@ -53,3 +53,8 @@ skills-lock.json
 
 # Uploaded documents (local storage driver)
 /storage/
+
+# Playwright artefacts
+/test-results/
+/playwright-report/
+/blob-report/

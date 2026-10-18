@@ -16,7 +16,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:e2e": "playwright test",
-    "dev:db": "prisma dev --name crmdev"
+    "dev:db": "bash scripts/start-local-postgres.sh start",
+    "dev:db:stop": "bash scripts/start-local-postgres.sh stop"
   },
   "prisma": {
     "seed": "tsx prisma/seed.ts"

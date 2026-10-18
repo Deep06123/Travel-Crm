@@ -31,10 +31,18 @@ export function proxy(request: NextRequest): NextResponse {
     return NextResponse.redirect(loginUrl);
   }
 
-  if (hasSessionCookie && isLoginRoute) {
-    return NextResponse.redirect(new URL("/admin", request.url));
-  }
-
+  // Deliberately NOT redirecting away from the login page when a cookie is
+  // present. Only the database knows whether a session is still valid, and
+  // this layer cannot ask it. Bouncing on cookie presence alone created an
+  // infinite loop for any stale cookie — expired, revoked, or forged:
+  //
+  //   /admin       → cookie present, allowed through
+  //   layout       → session invalid, redirects to /admin/login
+  //   /admin/login → cookie present, redirected back to /admin
+  //
+  // which left the user at ERR_TOO_MANY_REDIRECTS and locked out until they
+  // cleared cookies by hand. The login page performs the real check itself and
+  // redirects an genuinely signed-in administrator to the dashboard.
   return NextResponse.next();
 }
 
