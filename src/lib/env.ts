@@ -56,14 +56,18 @@ const serverEnvSchema = z.object({
    * provisions a demo SUPER_ADMIN and issues a real session, so every page and
    * permission check behaves exactly as it does for a signed-in administrator.
    *
-   * It is off unless explicitly set, and the value is read only on the server,
-   * so it cannot be flipped from the browser. Anyone who reaches the URL of a
-   * deployment with this on has full access to whatever that deployment's
-   * database holds — it belongs on a demo, never on one holding real bookings.
+   * On by default, because this deployment exists to be explored rather than
+   * to hold a real agency's bookings, and requiring a seeded database and a
+   * password before anything can be seen made it unusable for that.
+   *
+   * Set it to "false" the moment real customer data goes in. Anyone who reaches
+   * the URL while it is on has full access to everything the database holds:
+   * passenger passport details, payment records and refund approval. The value
+   * is read server-side only, so a visitor cannot change it either way.
    */
   DEMO_MODE: z
     .enum(["true", "false"])
-    .default("false")
+    .default("true")
     .transform((value) => value === "true"),
 
   /** Session idle lifetime, in seconds. Defaults to 8 hours. */
