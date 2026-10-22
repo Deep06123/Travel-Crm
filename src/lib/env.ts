@@ -19,15 +19,32 @@ const serverEnvSchema = z.object({
     .enum(["development", "test", "production"])
     .default("development"),
 
-  /** PostgreSQL connection string used by Prisma. */
+  /**
+   * PostgreSQL connection string.
+   *
+   * Optional. Left unset, the application runs against an embedded PostgreSQL
+   * (PGlite) inside its own process, which needs nothing installed or
+   * provisioned but keeps its data in memory and loses it when the process
+   * ends. Set this for anything whose records need to outlive a restart.
+   */
   DATABASE_URL: z
-    .string()
-    .min(1, "DATABASE_URL is required")
-    .refine(
+    .preprocess(
+      // A variable present but blank is the same as absent. Hosting dashboards
+      // make an empty value easy to create and hard to notice, and failing to
+      // boot over one would be a poor reading of the operator's intent.
       (value) =>
-        value.startsWith("postgres://") || value.startsWith("postgresql://"),
-      "DATABASE_URL must be a PostgreSQL connection string",
-    ),
+        typeof value === "string" && value.trim() === "" ? undefined : value,
+      z
+        .string()
+        .refine(
+          (value) =>
+            value.startsWith("postgres://") ||
+            value.startsWith("postgresql://"),
+          "DATABASE_URL must be a PostgreSQL connection string",
+        )
+        .optional(),
+    )
+    .optional(),
 
   /**
    * Secret used to sign and encrypt session cookies. Must be at least 32

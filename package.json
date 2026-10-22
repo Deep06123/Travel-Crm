@@ -30,6 +30,7 @@
     "node": ">=20.9.0"
   },
   "dependencies": {
+    "@electric-sql/pglite": "^0.4.3",
     "@hookform/resolvers": "5.9.2",
     "@prisma/adapter-pg": "^7.10.1",
     "@prisma/client": "7.10.1",
@@ -43,6 +44,7 @@
     "next": "16.4.2",
     "nodemailer": "^10.2.0",
     "pg": "^8.23.1",
+    "pglite-prisma-adapter": "^0.7.2",
     "pino": "10.4.0",
     "react": "19.3.0",
     "react-dom": "19.3.0",

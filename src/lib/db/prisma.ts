@@ -1,10 +1,13 @@
 import "server-only";
 
 import { PrismaPg } from "@prisma/adapter-pg";
+import { PrismaPGlite } from "pglite-prisma-adapter";
 
 import { PrismaClient } from "@/generated/prisma/client";
 import { getEnv } from "@/lib/env";
 import { logger } from "@/lib/logging/logger";
+
+import { getEmbeddedDatabase } from "./embedded";
 
 /**
  * Shared Prisma client.
@@ -40,11 +43,22 @@ function poolSize(explicit: number | undefined): number {
   return process.env["VERCEL"] ? 3 : 10;
 }
 
-function createPrismaClient(): Client {
-  const env = getEnv();
+/**
+ * Chooses where the data lives.
+ *
+ * With `DATABASE_URL` set, a hosted PostgreSQL — the arrangement for anything
+ * holding real bookings. Without it, PostgreSQL compiled to WebAssembly and run
+ * inside this process, so the application works with nothing to install or
+ * provision. Both are genuinely Postgres, which is why no service, query or
+ * transaction below this line is aware of the difference.
+ */
+function createAdapter(env: ReturnType<typeof getEnv>) {
+  if (!env.DATABASE_URL) {
+    return new PrismaPGlite(getEmbeddedDatabase());
+  }
 
   // Prisma 7 requires an explicit driver adapter for SQL providers.
-  const adapter = new PrismaPg({
+  return new PrismaPg({
     connectionString: env.DATABASE_URL,
     max: poolSize(env.DB_POOL_MAX),
     // Without this, a request that finds the pool saturated waits forever and
@@ -52,6 +66,11 @@ function createPrismaClient(): Client {
     // that into a logged error naming the real cause.
     connectionTimeoutMillis: 10_000,
   });
+}
+
+function createPrismaClient(): Client {
+  const env = getEnv();
+  const adapter = createAdapter(env);
 
   const client = new PrismaClient({
     adapter,
