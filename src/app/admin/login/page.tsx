@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { redirect } from "next/navigation";
 
 import { getCurrentUser } from "@/lib/auth/dal";
+import { getEnv } from "@/lib/env";
 
 import { LoginForm } from "./login-form";
 
@@ -23,7 +24,11 @@ export default async function LoginPage({
 
   return (
     <div className="flex min-h-screen items-center justify-center bg-surface-muted px-4 py-12">
-      <LoginForm next={next} passwordChanged={params["changed"] === "1"} />
+      <LoginForm
+        next={next}
+        passwordChanged={params["changed"] === "1"}
+        demoMode={getEnv().DEMO_MODE}
+      />
     </div>
   );
 }

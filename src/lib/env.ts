@@ -49,6 +49,23 @@ const serverEnvSchema = z.object({
    */
   DB_POOL_MAX: z.coerce.number().int().positive().max(100).optional(),
 
+  /**
+   * Opens the application without a sign-in.
+   *
+   * When enabled, the login page offers a "Skip sign-in" control that
+   * provisions a demo SUPER_ADMIN and issues a real session, so every page and
+   * permission check behaves exactly as it does for a signed-in administrator.
+   *
+   * It is off unless explicitly set, and the value is read only on the server,
+   * so it cannot be flipped from the browser. Anyone who reaches the URL of a
+   * deployment with this on has full access to whatever that deployment's
+   * database holds — it belongs on a demo, never on one holding real bookings.
+   */
+  DEMO_MODE: z
+    .enum(["true", "false"])
+    .default("false")
+    .transform((value) => value === "true"),
+
   /** Session idle lifetime, in seconds. Defaults to 8 hours. */
   SESSION_MAX_AGE_SECONDS: z.coerce.number().int().positive().default(28_800),
 
