@@ -3,15 +3,13 @@ import "server-only";
 import { randomBytes } from "node:crypto";
 
 import { AdminRole, AdminUserStatus } from "@/generated/prisma/enums";
+import { DEMO_ADMIN_EMAIL, DEMO_ADMIN_ID } from "@/lib/auth/demo-identity";
 import { hashPassword } from "@/lib/auth/password";
 import { prisma } from "@/lib/db/prisma";
 import { getEnv } from "@/lib/env";
 import { loggerFor } from "@/lib/logging/logger";
 
 const log = loggerFor("demo-service");
-
-/** Fixed identity, so repeated demo entries reuse one account and one history. */
-const DEMO_EMAIL = "demo@travel-crm.invalid";
 
 /**
  * Finds or creates the demo administrator.
@@ -38,7 +36,7 @@ export async function provisionDemoAdmin(): Promise<{ id: string }> {
   }
 
   const existing = await prisma.adminUser.findUnique({
-    where: { email: DEMO_EMAIL },
+    where: { email: DEMO_ADMIN_EMAIL },
     select: { id: true, status: true },
   });
 
@@ -57,7 +55,11 @@ export async function provisionDemoAdmin(): Promise<{ id: string }> {
 
   const created = await prisma.adminUser.create({
     data: {
-      email: DEMO_EMAIL,
+      // Pinned, not generated: the access layer resolves this account by id,
+      // and on a serverless deployment each instance builds its own database,
+      // so a generated id would differ between them.
+      id: DEMO_ADMIN_ID,
+      email: DEMO_ADMIN_EMAIL,
       username: "demo",
       name: "Demo Administrator",
       passwordHash: await hashPassword(randomBytes(32).toString("base64url")),

@@ -7,9 +7,11 @@ import { AdminUserStatus } from "@/generated/prisma/enums";
 import type { AdminRole } from "@/generated/prisma/enums";
 import { prisma } from "@/lib/db/prisma";
 import { isDatabaseUnavailable } from "@/lib/db/errors";
+import { getEnv } from "@/lib/env";
 import { loggerFor } from "@/lib/logging/logger";
 import { getPermissionsForRole, type PermissionKey } from "@/lib/permissions";
 
+import { DEMO_ADMIN_ID } from "./demo-identity";
 import { readSessionToken, resolveSession } from "./session";
 
 const log = loggerFor("auth-dal");
@@ -41,6 +43,22 @@ export interface CurrentUser {
  * a layout, the page body and three components still performs one lookup.
  */
 export const getCurrentUser = cache(async (): Promise<CurrentUser | null> => {
+  // Demo deployments resolve an administrator without a stored session.
+  //
+  // Sessions live in the database, which is the right design when one database
+  // serves every request. A demo running the embedded database has no such
+  // thing: each serverless instance keeps its own copy, so a session written
+  // while signing in is absent from the instance that serves the next request,
+  // and the visitor is signed in and out at random depending on where they
+  // land. Resolving the fixed demo administrator instead is stable everywhere,
+  // because every instance creates it identically at boot.
+  if (getEnv().DEMO_MODE) {
+    const demo = await resolveDemoUser();
+    if (demo) return demo;
+    // Falls through when the account is missing, so a deployment with
+    // DEMO_MODE on but a hosted database still signs in normally.
+  }
+
   const token = await readSessionToken();
   if (!token) return null;
 
@@ -81,6 +99,43 @@ export const getCurrentUser = cache(async (): Promise<CurrentUser | null> => {
     throw error;
   }
 });
+
+/**
+ * Looks up the fixed demo administrator.
+ *
+ * Returns null rather than throwing when the database is unreachable or the
+ * account is absent, so a misconfigured demo degrades to an ordinary sign-in
+ * instead of failing the request outright.
+ */
+async function resolveDemoUser(): Promise<CurrentUser | null> {
+  try {
+    const user = await prisma.adminUser.findUnique({
+      where: { id: DEMO_ADMIN_ID },
+      select: {
+        id: true,
+        email: true,
+        username: true,
+        name: true,
+        role: true,
+        status: true,
+        mustChangePassword: true,
+      },
+    });
+
+    if (!user || user.status !== AdminUserStatus.ACTIVE) return null;
+
+    // No session row exists for this user, by design. `sessionId` is only used
+    // for revocation, which does not apply to an account nobody signs into.
+    return { ...user, sessionId: "demo" };
+  } catch (error) {
+    if (isDatabaseUnavailable(error)) {
+      log.error({ err: error }, "Demo user lookup failed: database unreachable");
+      return null;
+    }
+
+    throw error;
+  }
+}
 
 /** Returns the current administrator, or redirects to the login page. */
 export async function requireAuth(): Promise<CurrentUser> {

@@ -18,7 +18,17 @@ export function proxy(request: NextRequest): NextResponse {
 
   const isLoginRoute = pathname === "/admin/login";
 
-  if (!hasSessionCookie && !isLoginRoute) {
+  // A demo deployment has no sign-in to send anyone to. The access layer
+  // resolves the demo administrator without a session, so a missing cookie is
+  // the normal case rather than a signed-out visitor — and bouncing them to a
+  // login page they are not expected to use would make the site unreachable.
+  //
+  // Matched against "false" rather than "true" so it follows the same
+  // default-on behaviour as the environment schema, which this file cannot
+  // import: `proxy` runs before the application's module graph is available.
+  const demoMode = process.env["DEMO_MODE"] !== "false";
+
+  if (!demoMode && !hasSessionCookie && !isLoginRoute) {
     const loginUrl = new URL("/admin/login", request.url);
 
     // Preserve where the user was heading so sign-in can return them there.

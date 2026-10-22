@@ -5,6 +5,7 @@ import { join } from "node:path";
 
 import { PGlite } from "@electric-sql/pglite";
 
+import { DEMO_ADMIN_EMAIL, DEMO_ADMIN_ID } from "@/lib/auth/demo-identity";
 import { loggerFor } from "@/lib/logging/logger";
 
 const log = loggerFor("embedded-db");
@@ -124,6 +125,30 @@ async function seedReferenceData(db: PGlite): Promise<number> {
     ],
   );
 
+  // The demo administrator, created here rather than on first sign-in.
+  //
+  // Each instance of a serverless deployment holds its own copy of this
+  // database, so anything written during a request exists only where it was
+  // written. A demo account created on one instance is therefore absent from
+  // the next, and a visitor bounces between being signed in and not depending
+  // on which instance answers. Creating it at boot, with a fixed id, makes
+  // every instance identical, so it no longer matters which one serves a
+  // request.
+  //
+  // The password column is filled with a value no input can produce: bcrypt
+  // digests start with `$2`, so no password hashes to this and the account
+  // cannot be signed into by password. The only route in is the demo path,
+  // which DEMO_MODE gates.
+  await db.query(
+    `INSERT INTO "AdminUser"
+       ("id", "email", "username", "name", "passwordHash", "role", "status",
+        "mustChangePassword", "updatedAt")
+     VALUES ($1, $2, 'demo', 'Demo Administrator', 'demo-account-no-password',
+             'SUPER_ADMIN', 'ACTIVE', false, NOW())
+     ON CONFLICT ("email") DO NOTHING`,
+    [DEMO_ADMIN_ID, DEMO_ADMIN_EMAIL],
+  );
+
   return grants;
 }
 
@@ -145,23 +170,57 @@ export function getEmbeddedDatabase(): PGlite {
   const started = Date.now();
   const db = new PGlite();
 
-  // Deliberately not awaited. See above: PGlite serialises, so this completes
-  // before anything Prisma submits later. The result is still handled, because
-  // an unhandled rejection here would otherwise surface far away as a confusing
-  // "relation does not exist" on the first page load.
-  void applyMigrations(db)
-    .then(async (applied) => {
-      const grants = await seedReferenceData(db);
+  const ready = (async () => {
+    // PGlite runs its own statements through these same methods while starting
+    // up, so nothing may be gated until it has finished.
+    await db.waitReady;
 
-      log.warn(
-        { migrations: applied, grants, ms: Date.now() - started },
-        "Embedded database ready — in-memory, not durable, resets with the process",
-      );
-    })
-    .catch((error: unknown) => {
-      log.error({ err: error }, "Embedded database failed to apply migrations");
-    });
+    const migrations = await applyMigrations(db);
+    const grants = await seedReferenceData(db);
 
-  globalThis.__crmEmbeddedDb = db;
-  return db;
+    log.warn(
+      { migrations, grants, ms: Date.now() - started },
+      "Embedded database ready — in-memory, not durable, resets with the process",
+    );
+  })();
+
+  ready.catch((error: unknown) => {
+    log.error({ err: error }, "Embedded database failed to prepare");
+  });
+
+  /**
+   * A view of the database that holds queries until the schema exists.
+   *
+   * Submitting the migrations first is not enough on its own. Prisma reaches
+   * the database through the driver adapter, which does not share the queue
+   * the bootstrap statements went into: the first page load raced the
+   * migrations and failed with "The table public.AdminUser does not exist" —
+   * intermittently, and only on a cold start, which is the worst way for a
+   * fault to present itself.
+   *
+   * This wraps rather than modifies. Replacing the methods on the instance
+   * itself deadlocks, because PGlite's own startup calls them and would then be
+   * waiting on migrations that cannot run until startup finishes. The real
+   * instance keeps its real methods; only the adapter sees the gate.
+   */
+  const gated = new Proxy(db, {
+    get(target, property, receiver) {
+      if (property === "query" || property === "exec") {
+        const method = Reflect.get(target, property, receiver) as (
+          ...args: unknown[]
+        ) => Promise<unknown>;
+
+        return async (...args: unknown[]) => {
+          await ready;
+          return method.apply(target, args);
+        };
+      }
+
+      const value = Reflect.get(target, property, receiver) as unknown;
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
+
+  globalThis.__crmEmbeddedDb = gated;
+  return gated;
 }
