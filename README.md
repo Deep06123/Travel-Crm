@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # Travel Booking Admin CRM
 
 Admin-only CRM for flight and cruise booking operations: bookings, customers,
@@ -260,3 +261,6 @@ anything under `public/` is served to anyone by URL. Bytes leave the server only
 through `/api/admin/documents/[id]/view`, which re-checks `document.view` on
 every fetch; there is no public or pre-signed URL. Adding an S3 adapter is a
 change to `getStorage()` alone.
+=======
+# Travel-Crm
+>>>>>>> origin/main
