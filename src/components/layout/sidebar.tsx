@@ -16,12 +16,30 @@ import { NAV_SECTIONS, type NavItem, type NavSection } from "./navigation";
  * never learns about modules the signed-in role cannot reach.
  */
 
+/**
+ * Resolves a Lucide icon by the name recorded in `navigation.ts`.
+ *
+ * Lucide ships its icons as `forwardRef` objects, not plain functions, so a
+ * `typeof === "function"` guard rejects every one of them and silently renders
+ * the fallback instead — twenty-four identical circles. Accept anything React
+ * can actually render as a component: a function, or an exotic element type
+ * carrying `$$typeof` (`forwardRef`, `memo`).
+ */
+function isComponentType(
+  value: unknown,
+): value is React.ComponentType<{ className?: string }> {
+  if (typeof value === "function") return true;
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "$$typeof" in value &&
+    typeof (value as { $$typeof: unknown }).$$typeof === "symbol"
+  );
+}
+
 function Icon({ name, className }: { name: string; className?: string }) {
   const candidate = (icons as unknown as Record<string, unknown>)[name];
-  const Component =
-    typeof candidate === "function"
-      ? (candidate as React.ComponentType<{ className?: string }>)
-      : icons.Circle;
+  const Component = isComponentType(candidate) ? candidate : icons.Circle;
 
   return <Component className={className} />;
 }

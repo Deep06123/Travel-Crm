@@ -31,6 +31,42 @@ if [[ ! -x "$PG_BIN/pg_ctl" ]]; then
 fi
 
 case "${1:-start}" in
+  # Called by `npm run dev`. Starts the cluster only when DATABASE_URL actually
+  # points at it, so pointing .env at a system PostgreSQL — or any other server
+  # — does not silently start a second one alongside it. Stays quiet when there
+  # is nothing to do; `npm run dev` should not open with a wall of database
+  # chatter every time.
+  #
+  # This exists because `next dev` does not start a database, and forgetting the
+  # separate `npm run dev:db` surfaces as a P1001 "Can't reach database server"
+  # at the sign-in screen rather than as anything that names the real cause.
+  ensure)
+    if [[ -f .env ]] && ! grep -qE "DATABASE_URL=\"?[^\"]*:$PGPORT/" .env; then
+      echo "DATABASE_URL does not point at the local cluster on port $PGPORT — leaving it alone."
+      exit 0
+    fi
+
+    mkdir -p "$PGSOCKET"
+
+    if [[ ! -d "$PGDATA/base" ]]; then
+      echo "==> Initialising a new cluster at $PGDATA"
+      "$PG_BIN/initdb" -D "$PGDATA" -U "$PGUSER_NAME" --auth=trust >/dev/null
+    fi
+
+    if ! "$PG_BIN/pg_ctl" -D "$PGDATA" status >/dev/null 2>&1; then
+      echo "==> Starting PostgreSQL on port $PGPORT"
+      "$PG_BIN/pg_ctl" -D "$PGDATA" -l "$PGDATA/server.log" \
+        -o "-p $PGPORT -k $PGSOCKET -c listen_addresses=127.0.0.1" \
+        -w start >/dev/null
+    fi
+
+    if ! "$PG_BIN/psql" -h 127.0.0.1 -p "$PGPORT" -U "$PGUSER_NAME" -lqt 2>/dev/null \
+         | cut -d'|' -f1 | grep -qw "$PGDATABASE_NAME"; then
+      "$PG_BIN/createdb" -h 127.0.0.1 -p "$PGPORT" -U "$PGUSER_NAME" "$PGDATABASE_NAME"
+      echo "==> Created database $PGDATABASE_NAME"
+    fi
+    ;;
+
   start)
     mkdir -p "$PGSOCKET"
 

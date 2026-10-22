@@ -1,6 +1,7 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 
+import * as icons from "lucide-react";
 import { describe, expect, it } from "vitest";
 
 import { NAV_SECTIONS } from "@/components/layout/navigation";
@@ -92,5 +93,30 @@ describe("sidebar navigation", () => {
       expect(item.plannedInPhase).toBeGreaterThanOrEqual(3);
       expect(item.plannedInPhase).toBeLessThanOrEqual(7);
     }
+  });
+
+  /**
+   * The sidebar resolves `item.icon` out of the Lucide namespace at runtime and
+   * falls back to a plain circle when the name is unknown. That fallback is
+   * silent: a typo, or a guard that rejects Lucide's `forwardRef` objects,
+   * renders every entry as an identical circle and nothing fails. Asserting the
+   * names resolve turns both mistakes into a failing test.
+   */
+  it("names an icon that Lucide actually exports, for every entry", () => {
+    const registry = icons as unknown as Record<string, unknown>;
+
+    const unresolved = allItems
+      .filter((item) => {
+        const candidate = registry[item.icon];
+        if (typeof candidate === "function") return false;
+        return !(
+          typeof candidate === "object" &&
+          candidate !== null &&
+          "$$typeof" in candidate
+        );
+      })
+      .map((item) => `${item.label} → ${item.icon}`);
+
+    expect(unresolved).toEqual([]);
   });
 });

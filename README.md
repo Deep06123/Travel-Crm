@@ -38,11 +38,15 @@ npm run dev
 
 ### The database must be running
 
-`npm run dev` does not start a database. If `DATABASE_URL` points at the
-bundled Prisma Postgres, `npm run dev:db` has to be running in its own terminal
-alongside it — it is a foreground process, and closing that terminal stops the
-database. Pointing `DATABASE_URL` at a system PostgreSQL service avoids this
-entirely.
+`npm run dev` starts the local PostgreSQL cluster first, but only when
+`DATABASE_URL` points at it (port 55432). If you repoint `DATABASE_URL` at a
+system PostgreSQL or any other server, `npm run dev` says so and leaves it
+alone — starting that server is then up to you.
+
+The cluster is a background process owned by your user, so it keeps running
+after `next dev` exits; `npm run dev:db:stop` shuts it down. Its data lives in
+`~/.local/share/travel-crm-postgres` and survives reboots, but the process does
+not, which is why `npm run dev` re-checks every time.
 
 When the database is unreachable the application degrades rather than crashing:
 the sign-in page still renders and reports the outage in plain words, and

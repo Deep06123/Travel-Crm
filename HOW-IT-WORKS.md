@@ -195,7 +195,7 @@ A simple box: email (or username) and password. Press sign in.
 What happens behind the curtain:
 
 - Your password is **never** stored as real text. The computer stores a
-  scrambled fingerprint of it (called a *bcrypt hash*). Even the boss cannot
+  scrambled fingerprint of it (called a *bcrypt hash*).ot Even the boss cann
   read your password. If you forget it, nobody can tell you what it was — you
   can only be given a brand-new one.
 - **Wrong password too many times? The account locks itself** for a while. This

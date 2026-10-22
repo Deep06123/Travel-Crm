@@ -1,0 +1,1457 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Travel Booking CRM — UI Showcase</title>
+<style>
+  /* ===================================================================
+     Design tokens — copied verbatim from src/app/globals.css.
+     Spacing, type sizes and colours below mirror the Tailwind classes
+     used by the real components:
+       AdminShell  src/components/layout/admin-shell.tsx
+       Sidebar     src/components/layout/sidebar.tsx
+       Panel/Card  src/components/ui/panel.tsx
+       Table       src/components/tables/data-table.tsx
+       Dashboard   src/app/admin/(dashboard)/page.tsx
+     Tailwind scale used here: 0.5=2px 1=4px 1.5=6px 2=8px 2.5=10px
+                               3=12px 4=16px 5=20px 6=24px
+     Breakpoints: sm=640px lg=1024px xl=1280px
+     =================================================================== */
+  :root {
+    --navy-50:#eef4fb; --navy-100:#d6e4f5; --navy-200:#aec9ea; --navy-300:#7ea8dd;
+    --navy-400:#4583c9; --navy-500:#0754a6; --navy-600:#064a93; --navy-700:#053c78;
+    --navy-800:#042e5c; --navy-900:#032444;
+    --amber:#ffc928; --amber-dark:#d99523;
+
+    --surface:#ffffff; --surface-muted:#f4f7fb; --surface-sunken:#eaf0f8;
+    --line:#dce5ef; --line-strong:#c3d2e4;
+
+    --ink:#263748; --ink-muted:#738195; --ink-subtle:#95a1b2;
+
+    --success:#1b8a5a; --success-bg:#e3f5ec;
+    --warning:#b26a04; --warning-bg:#fdf1dc;
+    --danger:#c0392f;  --danger-bg:#fbe6e4;
+    --info:#0754a6;    --info-bg:#e5eff9;
+    --neutral:#5b6b7f; --neutral-bg:#eef1f5;
+
+    /* Dense operational tables need a tighter rhythm than Tailwind's default. */
+    --cell-x:0.75rem;  /* 12px */
+    --cell-y:0.5rem;   /*  8px */
+
+    --radius-lg:0.5rem;   /* rounded-lg  */
+    --radius-md:0.375rem; /* rounded-md  */
+    --shadow-sm:0 1px 2px 0 rgb(38 55 72 / .05);
+    --sidebar-w:16rem;    /* w-64 / lg:pl-64 = 256px */
+    --topbar-h:3.5rem;    /* h-14 = 56px */
+    --demobar-h:37px;
+  }
+
+  *,*::before,*::after { box-sizing:border-box; }
+  html { color-scheme:light; -webkit-text-size-adjust:100%; }
+  body {
+    margin:0; background:var(--surface-muted); color:var(--ink);
+    font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+    font-size:14px; line-height:1.5; -webkit-font-smoothing:antialiased;
+  }
+  .tabular { font-variant-numeric:tabular-nums; }
+  :focus-visible { outline:2px solid var(--navy-500); outline-offset:2px; }
+  .sr { position:absolute; width:1px; height:1px; overflow:hidden; clip:rect(0 0 0 0); white-space:nowrap; }
+
+  /* ---------------- Demo control bar (not part of the app) ---------------- */
+  .demo-bar {
+    position:sticky; top:0; z-index:60; display:flex; flex-wrap:wrap; gap:12px;
+    align-items:center; justify-content:space-between;
+    background:var(--navy-900); color:#fff; padding:8px 16px; font-size:12px;
+  }
+  .demo-bar .note { color:var(--navy-200); }
+  .demo-bar .pill {
+    background:rgb(255 255 255 / .12); border-radius:999px; padding:3px 10px; font-weight:600;
+  }
+
+  /* ---------------- Shell ---------------- */
+  .shell { min-height:calc(100vh - var(--demobar-h)); }
+
+  .sidebar {
+    position:fixed; top:var(--demobar-h); bottom:0; left:0; width:var(--sidebar-w); z-index:30;
+    display:flex; flex-direction:column; background:var(--surface);
+    border-right:1px solid var(--line);
+  }
+  /* brand: h-14, px-4, gap-2, border-b */
+  .brand {
+    display:flex; align-items:center; gap:8px; height:var(--topbar-h); flex:0 0 var(--topbar-h);
+    padding:0 16px; border-bottom:1px solid var(--line);
+  }
+  .brand svg { width:24px; height:24px; flex:0 0 24px; }
+  .brand-name { font-size:18px; font-weight:700; letter-spacing:-.025em; color:var(--navy-500); }
+  .brand-name span { color:var(--amber-dark); }
+
+  /* nav: px-3 py-4 */
+  .nav { flex:1; overflow-y:auto; padding:16px 12px; }
+  .nav-group { margin-bottom:16px; }            /* mb-4 */
+  .nav-group:last-child { margin-bottom:0; }
+  /* h3: mb-1.5 px-3 text-[11px] font-semibold tracking-wider uppercase */
+  .nav h3 {
+    margin:0 0 6px; padding:0 12px; font-size:11px; font-weight:600;
+    letter-spacing:.05em; text-transform:uppercase; color:var(--ink-subtle);
+  }
+  .nav ul { list-style:none; margin:0; padding:0; }
+  .nav li + li { margin-top:2px; }              /* space-y-0.5 */
+  /* link: gap-2.5 rounded-md px-3 py-2 text-sm */
+  .nav a {
+    display:flex; align-items:center; gap:10px; padding:8px 12px;
+    border-radius:var(--radius-md); font-size:14px; text-decoration:none;
+    color:var(--ink-muted); transition:background-color .12s,color .12s;
+  }
+  .nav a:hover { background:var(--surface-sunken); color:var(--ink); }
+  .nav a.active { background:var(--navy-500); color:#fff; font-weight:500; }
+  .nav a svg { width:16px; height:16px; flex:0 0 16px; }
+
+  .body-col { padding-left:var(--sidebar-w); }
+
+  /* header: sticky h-14 gap-3 border-b px-4 */
+  .topbar {
+    position:sticky; top:var(--demobar-h); z-index:20;
+    display:flex; align-items:center; gap:12px; height:var(--topbar-h);
+    padding:0 16px; background:#fff; border-bottom:1px solid var(--line);
+  }
+  .crumbs { flex:1; min-width:0; }
+  .crumbs ol {
+    display:flex; align-items:center; gap:6px; margin:0; padding:0;
+    list-style:none; font-size:14px;
+  }
+  .crumbs li { display:flex; align-items:center; gap:6px; min-width:0; }
+  .crumbs svg { width:14px; height:14px; flex:0 0 14px; color:var(--ink-subtle); }
+  .crumbs a { color:var(--ink-muted); text-decoration:none; }
+  .crumbs a:hover { color:var(--navy-500); }
+  .crumbs .current { font-weight:500; color:var(--ink); }
+
+  .whoami { display:flex; align-items:center; gap:8px; flex:0 0 auto; }
+  .whoami > a {
+    display:flex; align-items:center; gap:8px; padding:6px 8px;
+    border-radius:var(--radius-md); text-decoration:none;
+  }
+  .whoami > a:hover { background:var(--surface-sunken); }
+  /* size-7 rounded-full bg-amber-accent text-navy-900 */
+  .avatar {
+    display:flex; align-items:center; justify-content:center; width:28px; height:28px;
+    border-radius:999px; background:var(--amber); color:var(--navy-900); flex:0 0 28px;
+  }
+  .avatar svg { width:16px; height:16px; }
+  .who-name { display:block; font-size:12px; line-height:1.25; font-weight:500; color:var(--ink); }
+  .who-role { display:block; font-size:11px; line-height:1.25; color:var(--ink-muted); }
+  .icon-btn {
+    display:flex; align-items:center; justify-content:center; padding:8px;
+    border:0; background:none; border-radius:var(--radius-md); cursor:pointer; color:var(--ink-muted);
+  }
+  .icon-btn:hover { background:var(--surface-sunken); color:var(--ink); }
+  .icon-btn svg { width:16px; height:16px; }
+
+  /* main: mx-auto w-full max-w-[1600px] px-4 py-6 */
+  main.content { margin:0 auto; width:100%; max-width:1600px; padding:24px 16px; }
+
+  /* ---------------- Page header: mb-5, gap-3 ---------------- */
+  .page-head {
+    display:flex; flex-wrap:wrap; align-items:flex-start; justify-content:space-between;
+    gap:12px; margin-bottom:20px;
+  }
+  .page-head .ph-text { min-width:0; }
+  .page-head h1 { margin:0; font-size:24px; line-height:2rem; font-weight:600; letter-spacing:-.025em; }
+  .page-head p { margin:2px 0 0; font-size:14px; color:var(--ink-muted); }
+  .page-head .ph-actions { display:flex; align-items:center; gap:8px; }
+
+  /* ---------------- Card / Panel ---------------- */
+  /* Card: rounded-lg border bg-white p-4 shadow-sm */
+  .card {
+    border-radius:var(--radius-lg); border:1px solid var(--line);
+    background:#fff; padding:16px; box-shadow:var(--shadow-sm);
+  }
+  .card.flush { padding:0; overflow:hidden; }
+
+  /* Panel: rounded-lg border bg-white shadow-sm, navy header px-4 py-2.5, body p-4 */
+  .panel {
+    overflow:hidden; border-radius:var(--radius-lg); border:1px solid var(--line);
+    background:#fff; box-shadow:var(--shadow-sm);
+  }
+  .panel > header {
+    display:flex; align-items:center; justify-content:space-between; gap:12px;
+    padding:10px 16px; background:var(--navy-500); color:#fff;
+  }
+  .panel > header .ph { min-width:0; }
+  .panel > header h2 { margin:0; font-size:14px; font-weight:600; }
+  .panel > header .sub { font-size:12px; color:var(--navy-100); }
+  .panel > header .tools { display:flex; align-items:center; gap:8px; flex:0 0 auto; }
+  .chev {
+    display:flex; padding:4px; border:0; background:none; border-radius:4px;
+    color:var(--navy-100); cursor:pointer;
+  }
+  .chev:hover { background:var(--navy-600); color:#fff; }
+  .chev svg { width:16px; height:16px; }
+  .panel-body { padding:16px; }
+  .panel-body.flush { padding:0; }
+
+  /* ---------------- Controls ---------------- */
+  .btn {
+    display:inline-flex; align-items:center; justify-content:center; gap:8px;
+    height:36px; padding:0 16px; border-radius:var(--radius-md);
+    border:1px solid transparent; font:inherit; font-size:14px; font-weight:500;
+    white-space:nowrap; cursor:pointer; text-decoration:none;
+    transition:background-color .12s;
+  }
+  .btn svg { width:16px; height:16px; flex:0 0 16px; }
+  .btn-primary { background:var(--navy-500); color:#fff; }
+  .btn-primary:hover { background:var(--navy-600); }
+  .btn-secondary { background:#fff; color:var(--ink); border-color:var(--line-strong); }
+  .btn-secondary:hover { background:var(--surface-muted); }
+  .btn-accent { background:var(--amber); color:var(--navy-900); }
+  .btn-accent:hover { background:var(--amber-dark); color:#fff; }
+  .btn-danger { background:var(--danger); color:#fff; }
+  .btn-danger:hover { filter:brightness(1.1); }
+  .btn-sm { height:32px; padding:0 12px; font-size:12px; }
+
+  .badge {
+    display:inline-flex; align-items:center; border-radius:4px; padding:2px 8px;
+    font-size:12px; font-weight:600; white-space:nowrap;
+  }
+  .b-success{background:var(--success-bg);color:var(--success);}
+  .b-warning{background:var(--warning-bg);color:var(--warning);}
+  .b-danger {background:var(--danger-bg); color:var(--danger);}
+  .b-info   {background:var(--info-bg);   color:var(--info);}
+  .b-neutral{background:var(--neutral-bg);color:var(--neutral);}
+
+  label.fl { display:block; font-size:14px; font-weight:500; margin-bottom:6px; color:var(--ink); }
+  .inp {
+    width:100%; height:36px; padding:0 10px; font:inherit; font-size:14px;
+    color:var(--ink); background:#fff; border:1px solid var(--line-strong);
+    border-radius:var(--radius-md);
+  }
+  textarea.inp { height:auto; min-height:72px; padding:8px 10px; resize:vertical; }
+  .hint { margin:6px 0 0; font-size:12px; color:var(--ink-muted); }
+
+  /* Filter bar: p-4 gap-3, bordered below */
+  .filters {
+    display:flex; flex-wrap:wrap; align-items:flex-end; gap:12px;
+    padding:16px; border-bottom:1px solid var(--line);
+  }
+  .filters > div { min-width:150px; }
+  .filters label.fl { font-size:12px; margin-bottom:6px; }
+
+  /* ---------------- Tables ---------------- */
+  .table-wrap { overflow-x:auto; }
+  table { width:100%; border-collapse:collapse; font-size:14px; }
+  thead { background:var(--surface-sunken); border-bottom:1px solid var(--line); }
+  thead th {
+    padding:var(--cell-y) var(--cell-x); text-align:left;
+    font-size:11px; font-weight:600; letter-spacing:.05em; text-transform:uppercase;
+    color:var(--ink-muted); white-space:nowrap;
+  }
+  tbody tr { vertical-align:top; }
+  tbody tr + tr { border-top:1px solid var(--line); }   /* divide-y divide-line */
+  tbody tr:hover { background:rgb(238 244 251 / .6); }  /* hover:bg-navy-50/60 */
+  tbody td { padding:var(--cell-y) var(--cell-x); color:var(--ink); }
+  th.num, td.num { text-align:right; font-variant-numeric:tabular-nums; white-space:nowrap; }
+  .muted { color:var(--ink-muted); }
+  .subtle { color:var(--ink-subtle); }
+  .lnk { color:var(--navy-500); text-decoration:none; font-weight:500; }
+  .lnk:hover { text-decoration:underline; }
+  .mono { font-family:ui-monospace,monospace; font-size:13px; }
+
+  .pager {
+    display:flex; align-items:center; justify-content:space-between; gap:12px;
+    padding:12px 16px; border-top:1px solid var(--line);
+    font-size:14px; color:var(--ink-muted);
+  }
+
+  /* ---------------- KPI cards ---------------- */
+  /* label text-xs tracking-wider uppercase · value mt-1 text-2xl · note mt-0.5 text-xs */
+  .kpi {
+    border-radius:var(--radius-lg); border:1px solid var(--line);
+    background:#fff; padding:16px; box-shadow:var(--shadow-sm);
+  }
+  .kpi .lab {
+    font-size:12px; font-weight:600; letter-spacing:.05em;
+    text-transform:uppercase; color:var(--ink-muted);
+  }
+  .kpi .val {
+    margin-top:4px; font-size:24px; line-height:2rem; font-weight:600;
+    font-variant-numeric:tabular-nums; color:var(--navy-500);
+  }
+  .kpi .val.money { font-size:18px; line-height:1.6rem; }
+  .kpi .note { margin-top:2px; font-size:12px; color:var(--ink-subtle); }
+  .t-success .val{color:var(--success);} .t-warning .val{color:var(--warning);}
+  .t-danger  .val{color:var(--danger);}  .t-info    .val{color:var(--info);}
+  a.kpi { display:block; text-decoration:none; transition:border-color .12s; }
+  a.kpi:hover { border-color:var(--navy-300); }
+
+  /* ---------------- Grids (real breakpoints) ---------------- */
+  .mb-4 { margin-bottom:16px; } .mb-5 { margin-bottom:20px; }
+  .kpi-grid { display:grid; gap:12px; grid-template-columns:minmax(0,1fr); }
+  @media (min-width:640px)  { .kpi-grid { grid-template-columns:repeat(2,minmax(0,1fr)); } }
+  @media (min-width:1024px) {
+    .kpi-grid.k6, .kpi-grid.k5, .kpi-grid.k3 { grid-template-columns:repeat(3,minmax(0,1fr)); }
+    .kpi-grid.k4 { grid-template-columns:repeat(4,minmax(0,1fr)); }
+  }
+  @media (min-width:1280px) {
+    .kpi-grid.k6 { grid-template-columns:repeat(6,minmax(0,1fr)); }
+    .kpi-grid.k5 { grid-template-columns:repeat(5,minmax(0,1fr)); }
+  }
+
+  /* charts: grid gap-4 lg:grid-cols-3, first panel lg:col-span-2 */
+  .row-3 { display:grid; gap:16px; grid-template-columns:minmax(0,1fr); }
+  @media (min-width:1024px) {
+    .row-3 { grid-template-columns:repeat(3,minmax(0,1fr)); }
+    .row-3 > .span-2 { grid-column:span 2 / span 2; }
+  }
+  /* bottom: grid gap-4 lg:grid-cols-2 */
+  .row-2 { display:grid; gap:16px; grid-template-columns:minmax(0,1fr); align-items:start; }
+  @media (min-width:1024px) { .row-2 { grid-template-columns:repeat(2,minmax(0,1fr)); } }
+  /* detail: xl:grid-cols-3 with main spanning 2 */
+  .row-detail { display:grid; gap:16px; grid-template-columns:minmax(0,1fr); align-items:start; }
+  @media (min-width:1280px) {
+    .row-detail { grid-template-columns:repeat(3,minmax(0,1fr)); }
+    .row-detail > .span-2 { grid-column:span 2 / span 2; }
+  }
+  .stack > * + * { margin-top:16px; }
+
+  /* ---------------- Misc ---------------- */
+  dl.facts { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:0 24px; margin:0; }
+  @media (min-width:1024px) { dl.facts { grid-template-columns:repeat(3,minmax(0,1fr)); } }
+  dl.facts > div { padding:6px 0; }
+  dl.facts dt { margin:0; font-size:12px; font-weight:500; letter-spacing:.025em; text-transform:uppercase; color:var(--ink-muted); }
+  dl.facts dd { margin:2px 0 0; font-size:14px; }
+
+  .legend { display:flex; flex-direction:column; gap:8px; font-size:13px; }
+  .legend div { display:flex; align-items:center; gap:8px; }
+  .legend i { width:10px; height:10px; border-radius:2px; flex:0 0 10px; }
+  .legend .v { margin-left:auto; color:var(--ink-muted); font-variant-numeric:tabular-nums; }
+
+  .callout {
+    display:flex; gap:8px; align-items:flex-start; padding:12px 16px;
+    border-radius:var(--radius-lg); font-size:12px; line-height:1.6;
+  }
+  .callout svg { width:16px; height:16px; flex:0 0 16px; margin-top:2px; }
+  .callout-info   { background:var(--info-bg);    color:var(--navy-700); }
+  .callout-warn   { background:var(--warning-bg); color:var(--warning); }
+  .callout-danger { background:var(--danger-bg);  color:var(--danger); }
+
+  .steps { display:flex; flex-wrap:wrap; align-items:center; gap:6px; font-size:12px; }
+  .step { padding:4px 10px; border-radius:999px; background:var(--surface-sunken); color:var(--ink-muted); }
+  .step.done { background:var(--success-bg); color:var(--success); font-weight:600; }
+  .step.now  { background:var(--navy-500); color:#fff; font-weight:600; }
+  .step-sep  { color:var(--ink-subtle); }
+
+  .timeline { list-style:none; margin:0; padding:0; font-size:14px; }
+  .timeline li { position:relative; padding:10px 0 10px 16px; border-left:2px solid var(--line); }
+  .timeline li::before {
+    content:""; position:absolute; left:-5px; top:16px; width:8px; height:8px;
+    border-radius:999px; background:var(--navy-300);
+  }
+  .timeline li:first-child::before { background:var(--navy-500); }
+  .timeline .when { font-size:12px; color:var(--ink-subtle); }
+
+  .divided > div { padding:8px 0; }
+  .divided > div + div { border-top:1px solid var(--line); }
+
+  /* ---------------- Login ---------------- */
+  .login-wrap {
+    min-height:calc(100vh - var(--demobar-h)); display:grid; place-items:center; padding:24px;
+    background:linear-gradient(160deg,var(--navy-700),var(--navy-900));
+  }
+  .login-card { width:100%; max-width:400px; background:#fff; border-radius:12px; padding:28px; box-shadow:0 20px 40px rgb(3 36 68 / .3); }
+  .login-card .brand { height:auto; padding:0; border:0; margin-bottom:14px; }
+
+  .screen { display:none; }
+  .screen.active { display:block; }
+
+  @media (max-width:1023px) {
+    .sidebar { display:none; }
+    .body-col { padding-left:0; }
+  }
+  @media print {
+    .demo-bar,.sidebar,.topbar { display:none; }
+    .body-col { padding-left:0; }
+    .screen { display:block !important; break-after:page; }
+  }
+</style>
+</head>
+<body>
+
+<!-- ============================ DEMO BAR ============================ -->
+<div class="demo-bar">
+  <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+    <strong>Travel Booking CRM — Interface Showcase</strong>
+    <span class="pill">Static demo</span>
+    <span class="note">Sample data only. Not connected to a database.</span>
+  </div>
+  <div style="display:flex;align-items:center;gap:8px">
+    <label for="screenJump" class="sr">Jump to screen</label>
+    <select id="screenJump" class="inp" style="height:28px;width:auto;font-size:12px;padding:0 6px">
+      <optgroup label="Access"><option value="login">Sign in</option></optgroup>
+      <optgroup label="Daily work">
+        <option value="dashboard" selected>Dashboard</option>
+        <option value="bookings">All bookings</option>
+        <option value="booking">Booking detail</option>
+        <option value="newbooking">Create flight booking</option>
+        <option value="customers">Customers</option>
+      </optgroup>
+      <optgroup label="Finance">
+        <option value="payments">Payments</option>
+        <option value="refunds">Refunds &amp; voids</option>
+        <option value="chargebacks">Chargebacks</option>
+        <option value="documents">Documents</option>
+      </optgroup>
+      <optgroup label="Insight"><option value="reports">Financial report</option></optgroup>
+      <optgroup label="Administration">
+        <option value="agents">Agents</option>
+        <option value="audit">Audit logs</option>
+      </optgroup>
+    </select>
+  </div>
+</div>
+
+<!-- ============================ LOGIN ============================ -->
+<section class="screen" id="s-login">
+  <div class="login-wrap">
+    <div class="login-card">
+      <div class="brand">
+        <svg viewBox="0 0 24 24" fill="none" stroke="#0754a6" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:26px;height:26px"><path d="M17.8 19.2 16 11l3.5-3.5C21 6 21.5 4 21 3c-1-.5-3 0-4.5 1.5L13 8 4.8 6.2c-.5-.1-.9.1-1.1.5l-.3.5c-.2.5-.1 1 .3 1.3L9 12l-2 3H4l-1 1 3 2 2 3 1-1v-3l3-2 3.5 5.3c.3.4.8.5 1.3.3l.4-.2c.5-.2.7-.6.6-1.1Z"/></svg>
+        <span class="brand-name">Travel<span>CRM</span></span>
+      </div>
+      <h1 style="margin:0 0 2px;font-size:20px;font-weight:600;letter-spacing:-.02em">Administrator sign in</h1>
+      <p style="margin:0 0 20px;font-size:14px;color:var(--ink-muted)">Staff access only. All sign-in attempts are recorded.</p>
+
+      <div style="margin-bottom:16px">
+        <label class="fl" for="d-email">Email or username</label>
+        <input class="inp" id="d-email" type="text" value="superadmin" readonly>
+      </div>
+      <div style="margin-bottom:20px">
+        <label class="fl" for="d-pass">Password</label>
+        <input class="inp" id="d-pass" type="password" value="demopassword" readonly>
+      </div>
+      <button class="btn btn-primary" style="width:100%" data-goto="dashboard">Sign in</button>
+      <p class="hint" style="margin-top:16px;line-height:1.6">
+        Accounts lock temporarily after repeated failures. A newly provisioned account
+        must set its own password before reaching anything else.
+      </p>
+    </div>
+  </div>
+</section>
+
+<!-- ============================ APP SHELL ============================ -->
+<div class="shell" id="appShell">
+
+  <aside class="sidebar">
+    <div class="brand">
+      <svg viewBox="0 0 24 24" fill="none" stroke="#0754a6" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.8 19.2 16 11l3.5-3.5C21 6 21.5 4 21 3c-1-.5-3 0-4.5 1.5L13 8 4.8 6.2c-.5-.1-.9.1-1.1.5l-.3.5c-.2.5-.1 1 .3 1.3L9 12l-2 3H4l-1 1 3 2 2 3 1-1v-3l3-2 3.5 5.3c.3.4.8.5 1.3.3l.4-.2c.5-.2.7-.6.6-1.1Z"/></svg>
+      <span class="brand-name">Travel<span>CRM</span></span>
+    </div>
+
+    <nav class="nav" id="nav">
+      <div class="nav-group">
+        <ul><li><a href="#dashboard" data-goto="dashboard" class="active">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="9" rx="1"/><rect x="14" y="3" width="7" height="5" rx="1"/><rect x="14" y="12" width="7" height="9" rx="1"/><rect x="3" y="16" width="7" height="5" rx="1"/></svg>
+          Dashboard</a></li></ul>
+      </div>
+
+      <div class="nav-group">
+        <h3>Bookings</h3>
+        <ul>
+          <li><a href="#bookings" data-goto="bookings"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 9a3 3 0 0 1 0 6v2a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-2a3 3 0 0 1 0-6V7a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2Z"/><path d="M13 5v14"/></svg>All Bookings</a></li>
+          <li><a href="#newbooking" data-goto="newbooking"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.8 19.2 16 11l3.5-3.5C21 6 21.5 4 21 3c-1-.5-3 0-4.5 1.5L13 8 4.8 6.2c-.5-.1-.9.1-1.1.5l-.3.5c-.2.5-.1 1 .3 1.3L9 12l-2 3H4l-1 1 3 2 2 3 1-1v-3l3-2 3.5 5.3c.3.4.8.5 1.3.3l.4-.2c.5-.2.7-.6.6-1.1Z"/></svg>Create Flight Booking</a></li>
+          <li><a href="#newbooking" data-goto="newbooking"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 21c.6.5 1.2 1 2.5 1 2.5 0 2.5-2 5-2s2.5 2 5 2 2.5-2 5-2c1.3 0 1.9.5 2.5 1"/><path d="M19.4 10 12 7l-7.4 3"/><path d="M4 18 2.6 11.6a1 1 0 0 1 .6-1.1L12 7l8.8 3.5a1 1 0 0 1 .6 1.1L20 18"/><path d="M12 2v5"/></svg>Create Cruise Booking</a></li>
+          <li><a href="#bookings" data-goto="bookings"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8.5 14.5A2.5 2.5 0 0 0 11 12c0-1.38-.5-2-1-3-1.072-2.143-.224-4.054 2-6 .5 2.5 2 4.9 4 6.5 2 1.6 3 3.5 3 5.5a7 7 0 1 1-14 0c0-1.153.433-2.294 1-3a2.5 2.5 0 0 0 2.5 2.5Z"/></svg>High Priority</a></li>
+          <li><a href="#refunds" data-goto="refunds"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/></svg>Refund &amp; Void</a></li>
+        </ul>
+      </div>
+
+      <div class="nav-group">
+        <h3>Customers</h3>
+        <ul>
+          <li><a href="#customers" data-goto="customers"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/></svg>Customers</a></li>
+          <li><a href="#dashboard" data-goto="dashboard"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2Z"/></svg>Latest Comments</a></li>
+          <li><a href="#dashboard" data-goto="dashboard"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 11h3a2 2 0 0 1 2 2v3a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/><path d="M21 11h-3a2 2 0 0 0-2 2v3a2 2 0 0 0 2 2h1a2 2 0 0 0 2-2Z"/><path d="M3 11a9 9 0 1 1 18 0"/><path d="M21 16v2a4 4 0 0 1-4 4h-5"/></svg>Customer Service</a></li>
+          <li><a href="#dashboard" data-goto="dashboard"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.8 19.8 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6A19.8 19.8 0 0 1 2.12 4.2 2 2 0 0 1 4.1 2h3a2 2 0 0 1 2 1.72c.13.96.36 1.9.7 2.81a2 2 0 0 1-.45 2.11L8.1 9.9a16 16 0 0 0 6 6l1.26-1.26a2 2 0 0 1 2.11-.45c.9.34 1.85.57 2.81.7A2 2 0 0 1 22 16.92Z"/></svg>Call Management</a></li>
+        </ul>
+      </div>
+
+      <div class="nav-group">
+        <h3>Finance</h3>
+        <ul>
+          <li><a href="#payments" data-goto="payments"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="5" width="20" height="14" rx="2"/><path d="M2 10h20"/></svg>Payments</a></li>
+          <li><a href="#chargebacks" data-goto="chargebacks"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1Z"/><path d="M12 8v4M12 16h.01"/></svg>Chargebacks</a></li>
+          <li><a href="#documents" data-goto="documents"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/></svg>Documents</a></li>
+        </ul>
+      </div>
+
+      <div class="nav-group">
+        <h3>Reports</h3>
+        <ul>
+          <li><a href="#reports" data-goto="reports"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12c0-4.97-4.03-9-9-9v9Z"/><path d="M12 21a9 9 0 1 1 0-18"/></svg>Booking Report</a></li>
+          <li><a href="#reports" data-goto="reports"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3v18h18"/><path d="m7 15 4-5 3 3 5-7"/></svg>Financial Report</a></li>
+          <li><a href="#reports" data-goto="reports"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 21a6 6 0 0 0-12 0"/><circle cx="12" cy="8" r="4"/></svg>Agent Performance</a></li>
+          <li><a href="#reports" data-goto="reports"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="2" width="16" height="20" rx="2"/><path d="M9 7h6M9 11h6M9 15h3"/></svg>Supplier Performance</a></li>
+        </ul>
+      </div>
+
+      <div class="nav-group">
+        <h3>Messaging</h3>
+        <ul>
+          <li><a href="#dashboard" data-goto="dashboard"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 12h-6l-2 3h-4l-2-3H2"/><path d="M5.5 5.5 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.5-6.5A2 2 0 0 0 16.8 4H7.2a2 2 0 0 0-1.7 1.5Z"/></svg>Inbox</a></li>
+          <li><a href="#dashboard" data-goto="dashboard"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>Compose</a></li>
+          <li><a href="#dashboard" data-goto="dashboard"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m22 2-7 20-4-9-9-4Z"/></svg>Sent</a></li>
+          <li><a href="#dashboard" data-goto="dashboard"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 21a6 6 0 0 0-12 0"/><circle cx="12" cy="8" r="4"/><path d="M22 20c0-2-1.5-3.5-3-4"/></svg>Groups</a></li>
+          <li><a href="#dashboard" data-goto="dashboard"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></svg>Notifications</a></li>
+        </ul>
+      </div>
+
+      <div class="nav-group">
+        <h3>Administration</h3>
+        <ul>
+          <li><a href="#agents" data-goto="agents"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="5" width="20" height="14" rx="2"/><circle cx="9" cy="12" r="2"/><path d="M15 10h3M15 14h3"/></svg>Agents</a></li>
+          <li><a href="#agents" data-goto="agents"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="2" width="16" height="20" rx="2"/><path d="M9 7h6M9 11h6M9 15h3"/></svg>Suppliers</a></li>
+          <li><a href="#dashboard" data-goto="dashboard"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 21h18"/><path d="M5 21V8l7-5 7 5v13"/><path d="M10 21v-6h4v6"/></svg>MCO Suppliers</a></li>
+          <li><a href="#dashboard" data-goto="dashboard"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 16.92v3a2 2 0 0 1-2.18 2A19.8 19.8 0 0 1 2.12 4.2 2 2 0 0 1 4.1 2h3a2 2 0 0 1 2 1.72c.13.96.36 1.9.7 2.81a2 2 0 0 1-.45 2.11L8.1 9.9a16 16 0 0 0 6 6l1.26-1.26a2 2 0 0 1 2.11-.45c.9.34 1.85.57 2.81.7A2 2 0 0 1 22 16.92Z"/></svg>TFN Management</a></li>
+          <li><a href="#dashboard" data-goto="dashboard"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9 7 7M17 17l2.1 2.1M19.1 4.9 17 7M7 17l-2.1 2.1"/></svg>Settings</a></li>
+          <li><a href="#audit" data-goto="audit"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 12h-5M15 8h-5M19 17V5a2 2 0 0 0-2-2H4"/><path d="M8 21h12a2 2 0 0 0 2-2v-1a2 2 0 0 0-2-2H8a2 2 0 0 0-2 2v1a2 2 0 0 1-4 0V5"/></svg>Audit Logs</a></li>
+        </ul>
+      </div>
+    </nav>
+  </aside>
+
+  <div class="body-col">
+    <header class="topbar">
+      <nav class="crumbs" aria-label="Breadcrumb">
+        <ol>
+          <li><a href="#dashboard" data-goto="dashboard">Admin</a></li>
+          <li id="crumbTail"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m9 18 6-6-6-6"/></svg><span class="current">Dashboard</span></li>
+        </ol>
+      </nav>
+      <div class="whoami">
+        <a href="#agents" data-goto="agents">
+          <span class="avatar"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg></span>
+          <span>
+            <span class="who-name">Deepanshu</span>
+            <span class="who-role">SUPER_ADMIN</span>
+          </span>
+        </a>
+        <button class="icon-btn" data-goto="login" title="Sign out">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="m16 17 5-5-5-5M21 12H9"/></svg>
+          <span class="sr">Sign out</span>
+        </button>
+      </div>
+    </header>
+
+    <main class="content">
+
+      <!-- ==================== DASHBOARD ==================== -->
+      <section class="screen active" id="s-dashboard">
+        <div class="page-head">
+          <div class="ph-text">
+            <h1>Dashboard</h1>
+            <p>21 Sep 2026 – 20 Oct 2026 · signed in as Deepanshu</p>
+          </div>
+        </div>
+
+        <!-- filter: mb-5, p-4, gap-3 -->
+        <form class="card mb-5" style="display:flex;flex-wrap:wrap;align-items:flex-end;gap:12px">
+          <div><label class="fl" for="df">From</label><input class="inp" id="df" type="date" value="2026-09-21"></div>
+          <div><label class="fl" for="dt">To</label><input class="inp" id="dt" type="date" value="2026-10-20"></div>
+          <button class="btn btn-primary">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+            Apply
+          </button>
+        </form>
+
+        <!-- Volume: mb-4 gap-3 sm:2 lg:3 xl:6 -->
+        <div class="kpi-grid k6 mb-4">
+          <a class="kpi" href="#bookings" data-goto="bookings"><div class="lab">Bookings</div><div class="val">412</div><div class="note">3,186 all time</div></a>
+          <a class="kpi t-warning" href="#bookings" data-goto="bookings"><div class="lab">Pending</div><div class="val">58</div></a>
+          <a class="kpi t-warning" href="#bookings" data-goto="bookings"><div class="lab">Needs review</div><div class="val">17</div></a>
+          <a class="kpi t-success" href="#bookings" data-goto="bookings"><div class="lab">Confirmed</div><div class="val">164</div></a>
+          <a class="kpi t-success" href="#bookings" data-goto="bookings"><div class="lab">Ticketed</div><div class="val">142</div></a>
+          <a class="kpi t-danger" href="#bookings" data-goto="bookings"><div class="lab">Cancelled</div><div class="val">31</div></a>
+        </div>
+
+        <!-- Money: mb-5 gap-3 sm:2 lg:3 xl:5 -->
+        <div class="kpi-grid k5 mb-5">
+          <div class="kpi"><div class="lab">Gross booking value</div><div class="val money">$612,480.00</div><div class="note">Charged to customers</div></div>
+          <div class="kpi t-success"><div class="lab">Payments collected</div><div class="val money">$548,215.00</div><div class="note">Captured only</div></div>
+          <div class="kpi t-danger"><div class="lab">Refunds issued</div><div class="val money">$37,940.00</div><div class="note">Completed only</div></div>
+          <div class="kpi t-info"><div class="lab">Net collections</div><div class="val money">$510,275.00</div><div class="note">Collected − refunded</div></div>
+          <div class="kpi"><div class="lab">Gross / net MCO</div><div class="val money">$94,300.00</div><div class="note">Net $81,120.00</div></div>
+        </div>
+
+        <!-- Charts: mb-4 gap-4 lg:grid-cols-3, trend spans 2 -->
+        <div class="row-3 mb-4">
+          <section class="panel span-2">
+            <header>
+              <div class="ph"><h2>Booking trend</h2></div>
+              <div class="tools"><button class="chev" aria-expanded="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 9 6 6 6-6"/></svg></button></div>
+            </header>
+            <div class="panel-body">
+              <svg viewBox="0 0 560 180" width="100%" height="190" preserveAspectRatio="none" role="img" aria-label="Booking trend rising from 12 to 42 per day over the last 14 days">
+                <defs>
+                  <linearGradient id="g1" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0%" stop-color="#0754a6" stop-opacity=".22"/>
+                    <stop offset="100%" stop-color="#0754a6" stop-opacity="0"/>
+                  </linearGradient>
+                </defs>
+                <g stroke="#dce5ef" stroke-width="1">
+                  <line x1="34" y1="150" x2="548" y2="150"/><line x1="34" y1="117" x2="548" y2="117"/>
+                  <line x1="34" y1="84" x2="548" y2="84"/><line x1="34" y1="51" x2="548" y2="51"/>
+                  <line x1="34" y1="20" x2="548" y2="20"/>
+                </g>
+                <g fill="#95a1b2" font-size="10" text-anchor="end">
+                  <text x="28" y="153">0</text><text x="28" y="87">22</text><text x="28" y="23">45</text>
+                </g>
+                <path fill="url(#g1)" d="M34,115.3 72,98 110,106.7 148,86.4 186,95.1 224,77.8 262,60.4 300,69.1 338,80.7 376,54.7 414,66.2 452,40.2 490,48.9 528,28.7 L528,150 L34,150 Z"/>
+                <polyline fill="none" stroke="#0754a6" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round"
+                  points="34,115.3 72,98 110,106.7 148,86.4 186,95.1 224,77.8 262,60.4 300,69.1 338,80.7 376,54.7 414,66.2 452,40.2 490,48.9 528,28.7"/>
+                <circle cx="528" cy="28.7" r="7" fill="#0754a6" opacity=".18"/>
+                <circle cx="528" cy="28.7" r="4" fill="#0754a6"/>
+                <g fill="#95a1b2" font-size="10" text-anchor="middle">
+                  <text x="34" y="170">7 Oct</text><text x="262" y="170">13 Oct</text><text x="528" y="170">20 Oct</text>
+                </g>
+              </svg>
+            </div>
+          </section>
+
+          <section class="panel">
+            <header>
+              <div class="ph"><h2>Status distribution</h2></div>
+              <div class="tools"><button class="chev" aria-expanded="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 9 6 6 6-6"/></svg></button></div>
+            </header>
+            <div class="panel-body" style="display:flex;align-items:center;gap:16px;flex-wrap:wrap">
+              <svg viewBox="0 0 140 140" width="130" height="130" role="img" aria-label="Confirmed 34 percent, ticketed 28, pending 18, needs review 11, cancelled 9">
+                <g transform="rotate(-90 70 70)" fill="none" stroke-width="18">
+                  <circle cx="70" cy="70" r="56" stroke="#1b8a5a" stroke-dasharray="119.6 232.3" stroke-dashoffset="0"/>
+                  <circle cx="70" cy="70" r="56" stroke="#0754a6" stroke-dasharray="98.5 253.4" stroke-dashoffset="-119.6"/>
+                  <circle cx="70" cy="70" r="56" stroke="#b26a04" stroke-dasharray="63.3 288.6" stroke-dashoffset="-218.1"/>
+                  <circle cx="70" cy="70" r="56" stroke="#e8b765" stroke-dasharray="38.7 313.2" stroke-dashoffset="-281.4"/>
+                  <circle cx="70" cy="70" r="56" stroke="#c0392f" stroke-dasharray="31.7 320.2" stroke-dashoffset="-320.1"/>
+                </g>
+                <text x="70" y="67" text-anchor="middle" font-size="20" font-weight="600" fill="#263748">412</text>
+                <text x="70" y="82" text-anchor="middle" font-size="9" fill="#738195" letter-spacing="1">BOOKINGS</text>
+              </svg>
+              <div class="legend" style="flex:1;min-width:132px">
+                <div><i style="background:#1b8a5a"></i>Confirmed <span class="v">34%</span></div>
+                <div><i style="background:#0754a6"></i>Ticketed <span class="v">28%</span></div>
+                <div><i style="background:#b26a04"></i>Pending <span class="v">18%</span></div>
+                <div><i style="background:#e8b765"></i>Needs review <span class="v">11%</span></div>
+                <div><i style="background:#c0392f"></i>Cancelled <span class="v">9%</span></div>
+              </div>
+            </div>
+          </section>
+        </div>
+
+        <!-- Work queues: mb-4 gap-3 sm:2 lg:4 -->
+        <div class="kpi-grid k4 mb-4">
+          <a class="kpi t-warning" href="#bookings" data-goto="bookings"><div class="lab">Pending ticketing</div><div class="val">46</div><div class="note">Confirmed or pending, not yet issued</div></a>
+          <div class="kpi t-danger"><div class="lab">Overdue follow-ups</div><div class="val">9</div></div>
+          <div class="kpi t-danger"><div class="lab">High priority open</div><div class="val">12</div><div class="note">Marked high or urgent</div></div>
+          <a class="kpi t-warning" href="#refunds" data-goto="refunds"><div class="lab">Refunds needing attention</div><div class="val">7</div></a>
+        </div>
+
+        <!-- Bottom: gap-4 lg:grid-cols-2 — four panels, as in the real page -->
+        <div class="row-2">
+          <section class="panel">
+            <header><div class="ph"><h2>MCO supplier report</h2></div></header>
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th>Supplier</th><th class="num">Bookings</th><th class="num">Gross MCO</th><th class="num">Net MCO</th></tr></thead>
+                <tbody>
+                  <tr><td>Global Settle Ltd</td><td class="num">186</td><td class="num">$48,220.00</td><td class="num">$41,870.00</td></tr>
+                  <tr><td>Nexus Clearing</td><td class="num">124</td><td class="num">$29,640.00</td><td class="num">$25,980.00</td></tr>
+                  <tr><td>Meridian Pay</td><td class="num">71</td><td class="num">$13,110.00</td><td class="num">$10,205.00</td></tr>
+                  <tr><td>Atlas Remit</td><td class="num">31</td><td class="num">$3,330.00</td><td class="num">$3,065.00</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </section>
+
+          <section class="panel">
+            <header>
+              <div class="ph">
+                <h2>Agent performance</h2>
+                <p class="sub">Counts and value only. Agents are not ranked on unvalidated metrics.</p>
+              </div>
+            </header>
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th>Agent</th><th class="num">Bookings</th><th class="num">Ticketed</th><th class="num">Booking value</th></tr></thead>
+                <tbody>
+                  <tr><td>Ravi Shah</td><td class="num">148</td><td class="num">131</td><td class="num">$241,380.00</td></tr>
+                  <tr><td>Lena Ortiz</td><td class="num">112</td><td class="num">96</td><td class="num">$183,940.00</td></tr>
+                  <tr><td>Tom Becker</td><td class="num">89</td><td class="num">71</td><td class="num">$127,260.00</td></tr>
+                  <tr><td>Nadia Haq</td><td class="num">63</td><td class="num">52</td><td class="num">$59,900.00</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </section>
+
+          <section class="panel">
+            <header><div class="ph"><h2>Recent bookings</h2></div></header>
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th>Booking</th><th>Customer</th><th>Status</th><th>Ticketing</th><th class="num">Total</th><th>Date</th></tr></thead>
+                <tbody>
+                  <tr><td><a class="lnk" href="#booking" data-goto="booking">BK-2026-4182</a></td><td>Priya Nair</td><td><span class="badge b-success">Ticketed</span></td><td><span class="badge b-success">Issued</span></td><td class="num">$2,480.00</td><td class="muted" style="white-space:nowrap">20 Oct, 09:42</td></tr>
+                  <tr><td><a class="lnk" href="#booking" data-goto="booking">BK-2026-4181</a></td><td>James Okafor</td><td><span class="badge b-success">Confirmed</span></td><td><span class="badge b-warning">Pending</span></td><td class="num">$1,120.00</td><td class="muted" style="white-space:nowrap">20 Oct, 08:15</td></tr>
+                  <tr><td><a class="lnk" href="#booking" data-goto="booking">BK-2026-4180</a></td><td>Mei Lin Chen</td><td><span class="badge b-warning">Needs Review</span></td><td><span class="badge b-neutral">Not issued</span></td><td class="num">$4,975.00</td><td class="muted" style="white-space:nowrap">19 Oct, 17:51</td></tr>
+                  <tr><td><a class="lnk" href="#booking" data-goto="booking">BK-2026-4179</a></td><td>Carlos Mendes</td><td><span class="badge b-warning">Pending</span></td><td><span class="badge b-neutral">Not issued</span></td><td class="num">$860.00</td><td class="muted" style="white-space:nowrap">19 Oct, 14:02</td></tr>
+                  <tr><td><a class="lnk" href="#booking" data-goto="booking">BK-2026-4178</a></td><td>Aisha Rahman</td><td><span class="badge b-danger">Cancelled</span></td><td><span class="badge b-danger">Voided</span></td><td class="num">$1,640.00</td><td class="muted" style="white-space:nowrap">18 Oct, 11:30</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </section>
+
+          <section class="panel">
+            <header><div class="ph"><h2>Overdue follow-ups</h2></div></header>
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th>Booking</th><th>Reason</th><th>Assigned</th><th>Due</th></tr></thead>
+                <tbody>
+                  <tr><td><a class="lnk" href="#booking" data-goto="booking">BK-2026-4102</a></td><td>Awaiting passport scan</td><td class="muted">Ravi Shah</td><td style="white-space:nowrap;font-weight:500;color:var(--danger)">4 days ago</td></tr>
+                  <tr><td><a class="lnk" href="#booking" data-goto="booking">BK-2026-4088</a></td><td>Confirm seat upgrade</td><td class="muted">Lena Ortiz</td><td style="white-space:nowrap;font-weight:500;color:var(--danger)">3 days ago</td></tr>
+                  <tr><td><a class="lnk" href="#booking" data-goto="booking">BK-2026-4071</a></td><td>Card declined — call back</td><td class="muted">Ravi Shah</td><td style="white-space:nowrap;font-weight:500;color:var(--danger)">2 days ago</td></tr>
+                  <tr><td><a class="lnk" href="#booking" data-goto="booking">BK-2026-4065</a></td><td>Cruise cabin preference</td><td class="muted">—</td><td style="white-space:nowrap;font-weight:500;color:var(--danger)">1 day ago</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </section>
+        </div>
+      </section>
+
+      <!-- ==================== ALL BOOKINGS ==================== -->
+      <section class="screen" id="s-bookings">
+        <div class="page-head">
+          <div class="ph-text"><h1>All bookings</h1><p>3,186 bookings</p></div>
+          <div class="ph-actions">
+            <button class="btn btn-secondary"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m7 10 5 5 5-5"/><path d="M12 15V3"/></svg>Export CSV</button>
+            <button class="btn btn-primary" data-goto="newbooking"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg>New booking</button>
+          </div>
+        </div>
+
+        <div class="card flush">
+          <form class="filters">
+            <div style="flex:1;min-width:220px"><label class="fl" for="f1">Search</label><input class="inp" id="f1" placeholder="Customer, booking or confirmation number"></div>
+            <div><label class="fl" for="f2">Booking status</label><select class="inp" id="f2"><option>All</option><option>Draft</option><option>Pending</option><option>Needs review</option><option>Confirmed</option><option>Ticketed</option><option>Cancelled</option><option>Completed</option></select></div>
+            <div><label class="fl" for="f3">Ticketing</label><select class="inp" id="f3"><option>All</option><option>Pending</option><option>Issued</option><option>Voided</option></select></div>
+            <div><label class="fl" for="f4">Agent</label><select class="inp" id="f4"><option>All agents</option><option>Ravi Shah</option><option>Lena Ortiz</option><option>Tom Becker</option></select></div>
+            <button class="btn btn-primary">Apply</button>
+          </form>
+          <div class="table-wrap">
+            <table>
+              <thead><tr>
+                <th>Customer</th><th>Confirmation</th><th class="num">Gross / net MCO</th>
+                <th>Booking status</th><th>Ticketing</th><th>MCO</th><th>Agent</th><th>Booked</th>
+              </tr></thead>
+              <tbody>
+                <tr><td><a class="lnk" href="#booking" data-goto="booking">Priya Nair</a><div class="subtle mono">BK-2026-4182</div></td><td class="mono">6QX4LM</td><td class="num">$640.00 / $585.00</td><td><span class="badge b-success">Ticketed</span></td><td><span class="badge b-success">Issued</span></td><td><span class="badge b-success">Settled</span></td><td class="muted">Ravi Shah</td><td class="muted" style="white-space:nowrap">20 Oct 2026</td></tr>
+                <tr><td><a class="lnk" href="#booking" data-goto="booking">James Okafor</a><div class="subtle mono">BK-2026-4181</div></td><td class="mono">RT8KP2</td><td class="num">$310.00 / $290.00</td><td><span class="badge b-success">Confirmed</span></td><td><span class="badge b-warning">Pending</span></td><td><span class="badge b-warning">Pending</span></td><td class="muted">Lena Ortiz</td><td class="muted" style="white-space:nowrap">20 Oct 2026</td></tr>
+                <tr><td><a class="lnk" href="#booking" data-goto="booking">Mei Lin Chen</a><div class="subtle mono">BK-2026-4180</div></td><td class="mono muted">—</td><td class="num">$0.00 / $0.00</td><td><span class="badge b-warning">Needs Review</span></td><td><span class="badge b-neutral">Not issued</span></td><td><span class="badge b-neutral">None</span></td><td class="muted">Tom Becker</td><td class="muted" style="white-space:nowrap">19 Oct 2026</td></tr>
+                <tr><td><a class="lnk" href="#booking" data-goto="booking">Carlos Mendes</a><div class="subtle mono">BK-2026-4179</div></td><td class="mono">WF21XQ</td><td class="num">$145.00 / $132.00</td><td><span class="badge b-warning">Pending</span></td><td><span class="badge b-neutral">Not issued</span></td><td><span class="badge b-warning">Pending</span></td><td class="muted">Ravi Shah</td><td class="muted" style="white-space:nowrap">19 Oct 2026</td></tr>
+                <tr><td><a class="lnk" href="#booking" data-goto="booking">Aisha Rahman</a><div class="subtle mono">BK-2026-4178</div></td><td class="mono">LP90ZZ</td><td class="num">$280.00 / $0.00</td><td><span class="badge b-danger">Cancelled</span></td><td><span class="badge b-danger">Voided</span></td><td><span class="badge b-danger">Reversed</span></td><td class="muted">Lena Ortiz</td><td class="muted" style="white-space:nowrap">18 Oct 2026</td></tr>
+                <tr><td><a class="lnk" href="#booking" data-goto="booking">Daniel Weiss</a><div class="subtle mono">BK-2026-4177</div></td><td class="mono">HH4T7B</td><td class="num">$520.00 / $498.00</td><td><span class="badge b-info">Completed</span></td><td><span class="badge b-success">Issued</span></td><td><span class="badge b-success">Settled</span></td><td class="muted">Tom Becker</td><td class="muted" style="white-space:nowrap">17 Oct 2026</td></tr>
+                <tr><td><a class="lnk" href="#booking" data-goto="booking">Sofia Petrova</a><div class="subtle mono">BK-2026-4176</div></td><td class="mono">JK55MN</td><td class="num">$1,205.00 / $1,140.00</td><td><span class="badge b-success">Ticketed</span></td><td><span class="badge b-success">Issued</span></td><td><span class="badge b-success">Settled</span></td><td class="muted">Ravi Shah</td><td class="muted" style="white-space:nowrap">17 Oct 2026</td></tr>
+                <tr><td><a class="lnk" href="#booking" data-goto="booking">Omar Haddad</a><div class="subtle mono">BK-2026-4175</div></td><td class="mono muted">—</td><td class="num">$0.00 / $0.00</td><td><span class="badge b-neutral">Draft</span></td><td><span class="badge b-neutral">Not issued</span></td><td><span class="badge b-neutral">None</span></td><td class="muted">—</td><td class="muted" style="white-space:nowrap">16 Oct 2026</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <div class="pager">
+            <span>Showing 1–8 of 3,186</span>
+            <span style="display:flex;gap:8px"><button class="btn btn-secondary btn-sm">Previous</button><button class="btn btn-secondary btn-sm">Next</button></span>
+          </div>
+        </div>
+      </section>
+
+      <!-- ==================== BOOKING DETAIL ==================== -->
+      <section class="screen" id="s-booking">
+        <div class="page-head">
+          <div class="ph-text">
+            <h1>BK-2026-4182</h1>
+            <p>Flight booking · <a class="lnk" href="#customers" data-goto="customers">Priya Nair</a></p>
+          </div>
+          <div class="ph-actions">
+            <span class="badge b-success">Ticketed</span>
+            <span class="badge b-success">Issued</span>
+            <span class="badge b-warning">High</span>
+          </div>
+        </div>
+
+        <div class="row-detail">
+          <div class="span-2 stack">
+            <section class="panel">
+              <header><div class="ph"><h2>Overview</h2></div></header>
+              <div class="panel-body">
+                <dl class="facts">
+                  <div><dt>Booking type</dt><dd>Round trip</dd></div>
+                  <div><dt>Source</dt><dd>Inbound call</dd></div>
+                  <div><dt>Language</dt><dd>English</dd></div>
+                  <div><dt>Booked</dt><dd>20 Oct 2026, 09:42</dd></div>
+                  <div><dt>Created by</dt><dd>Ravi Shah</dd></div>
+                  <div><dt>Assigned agent</dt><dd>Ravi Shah</dd></div>
+                  <div><dt>Supplier</dt><dd>Emirates</dd></div>
+                  <div><dt>MCO supplier</dt><dd>Global Settle Ltd</dd></div>
+                  <div><dt>MCO status</dt><dd><span class="badge b-success">Settled</span></dd></div>
+                  <div><dt>Contact</dt><dd>Priya Nair</dd></div>
+                  <div><dt>Email</dt><dd>priya.nair@example.com</dd></div>
+                  <div><dt>Phone</dt><dd>+91 98200 11234</dd></div>
+                </dl>
+              </div>
+            </section>
+
+            <section class="panel">
+              <header><div class="ph"><h2>Itinerary</h2><p class="sub">2 segments</p></div></header>
+              <div class="table-wrap">
+                <table>
+                  <thead><tr><th>Flight</th><th>From</th><th>To</th><th>Departs</th><th>Arrives</th><th>Class</th></tr></thead>
+                  <tbody>
+                    <tr><td class="mono">EK 507</td><td>BOM Mumbai</td><td>DXB Dubai</td><td>14 Nov, 04:30</td><td>14 Nov, 06:10</td><td>Economy</td></tr>
+                    <tr><td class="mono">EK 508</td><td>DXB Dubai</td><td>BOM Mumbai</td><td>28 Nov, 21:45</td><td>29 Nov, 02:30</td><td>Economy</td></tr>
+                  </tbody>
+                </table>
+              </div>
+            </section>
+
+            <section class="panel">
+              <header><div class="ph"><h2>Passengers</h2><p class="sub">2 travellers</p></div></header>
+              <div class="table-wrap">
+                <table>
+                  <thead><tr><th>Name</th><th>Type</th><th>Date of birth</th><th>Passport</th><th>Ticket number</th></tr></thead>
+                  <tbody>
+                    <tr><td>Priya Nair</td><td>Adult</td><td>12 Mar 1991</td><td class="mono">M12••••8</td><td class="mono">176-2451889301</td></tr>
+                    <tr><td>Arjun Nair</td><td>Child</td><td>02 Aug 2017</td><td class="mono">N44••••1</td><td class="mono">176-2451889302</td></tr>
+                  </tbody>
+                </table>
+              </div>
+              <div class="panel-body">
+                <div class="callout callout-info">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg>
+                  <span>Passport numbers and dates of birth are removed for roles without <b>passenger.viewSensitive</b> — stripped <em>before</em> the page is built, so they are never present in the HTML sent to the browser.</span>
+                </div>
+              </div>
+            </section>
+
+            <section class="panel">
+              <header><div class="ph"><h2>Accounting</h2></div></header>
+              <div class="panel-body">
+                <div class="kpi-grid k4">
+                  <div class="kpi" style="box-shadow:none"><div class="lab">Gross booking value</div><div class="val money">$2,480.00</div></div>
+                  <div class="kpi t-success" style="box-shadow:none"><div class="lab">Collected</div><div class="val money">$2,480.00</div></div>
+                  <div class="kpi" style="box-shadow:none"><div class="lab">Supplier cost</div><div class="val money">$2,105.00</div></div>
+                  <div class="kpi t-info" style="box-shadow:none"><div class="lab">Margin</div><div class="val money">$375.00</div></div>
+                </div>
+              </div>
+            </section>
+
+            <section class="panel">
+              <header>
+                <div class="ph"><h2>Payments</h2></div>
+                <div class="tools"><button class="btn btn-accent btn-sm">Record payment</button></div>
+              </header>
+              <div class="table-wrap">
+                <table>
+                  <thead><tr><th>Reference</th><th class="num">Amount</th><th>Method</th><th>Status</th><th>Source</th><th>Recorded</th></tr></thead>
+                  <tbody>
+                    <tr><td class="mono">pi_3QmX9k2eZ</td><td class="num">$1,500.00</td><td>Card ••••4242</td><td><span class="badge b-success">Captured</span></td><td><span class="badge b-info">Provider confirmed</span></td><td class="muted">20 Oct 2026</td></tr>
+                    <tr><td class="mono">BT-558201</td><td class="num">$980.00</td><td>Bank transfer</td><td><span class="badge b-success">Captured</span></td><td><span class="badge b-neutral">Manually recorded</span></td><td class="muted">20 Oct 2026</td></tr>
+                  </tbody>
+                </table>
+              </div>
+            </section>
+          </div>
+
+          <div class="stack">
+            <section class="panel">
+              <header><div class="ph"><h2>Status</h2></div></header>
+              <div class="panel-body">
+                <div class="steps" style="margin-bottom:14px">
+                  <span class="step done">Draft</span><span class="step-sep">›</span>
+                  <span class="step done">Pending</span><span class="step-sep">›</span>
+                  <span class="step done">Confirmed</span><span class="step-sep">›</span>
+                  <span class="step now">Ticketed</span><span class="step-sep">›</span>
+                  <span class="step">Completed</span>
+                </div>
+                <label class="fl" for="mv">Move to</label>
+                <select class="inp" id="mv" style="margin-bottom:12px"><option>Completed</option><option>Needs review</option><option>Cancelled</option></select>
+                <button class="btn btn-primary" style="width:100%">Change status</button>
+                <p class="hint">Only transitions allowed from <b>Ticketed</b> are offered. Cancelling or sending to review requires a written reason.</p>
+              </div>
+            </section>
+
+            <section class="panel">
+              <header><div class="ph"><h2>Follow-ups</h2></div></header>
+              <div class="panel-body">
+                <div class="divided">
+                  <div style="display:flex;justify-content:space-between;gap:8px">
+                    <div><div style="font-weight:500">Send e-ticket to customer</div><div class="hint" style="margin:0">Ravi Shah · due 22 Oct</div></div>
+                    <span class="badge b-warning">Open</span>
+                  </div>
+                  <div style="display:flex;justify-content:space-between;gap:8px">
+                    <div><div style="font-weight:500">Confirm meal preference</div><div class="hint" style="margin:0">Lena Ortiz · done 20 Oct</div></div>
+                    <span class="badge b-success">Done</span>
+                  </div>
+                </div>
+                <button class="btn btn-secondary btn-sm" style="width:100%;margin-top:12px">Add follow-up</button>
+              </div>
+            </section>
+
+            <section class="panel">
+              <header><div class="ph"><h2>Comments</h2></div></header>
+              <div class="panel-body">
+                <div style="padding-bottom:12px;margin-bottom:12px;border-bottom:1px solid var(--line)">
+                  <div style="font-size:12px;color:var(--ink-muted)">Ravi Shah · 20 Oct, 10:15 <span class="badge b-neutral" style="margin-left:4px">Internal</span></div>
+                  <div style="margin-top:4px">Customer asked for adjacent seats. Requested with the airline, awaiting confirmation.</div>
+                </div>
+                <textarea class="inp" placeholder="Add a comment…"></textarea>
+                <div style="display:flex;gap:8px;margin-top:8px">
+                  <select class="inp" style="width:auto"><option>Internal</option><option>Customer visible</option></select>
+                  <button class="btn btn-primary btn-sm">Post</button>
+                </div>
+              </div>
+            </section>
+
+            <section class="panel">
+              <header><div class="ph"><h2>Status history</h2></div></header>
+              <div class="panel-body">
+                <ul class="timeline">
+                  <li><div style="font-weight:500">Confirmed → Ticketed</div><div class="muted">Ravi Shah</div><div class="when">20 Oct 2026, 10:04</div></li>
+                  <li><div style="font-weight:500">Pending → Confirmed</div><div class="muted">Ravi Shah</div><div class="when">20 Oct 2026, 09:58</div></li>
+                  <li><div style="font-weight:500">Draft → Pending</div><div class="muted">Ravi Shah</div><div class="when">20 Oct 2026, 09:42</div></li>
+                </ul>
+              </div>
+            </section>
+          </div>
+        </div>
+      </section>
+
+      <!-- ==================== CREATE FLIGHT BOOKING ==================== -->
+      <section class="screen" id="s-newbooking">
+        <div class="page-head">
+          <div class="ph-text"><h1>Create new booking</h1><p>Flight booking. Sections can be collapsed while you work.</p></div>
+        </div>
+
+        <div class="stack">
+          <section class="panel">
+            <header>
+              <div class="ph"><h2>Customer</h2></div>
+              <div class="tools"><button class="chev" aria-expanded="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 9 6 6 6-6"/></svg></button></div>
+            </header>
+            <div class="panel-body">
+              <div style="display:grid;grid-template-columns:minmax(0,2fr) auto;gap:12px;align-items:end">
+                <div><label class="fl" for="n1">Search existing customer</label><input class="inp" id="n1" placeholder="Name, email or phone"></div>
+                <button class="btn btn-secondary">Create new customer</button>
+              </div>
+              <p class="hint">Existing records with the same email or phone number are flagged before saving, so the same traveller does not end up in the system three times.</p>
+            </div>
+          </section>
+
+          <section class="panel">
+            <header>
+              <div class="ph"><h2>Flight details</h2></div>
+              <div class="tools"><button class="chev" aria-expanded="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 9 6 6 6-6"/></svg></button></div>
+            </header>
+            <div class="panel-body">
+              <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px">
+                <div><label class="fl" for="n2">Airline / supplier</label><select class="inp" id="n2"><option>Emirates</option><option>Qatar Airways</option><option>Lufthansa</option></select></div>
+                <div><label class="fl" for="n3">Confirmation (PNR)</label><input class="inp mono" id="n3" placeholder="6QX4LM"></div>
+                <div><label class="fl" for="n4">Cabin class</label><select class="inp" id="n4"><option>Economy</option><option>Premium economy</option><option>Business</option></select></div>
+                <div><label class="fl" for="n5">Booking type</label><select class="inp" id="n5"><option>Round trip</option><option>One way</option><option>Multi-city</option></select></div>
+              </div>
+            </div>
+          </section>
+
+          <section class="panel">
+            <header>
+              <div class="ph"><h2>Flight segments</h2></div>
+              <div class="tools"><button class="btn btn-accent btn-sm">+ Add segment</button></div>
+            </header>
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th>Flight no.</th><th>From</th><th>To</th><th>Departs</th><th>Arrives</th><th></th></tr></thead>
+                <tbody>
+                  <tr><td><input class="inp mono" value="EK 507"></td><td><input class="inp" value="BOM"></td><td><input class="inp" value="DXB"></td><td><input class="inp" type="datetime-local" value="2026-11-14T04:30"></td><td><input class="inp" type="datetime-local" value="2026-11-14T06:10"></td><td><button class="btn btn-secondary btn-sm">Remove</button></td></tr>
+                  <tr><td><input class="inp mono" value="EK 508"></td><td><input class="inp" value="DXB"></td><td><input class="inp" value="BOM"></td><td><input class="inp" type="datetime-local" value="2026-11-28T21:45"></td><td><input class="inp" type="datetime-local" value="2026-11-29T02:30"></td><td><button class="btn btn-secondary btn-sm">Remove</button></td></tr>
+                </tbody>
+              </table>
+            </div>
+          </section>
+
+          <section class="panel">
+            <header>
+              <div class="ph"><h2>Passengers</h2></div>
+              <div class="tools"><button class="btn btn-accent btn-sm">+ Add passenger</button></div>
+            </header>
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th>Full name</th><th>Type</th><th>Date of birth</th><th>Passport</th><th></th></tr></thead>
+                <tbody>
+                  <tr><td><input class="inp" value="Priya Nair"></td><td><select class="inp"><option>Adult</option><option>Child</option><option>Infant</option></select></td><td><input class="inp" type="date" value="1991-03-12"></td><td><input class="inp mono" value="M1234568"></td><td><button class="btn btn-secondary btn-sm">Remove</button></td></tr>
+                </tbody>
+              </table>
+            </div>
+          </section>
+
+          <section class="panel">
+            <header>
+              <div class="ph"><h2>Money</h2></div>
+              <div class="tools"><button class="chev" aria-expanded="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 9 6 6 6-6"/></svg></button></div>
+            </header>
+            <div class="panel-body">
+              <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px">
+                <div><label class="fl" for="n6">Currency</label><select class="inp" id="n6"><option>USD — US Dollar</option><option>INR — Indian Rupee</option><option>GBP — Pound Sterling</option></select></div>
+                <div><label class="fl" for="n7">Total charged</label><input class="inp tabular" id="n7" value="2480.00"></div>
+                <div><label class="fl" for="n8">Supplier cost</label><input class="inp tabular" id="n8" value="2105.00"></div>
+                <div><label class="fl" for="n9">Gross MCO</label><input class="inp tabular" id="n9" value="640.00"></div>
+              </div>
+              <div class="callout callout-warn" style="margin-top:16px">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 9v4M12 17h.01"/><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z"/></svg>
+                <span><b>Card numbers, CVV and expiry are not collected.</b> Storing a CVV is prohibited under PCI DSS and storing a full card number brings the whole application into PCI scope. Payments reference a provider transaction id; only the card brand and last four digits are retained.</span>
+              </div>
+            </div>
+          </section>
+        </div>
+
+        <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:20px">
+          <button class="btn btn-secondary" data-goto="bookings">Cancel</button>
+          <button class="btn btn-secondary">Save as draft</button>
+          <button class="btn btn-primary" data-goto="booking">Create booking</button>
+        </div>
+      </section>
+
+      <!-- ==================== CUSTOMERS ==================== -->
+      <section class="screen" id="s-customers">
+        <div class="page-head">
+          <div class="ph-text"><h1>Customers</h1><p>1,842 records</p></div>
+          <div class="ph-actions"><button class="btn btn-primary"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg>New customer</button></div>
+        </div>
+
+        <div class="card flush">
+          <form class="filters">
+            <div style="flex:1;min-width:240px"><label class="fl" for="c1">Search</label><input class="inp" id="c1" placeholder="Name, email or phone"></div>
+            <div><label class="fl" for="c2">Status</label><select class="inp" id="c2"><option>All</option><option>Active</option><option>Inactive</option></select></div>
+            <button class="btn btn-primary">Apply</button>
+          </form>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Reference</th><th>Name</th><th>Email</th><th>Phone</th><th class="num">Bookings</th><th>Status</th><th>Created</th></tr></thead>
+              <tbody>
+                <tr><td class="mono">CU-004182</td><td><a class="lnk" href="#">Priya Nair</a></td><td class="muted">priya.nair@example.com</td><td class="muted">+91 98200 11234</td><td class="num">7</td><td><span class="badge b-success">Active</span></td><td class="muted">04 Feb 2025</td></tr>
+                <tr><td class="mono">CU-004181</td><td><a class="lnk" href="#">James Okafor</a></td><td class="muted">j.okafor@example.com</td><td class="muted">+234 802 555 0147</td><td class="num">3</td><td><span class="badge b-success">Active</span></td><td class="muted">18 Jun 2025</td></tr>
+                <tr><td class="mono">CU-004180</td><td><a class="lnk" href="#">Mei Lin Chen</a></td><td class="muted">meilin.c@example.com</td><td class="muted">+65 8123 4455</td><td class="num">12</td><td><span class="badge b-success">Active</span></td><td class="muted">22 Nov 2024</td></tr>
+                <tr><td class="mono">CU-004179</td><td><a class="lnk" href="#">Carlos Mendes</a></td><td class="muted">c.mendes@example.com</td><td class="muted">+351 912 334 556</td><td class="num">1</td><td><span class="badge b-success">Active</span></td><td class="muted">09 Oct 2026</td></tr>
+                <tr><td class="mono">CU-004178</td><td><a class="lnk" href="#">Aisha Rahman</a></td><td class="muted">aisha.r@example.com</td><td class="muted">+880 171 220 9981</td><td class="num">5</td><td><span class="badge b-neutral">Inactive</span></td><td class="muted">30 Jan 2024</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <div class="pager"><span>Showing 1–5 of 1,842</span><span style="display:flex;gap:8px"><button class="btn btn-secondary btn-sm">Previous</button><button class="btn btn-secondary btn-sm">Next</button></span></div>
+        </div>
+      </section>
+
+      <!-- ==================== PAYMENTS ==================== -->
+      <section class="screen" id="s-payments">
+        <div class="page-head"><div class="ph-text"><h1>Payments</h1><p>8,114 payments</p></div></div>
+
+        <div class="kpi-grid k3 mb-4">
+          <div class="kpi t-success"><div class="lab">Captured this period</div><div class="val money">$548,215.00</div><div class="note">Money actually received</div></div>
+          <div class="kpi t-warning"><div class="lab">Pending / authorised</div><div class="val money">$18,460.00</div><div class="note">Not yet money</div></div>
+          <div class="kpi t-danger"><div class="lab">Failed</div><div class="val money">$6,230.00</div><div class="note">42 attempts</div></div>
+        </div>
+
+        <div class="callout callout-info mb-4">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>
+          <span><b>Writing a row is not the same as money arriving.</b> Only <em>Captured</em> counts as collected. The <em>Source</em> column separates a payment a staff member typed in by hand from one a provider confirmed electronically — a human's claim and a machine's evidence are never presented as the same thing.</span>
+        </div>
+
+        <div class="card flush">
+          <form class="filters">
+            <div style="flex:1;min-width:200px"><label class="fl" for="p1">Search</label><input class="inp" id="p1" placeholder="Reference, booking or customer"></div>
+            <div><label class="fl" for="p2">Status</label><select class="inp" id="p2"><option>All</option><option>Captured</option><option>Pending</option><option>Authorised</option><option>Failed</option></select></div>
+            <div><label class="fl" for="p3">Reconciliation</label><select class="inp" id="p3"><option>All</option><option>Matched</option><option>Unmatched</option></select></div>
+            <button class="btn btn-primary">Apply</button>
+          </form>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Reference</th><th>Booking</th><th>Customer</th><th class="num">Amount</th><th>Method</th><th>Status</th><th>Source</th><th>Reconciliation</th><th>Recorded</th></tr></thead>
+              <tbody>
+                <tr><td class="mono">pi_3QmX9k2eZ</td><td><a class="lnk" href="#booking" data-goto="booking">BK-2026-4182</a></td><td>Priya Nair</td><td class="num">$1,500.00</td><td>Card ••••4242</td><td><span class="badge b-success">Captured</span></td><td><span class="badge b-info">Provider</span></td><td><span class="badge b-success">Matched</span></td><td class="muted">20 Oct</td></tr>
+                <tr><td class="mono">BT-558201</td><td><a class="lnk" href="#booking" data-goto="booking">BK-2026-4182</a></td><td>Priya Nair</td><td class="num">$980.00</td><td>Bank transfer</td><td><span class="badge b-success">Captured</span></td><td><span class="badge b-neutral">Manual</span></td><td><span class="badge b-warning">Unmatched</span></td><td class="muted">20 Oct</td></tr>
+                <tr><td class="mono">pi_3QmW4b8tR</td><td><a class="lnk" href="#booking" data-goto="booking">BK-2026-4181</a></td><td>James Okafor</td><td class="num">$1,120.00</td><td>Card ••••7781</td><td><span class="badge b-warning">Authorised</span></td><td><span class="badge b-info">Provider</span></td><td><span class="badge b-neutral">N/A</span></td><td class="muted">20 Oct</td></tr>
+                <tr><td class="mono">pi_3QmV1x0pL</td><td><a class="lnk" href="#booking" data-goto="booking">BK-2026-4179</a></td><td>Carlos Mendes</td><td class="num">$860.00</td><td>Card ••••0092</td><td><span class="badge b-danger">Failed</span></td><td><span class="badge b-info">Provider</span></td><td><span class="badge b-neutral">N/A</span></td><td class="muted">19 Oct</td></tr>
+                <tr><td class="mono">pi_3QmU7c5nK</td><td><a class="lnk" href="#booking" data-goto="booking">BK-2026-4176</a></td><td>Sofia Petrova</td><td class="num">$1,205.00</td><td>Card ••••3310</td><td><span class="badge b-success">Captured</span></td><td><span class="badge b-info">Provider</span></td><td><span class="badge b-success">Matched</span></td><td class="muted">17 Oct</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <div class="pager"><span>Showing 1–5 of 8,114</span><span style="display:flex;gap:8px"><button class="btn btn-secondary btn-sm">Previous</button><button class="btn btn-secondary btn-sm">Next</button></span></div>
+        </div>
+      </section>
+
+      <!-- ==================== REFUNDS ==================== -->
+      <section class="screen" id="s-refunds">
+        <div class="page-head"><div class="ph-text"><h1>Refunds &amp; voids</h1><p>326 records · 7 awaiting a decision on this page</p></div></div>
+
+        <div class="callout callout-warn mb-4">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 9v4M12 17h.01"/><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z"/></svg>
+          <span><b>A refund cannot be approved by the person who requested it</b>, and amounts at or above the configured threshold require a Super Admin. Requests already in flight still count against the refundable balance, so the same money cannot be claimed twice.</span>
+        </div>
+
+        <div class="card flush mb-4">
+          <form class="filters">
+            <div style="flex:1;min-width:200px"><label class="fl" for="r1">Search</label><input class="inp" id="r1" placeholder="Reference or booking"></div>
+            <div><label class="fl" for="r2">Status</label><select class="inp" id="r2"><option>All</option><option>Pending</option><option>Approved</option><option>Processing</option><option>Completed</option><option>Rejected</option><option>Failed</option></select></div>
+            <div><label class="fl" for="r3">Kind</label><select class="inp" id="r3"><option>All</option><option>Refund</option><option>Void</option></select></div>
+            <button class="btn btn-primary">Apply</button>
+          </form>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Reference</th><th>Booking</th><th>Kind</th><th class="num">Requested</th><th class="num">Approved</th><th>Status</th><th>Reason</th><th></th></tr></thead>
+              <tbody>
+                <tr><td class="mono">RF-002214</td><td><a class="lnk" href="#booking" data-goto="booking">BK-2026-4178</a></td><td>Refund</td><td class="num">$1,640.00</td><td class="num muted">—</td><td><span class="badge b-warning">Pending</span></td><td class="muted">Flight cancelled by airline</td><td><button class="btn btn-primary btn-sm">Review</button></td></tr>
+                <tr><td class="mono">RF-002213</td><td><a class="lnk" href="#booking" data-goto="booking">BK-2026-4160</a></td><td>Refund</td><td class="num">$420.00</td><td class="num">$420.00</td><td><span class="badge b-info">Processing</span></td><td class="muted">Duplicate charge</td><td></td></tr>
+                <tr><td class="mono">RF-002212</td><td><a class="lnk" href="#booking" data-goto="booking">BK-2026-4141</a></td><td>Void</td><td class="num">$280.00</td><td class="num">$280.00</td><td><span class="badge b-success">Completed</span></td><td class="muted">Ticket voided within 24h</td><td></td></tr>
+                <tr><td class="mono">RF-002211</td><td><a class="lnk" href="#booking" data-goto="booking">BK-2026-4133</a></td><td>Refund</td><td class="num">$3,100.00</td><td class="num muted">—</td><td><span class="badge b-danger">Rejected</span></td><td class="muted">Outside fare rules</td><td></td></tr>
+                <tr><td class="mono">RF-002210</td><td><a class="lnk" href="#booking" data-goto="booking">BK-2026-4120</a></td><td>Refund</td><td class="num">$965.00</td><td class="num">$965.00</td><td><span class="badge b-success">Completed</span></td><td class="muted">Schedule change</td><td></td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <section class="panel">
+          <header><div class="ph"><h2>Reviewing RF-002214</h2><p class="sub">Two different people must agree</p></div></header>
+          <div class="panel-body">
+            <div class="steps" style="margin-bottom:16px">
+              <span class="step now">Pending</span><span class="step-sep">›</span>
+              <span class="step">Approved</span><span class="step-sep">›</span>
+              <span class="step">Processing</span><span class="step-sep">›</span>
+              <span class="step">Completed</span>
+            </div>
+            <div class="kpi-grid k4" style="margin-bottom:16px">
+              <div class="kpi" style="box-shadow:none"><div class="lab">Collected</div><div class="val money">$1,640.00</div></div>
+              <div class="kpi" style="box-shadow:none"><div class="lab">Already refunded</div><div class="val money">$0.00</div></div>
+              <div class="kpi t-info" style="box-shadow:none"><div class="lab">Refundable</div><div class="val money">$1,640.00</div></div>
+              <div class="kpi t-warning" style="box-shadow:none"><div class="lab">In flight</div><div class="val money">$1,640.00</div><div class="note">This request</div></div>
+            </div>
+            <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px">
+              <div><label class="fl" for="ra">Approved amount</label><input class="inp tabular" id="ra" value="1640.00"></div>
+              <div><label class="fl" for="rn">Decision note</label><input class="inp" id="rn" placeholder="Required for a rejection"></div>
+            </div>
+            <div style="display:flex;gap:8px;margin-top:16px">
+              <button class="btn btn-primary">Approve refund</button>
+              <button class="btn btn-danger">Reject</button>
+            </div>
+            <p class="hint">Requested by <b>Lena Ortiz</b> — she cannot approve it herself. The booking row is locked while this decision is written, so two simultaneous approvals cannot both pass.</p>
+          </div>
+        </section>
+      </section>
+
+      <!-- ==================== CHARGEBACKS ==================== -->
+      <section class="screen" id="s-chargebacks">
+        <div class="page-head"><div class="ph-text"><h1>Chargebacks</h1><p>48 cases</p></div></div>
+
+        <div class="callout callout-danger mb-4">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>
+          <span><b>2 cases on this page are past their deadline.</b> A missed chargeback deadline forfeits the money automatically, regardless of how strong the evidence is.</span>
+        </div>
+
+        <div class="card flush">
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Reference</th><th>Booking</th><th class="num">Disputed</th><th>Reason</th><th>Status</th><th>Deadline</th><th class="num">Evidence</th><th>Assigned</th><th class="num">Outcome</th></tr></thead>
+              <tbody>
+                <tr><td class="mono">CB-000148</td><td><a class="lnk" href="#booking" data-goto="booking">BK-2026-3991</a></td><td class="num">$2,480.00</td><td class="muted">Service not received</td><td><span class="badge b-warning">Evidence due</span></td><td style="white-space:nowrap;font-weight:500;color:var(--danger)">2 days ago</td><td class="num">3</td><td class="muted">Tom Becker</td><td class="num muted">—</td></tr>
+                <tr><td class="mono">CB-000147</td><td><a class="lnk" href="#booking" data-goto="booking">BK-2026-3977</a></td><td class="num">$640.00</td><td class="muted">Unrecognised charge</td><td><span class="badge b-warning">Evidence due</span></td><td style="white-space:nowrap;font-weight:500;color:var(--danger)">1 day ago</td><td class="num">1</td><td class="muted">—</td><td class="num muted">—</td></tr>
+                <tr><td class="mono">CB-000146</td><td><a class="lnk" href="#booking" data-goto="booking">BK-2026-3940</a></td><td class="num">$1,205.00</td><td class="muted">Duplicate processing</td><td><span class="badge b-info">Under review</span></td><td class="muted" style="white-space:nowrap">in 6 days</td><td class="num">5</td><td class="muted">Tom Becker</td><td class="num muted">—</td></tr>
+                <tr><td class="mono">CB-000145</td><td><a class="lnk" href="#booking" data-goto="booking">BK-2026-3902</a></td><td class="num">$860.00</td><td class="muted">Service not received</td><td><span class="badge b-success">Won</span></td><td class="muted">closed</td><td class="num">4</td><td class="muted">Lena Ortiz</td><td class="num" style="color:var(--success)">+$860.00</td></tr>
+                <tr><td class="mono">CB-000144</td><td><a class="lnk" href="#booking" data-goto="booking">BK-2026-3888</a></td><td class="num">$3,100.00</td><td class="muted">Fraudulent</td><td><span class="badge b-danger">Lost</span></td><td class="muted">closed</td><td class="num">2</td><td class="muted">Tom Becker</td><td class="num" style="color:var(--danger)">−$3,100.00</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="callout callout-info" style="margin-top:16px">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>
+          <span>Cases are <b>prepared and tracked</b> here. Submission to the card processor needs a live integration or a documented manual procedure — the system does not claim a case was filed just because the record exists.</span>
+        </div>
+      </section>
+
+      <!-- ==================== DOCUMENTS ==================== -->
+      <section class="screen" id="s-documents">
+        <div class="page-head"><div class="ph-text"><h1>Documents</h1><p>2,470 documents · stored privately, never served by public URL</p></div></div>
+
+        <div class="row-detail">
+          <div class="span-2">
+            <div class="card flush">
+              <form class="filters">
+                <div style="flex:1;min-width:180px"><label class="fl" for="o1">Search</label><input class="inp" id="o1" placeholder="Title or booking"></div>
+                <div><label class="fl" for="o2">Category</label><select class="inp" id="o2"><option>All</option><option>Ticket</option><option>Passport</option><option>Invoice</option><option>Receipt</option></select></div>
+                <div><label class="fl" for="o3">Verification</label><select class="inp" id="o3"><option>All</option><option>Verified</option><option>Unverified</option></select></div>
+                <button class="btn btn-primary">Apply</button>
+              </form>
+              <div class="table-wrap">
+                <table>
+                  <thead><tr><th>Title</th><th>Category</th><th>Linked to</th><th>Origin</th><th>Verification</th><th class="num">Ver.</th><th>Uploaded</th><th>Actions</th></tr></thead>
+                  <tbody>
+                    <tr><td>E-ticket EK507</td><td>Ticket</td><td><a class="lnk" href="#booking" data-goto="booking">BK-2026-4182</a></td><td><span class="badge b-info">Supplier issued</span></td><td><span class="badge b-success">Verified</span></td><td class="num">2</td><td class="muted">20 Oct</td><td><button class="btn btn-secondary btn-sm">View</button></td></tr>
+                    <tr><td>Passport — P. Nair</td><td>Passport</td><td><a class="lnk" href="#booking" data-goto="booking">BK-2026-4182</a></td><td><span class="badge b-neutral">Customer supplied</span></td><td><span class="badge b-success">Verified</span></td><td class="num">1</td><td class="muted">20 Oct</td><td><button class="btn btn-secondary btn-sm">View</button></td></tr>
+                    <tr><td>Invoice 2026-4182</td><td>Invoice</td><td><a class="lnk" href="#booking" data-goto="booking">BK-2026-4182</a></td><td><span class="badge b-warning">Internally generated</span></td><td><span class="badge b-neutral">N/A</span></td><td class="num">1</td><td class="muted">20 Oct</td><td><button class="btn btn-secondary btn-sm">View</button></td></tr>
+                    <tr><td>Chargeback evidence pack</td><td>Receipt</td><td><a class="lnk" href="#chargebacks" data-goto="chargebacks">CB-000148</a></td><td><span class="badge b-warning">Internally generated</span></td><td><span class="badge b-neutral">N/A</span></td><td class="num">3</td><td class="muted">18 Oct</td><td><button class="btn btn-secondary btn-sm">View</button></td></tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+
+          <div class="stack">
+            <section class="panel">
+              <header><div class="ph"><h2>Upload document</h2></div></header>
+              <div class="panel-body">
+                <div style="margin-bottom:12px"><label class="fl" for="u1">Title</label><input class="inp" id="u1" placeholder="E-ticket EK507"></div>
+                <div style="margin-bottom:12px"><label class="fl" for="u2">Category</label><select class="inp" id="u2"><option>Ticket</option><option>Passport</option><option>Invoice</option><option>Receipt</option></select></div>
+                <div style="margin-bottom:12px"><label class="fl" for="u3">Link to booking</label><input class="inp" id="u3" placeholder="BK-2026-4182"></div>
+                <div style="margin-bottom:12px"><label class="fl" for="u4">File</label><input class="inp" id="u4" type="file" style="height:auto;padding:7px 10px"></div>
+                <button class="btn btn-primary" style="width:100%">Upload</button>
+              </div>
+            </section>
+            <div class="callout callout-info">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+              <span>Files are stored <b>outside the public folder</b> and leave the server only through a route that re-checks <b>document.view</b> on every single fetch. There is no public link and no pre-signed URL — a copied address is useless to anyone else.</span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ==================== FINANCIAL REPORT ==================== -->
+      <section class="screen" id="s-reports">
+        <div class="page-head">
+          <div class="ph-text"><h1>Financial report</h1><p>21 Sep 2026 – 20 Oct 2026</p></div>
+          <div class="ph-actions"><button class="btn btn-secondary"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m7 10 5 5 5-5"/><path d="M12 15V3"/></svg>Export CSV</button></div>
+        </div>
+
+        <form class="card mb-5" style="display:flex;flex-wrap:wrap;align-items:flex-end;gap:12px">
+          <div><label class="fl" for="rf">From</label><input class="inp" id="rf" type="date" value="2026-09-21"></div>
+          <div><label class="fl" for="rt">To</label><input class="inp" id="rt" type="date" value="2026-10-20"></div>
+          <button class="btn btn-primary">Apply</button>
+        </form>
+
+        <div class="row-2 mb-4">
+          <section class="panel">
+            <header><div class="ph"><h2>Booking value</h2><p class="sub">What we were promised</p></div></header>
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th>Measure</th><th class="num">Amount</th></tr></thead>
+                <tbody>
+                  <tr><td>Gross booking value</td><td class="num">$612,480.00</td></tr>
+                  <tr><td>Supplier cost</td><td class="num">$498,210.00</td></tr>
+                  <tr><td><b>Margin</b></td><td class="num" style="font-weight:600;color:var(--success)">$114,270.00</td></tr>
+                  <tr><td class="muted">Cancelled value (excluded)</td><td class="num muted">$41,900.00</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </section>
+
+          <section class="panel">
+            <header><div class="ph"><h2>Cash position</h2><p class="sub">What actually moved</p></div></header>
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th>Measure</th><th class="num">Amount</th></tr></thead>
+                <tbody>
+                  <tr><td>Collected <span class="muted">(captured only)</span></td><td class="num" style="color:var(--success)">$548,215.00</td></tr>
+                  <tr><td>Refunded <span class="muted">(completed only)</span></td><td class="num" style="color:var(--danger)">−$37,940.00</td></tr>
+                  <tr><td><b>Net collections</b></td><td class="num" style="font-weight:600">$510,275.00</td></tr>
+                  <tr><td class="muted">Approved, not yet paid</td><td class="num muted">$4,180.00</td></tr>
+                  <tr><td class="muted">Outstanding</td><td class="num muted">$102,205.00</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </section>
+        </div>
+
+        <section class="panel mb-4">
+          <header><div class="ph"><h2>Disputes</h2></div></header>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Measure</th><th class="num">Cases</th><th class="num">Amount</th></tr></thead>
+              <tbody>
+                <tr><td>Disputed in period</td><td class="num">11</td><td class="num">$14,820.00</td></tr>
+                <tr><td>Won</td><td class="num">6</td><td class="num" style="color:var(--success)">$7,410.00</td></tr>
+                <tr><td>Lost</td><td class="num">3</td><td class="num" style="color:var(--danger)">$5,190.00</td></tr>
+                <tr><td class="muted">Still open</td><td class="num muted">2</td><td class="num muted">$2,220.00</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        <div class="callout callout-info">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>
+          <span><b>Three different facts, never blurred together.</b> “Approved, not yet paid” is a commitment — money promised but not gone. It is reported apart from refunds that have genuinely left the account, because treating them as one number would overstate what has been returned.</span>
+        </div>
+      </section>
+
+      <!-- ==================== AGENTS ==================== -->
+      <section class="screen" id="s-agents">
+        <div class="page-head">
+          <div class="ph-text"><h1>Agents</h1><p>14 accounts</p></div>
+          <div class="ph-actions"><button class="btn btn-primary"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg>New agent</button></div>
+        </div>
+
+        <div class="row-detail">
+          <div class="span-2">
+            <div class="card flush">
+              <div class="table-wrap">
+                <table>
+                  <thead><tr><th>Name</th><th>Username / dialer</th><th>Email</th><th>Role</th><th>Status</th><th>Created</th><th></th></tr></thead>
+                  <tbody>
+                    <tr><td>Deepanshu</td><td class="mono">superadmin</td><td class="muted">deepanshu@example.com</td><td><span class="badge b-info">Super Admin</span></td><td><span class="badge b-success">Active</span></td><td class="muted">18 Oct 2026</td><td><button class="btn btn-secondary btn-sm">Manage</button></td></tr>
+                    <tr><td>Ravi Shah</td><td class="mono">rshah / 204</td><td class="muted">r.shah@example.com</td><td><span class="badge b-neutral">Operations</span></td><td><span class="badge b-success">Active</span></td><td class="muted">02 Mar 2025</td><td><button class="btn btn-secondary btn-sm">Manage</button></td></tr>
+                    <tr><td>Lena Ortiz</td><td class="mono">lortiz / 211</td><td class="muted">l.ortiz@example.com</td><td><span class="badge b-neutral">Finance</span></td><td><span class="badge b-success">Active</span></td><td class="muted">14 Jul 2025</td><td><button class="btn btn-secondary btn-sm">Manage</button></td></tr>
+                    <tr><td>Tom Becker</td><td class="mono">tbecker / 218</td><td class="muted">t.becker@example.com</td><td><span class="badge b-neutral">Support</span></td><td><span class="badge b-success">Active</span></td><td class="muted">09 Jan 2026</td><td><button class="btn btn-secondary btn-sm">Manage</button></td></tr>
+                    <tr><td>Nadia Haq</td><td class="mono">nhaq / 222</td><td class="muted">n.haq@example.com</td><td><span class="badge b-neutral">Read only</span></td><td><span class="badge b-warning">Suspended</span></td><td class="muted">30 Sep 2026</td><td><button class="btn btn-secondary btn-sm">Manage</button></td></tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+
+          <div class="stack">
+            <section class="panel">
+              <header><div class="ph"><h2>Security — Ravi Shah</h2></div></header>
+              <div class="panel-body">
+                <dl class="facts" style="grid-template-columns:minmax(0,1fr)">
+                  <div><dt>Password</dt><dd>Set 14 Aug 2026</dd></div>
+                  <div><dt>Last sign-in</dt><dd>20 Oct 2026, 08:12 · 203.0.113.44</dd></div>
+                  <div><dt>Failed attempts</dt><dd>0</dd></div>
+                  <div><dt>IP allowlist</dt><dd>203.0.113.0/24 (office)</dd></div>
+                </dl>
+                <button class="btn btn-secondary" style="width:100%;margin-top:16px">Issue one-time password</button>
+                <button class="btn btn-danger" style="width:100%;margin-top:8px">Suspend account</button>
+              </div>
+            </section>
+
+            <div class="callout callout-warn">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+              <span><b>There is no “view password” anywhere.</b> Passwords exist only as bcrypt digests. Restoring access issues a one-time password shown exactly once — not recoverable afterwards, including by a Super Admin — and revokes every live session for that account.</span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ==================== AUDIT LOGS ==================== -->
+      <section class="screen" id="s-audit">
+        <div class="page-head"><div class="ph-text"><h1>Audit logs</h1><p>184,902 recorded actions</p></div></div>
+
+        <div class="callout callout-info mb-4">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>
+          <span>Every meaningful action is written here with <b>who did it</b> and <b>from which address</b>. Entries cannot be edited or deleted by anyone, at any permission level.</span>
+        </div>
+
+        <div class="card flush">
+          <form class="filters">
+            <div><label class="fl" for="a1">Action</label><select class="inp" id="a1"><option>All</option><option>CREATE</option><option>UPDATE</option><option>STATUS_CHANGE</option><option>EXPORT</option><option>VIEW</option></select></div>
+            <div><label class="fl" for="a2">Actor</label><select class="inp" id="a2"><option>All</option><option>Ravi Shah</option><option>Lena Ortiz</option><option>Tom Becker</option></select></div>
+            <div><label class="fl" for="a3">From</label><input class="inp" id="a3" type="date" value="2026-10-20"></div>
+            <button class="btn btn-primary">Apply</button>
+          </form>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>When</th><th>Action</th><th>Record</th><th>Summary</th><th>Actor</th><th>IP</th></tr></thead>
+              <tbody>
+                <tr><td class="muted" style="white-space:nowrap">20 Oct, 10:04:11</td><td><span class="badge b-info">STATUS_CHANGE</span></td><td class="mono">Booking BK-2026-4182</td><td>Confirmed → Ticketed</td><td>Ravi Shah</td><td class="mono muted">203.0.113.44</td></tr>
+                <tr><td class="muted" style="white-space:nowrap">20 Oct, 09:59:02</td><td><span class="badge b-success">CREATE</span></td><td class="mono">Payment pi_3QmX9k2eZ</td><td>Captured $1,500.00 · provider confirmed</td><td>Lena Ortiz</td><td class="mono muted">203.0.113.51</td></tr>
+                <tr><td class="muted" style="white-space:nowrap">20 Oct, 09:58:40</td><td><span class="badge b-info">STATUS_CHANGE</span></td><td class="mono">Booking BK-2026-4182</td><td>Pending → Confirmed</td><td>Ravi Shah</td><td class="mono muted">203.0.113.44</td></tr>
+                <tr><td class="muted" style="white-space:nowrap">20 Oct, 09:51:17</td><td><span class="badge b-warning">EXPORT</span></td><td class="mono">Bookings list</td><td>CSV · 1,284 rows · filters applied</td><td>Tom Becker</td><td class="mono muted">198.51.100.7</td></tr>
+                <tr><td class="muted" style="white-space:nowrap">20 Oct, 09:44:55</td><td><span class="badge b-neutral">VIEW</span></td><td class="mono">Document 4182-passport</td><td>Passport — P. Nair</td><td>Ravi Shah</td><td class="mono muted">203.0.113.44</td></tr>
+                <tr><td class="muted" style="white-space:nowrap">20 Oct, 09:42:08</td><td><span class="badge b-success">CREATE</span></td><td class="mono">Booking BK-2026-4182</td><td>Flight booking · 2 passengers</td><td>Ravi Shah</td><td class="mono muted">203.0.113.44</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <div class="pager"><span>Showing 1–6 of 184,902</span><span style="display:flex;gap:8px"><button class="btn btn-secondary btn-sm">Previous</button><button class="btn btn-secondary btn-sm">Next</button></span></div>
+        </div>
+      </section>
+
+    </main>
+  </div>
+</div>
+
+<script>
+(function () {
+  var TITLES = {
+    login:"Sign in", dashboard:"Dashboard", bookings:"All bookings",
+    booking:"BK-2026-4182", newbooking:"Create new booking", customers:"Customers",
+    payments:"Payments", refunds:"Refunds & voids", chargebacks:"Chargebacks",
+    documents:"Documents", reports:"Financial report", agents:"Agents", audit:"Audit logs"
+  };
+  // Breadcrumb trails, mirroring how the real shell nests them.
+  var TRAIL = {
+    booking:[["Bookings","bookings"],["BK-2026-4182",null]],
+    newbooking:[["Bookings","bookings"],["Create new booking",null]],
+    reports:[["Reports",null],["Financial report",null]]
+  };
+  var CHEV = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m9 18 6-6-6-6"/></svg>';
+
+  var shell = document.getElementById("appShell");
+  var jump  = document.getElementById("screenJump");
+  var crumbs = document.querySelector(".crumbs ol");
+
+  function renderCrumbs(name) {
+    var trail = TRAIL[name] || [[TITLES[name], null]];
+    var html = '<li><a href="#dashboard" data-goto="dashboard">Admin</a></li>';
+    trail.forEach(function (pair, i) {
+      var last = i === trail.length - 1;
+      var label = pair[0], target = pair[1];
+      html += '<li>' + CHEV + (target && !last
+        ? '<a href="#' + target + '" data-goto="' + target + '">' + label + '</a>'
+        : '<span class="current"' + (last ? ' aria-current="page"' : '') + '>' + label + '</span>') + '</li>';
+    });
+    crumbs.innerHTML = html;
+  }
+
+  function show(name) {
+    if (!TITLES[name]) name = "dashboard";
+
+    document.querySelectorAll(".screen").forEach(function (el) {
+      el.classList.toggle("active", el.id === "s-" + name);
+    });
+
+    // The sign-in screen deliberately sits outside the authenticated shell.
+    shell.style.display = name === "login" ? "none" : "";
+    if (name !== "login") renderCrumbs(name);
+
+    if (jump.value !== name) jump.value = name;
+    document.querySelectorAll("#nav a").forEach(function (a) {
+      a.classList.toggle("active", a.dataset.goto === name);
+    });
+
+    window.scrollTo(0, 0);
+    if (location.hash.slice(1) !== name) history.replaceState(null, "", "#" + name);
+  }
+
+  document.addEventListener("click", function (e) {
+    var t = e.target.closest("[data-goto]");
+    if (t) { e.preventDefault(); show(t.dataset.goto); return; }
+    // Collapse control on panel headers, as in the real Panel component.
+    var chev = e.target.closest(".chev");
+    if (chev) {
+      var panel = chev.closest(".panel");
+      var body = panel.querySelector(".panel-body, .table-wrap");
+      var open = chev.getAttribute("aria-expanded") === "true";
+      chev.setAttribute("aria-expanded", String(!open));
+      chev.querySelector("svg").style.transform = open ? "rotate(-90deg)" : "";
+      if (body) body.hidden = open;
+    }
+  });
+
+  document.querySelectorAll(".chev svg").forEach(function (s) { s.style.transition = "transform .15s"; });
+  document.querySelectorAll("form").forEach(function (f) {
+    f.addEventListener("submit", function (e) { e.preventDefault(); });
+  });
+
+  jump.addEventListener("change", function () { show(jump.value); });
+  window.addEventListener("hashchange", function () { show(location.hash.slice(1)); });
+
+  show(location.hash.slice(1) || "dashboard");
+})();
+</script>
+
+</body>
+</html>
