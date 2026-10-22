@@ -30,7 +30,23 @@ set -euo pipefail
 echo "▸ Generating Prisma Client"
 npx prisma generate
 
-if [ "${VERCEL_ENV:-}" = "production" ]; then
+# Vercel exposes configured variables to the build environment directly. Locally
+# they live in .env, which Next reads but the shell does not — so rehearsing this
+# script on a machine with a database would otherwise take the "no database"
+# branch and report something untrue about what it had just done.
+if [ -z "${DATABASE_URL:-}" ] && [ -f .env ]; then
+  set -a
+  # shellcheck disable=SC1091
+  . ./.env
+  set +a
+fi
+
+if [ -z "${DATABASE_URL:-}${DIRECT_URL:-}" ]; then
+  # No hosted database configured: the application embeds PostgreSQL and
+  # applies these same migrations to it at boot. Running the CLI here would
+  # fail for want of a connection string and take the build down with it.
+  echo "▸ No DATABASE_URL — migrations are applied at runtime to the embedded database"
+elif [ "${VERCEL_ENV:-}" = "production" ]; then
   echo "▸ Production deployment — applying migrations"
   npx prisma migrate deploy
 elif [ -z "${VERCEL_ENV:-}" ]; then
