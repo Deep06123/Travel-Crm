@@ -19,6 +19,7 @@ import {
   listBookings,
 } from "@/server/services/booking-service";
 import { transitionBooking } from "@/server/services/booking-status-service";
+import { flushPendingBookingEmails } from "@/server/services/customer-email-service";
 
 /**
  * Booking creation and lifecycle against the real database.
@@ -124,7 +125,12 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
+  await flushPendingBookingEmails();
   await prisma.auditLog.deleteMany({ where: { adminUserId: actorId } });
+  // Confirming or ticketing a booking raises a customer-email Notification.
+  // Notification.bookingId is SetNull on delete, so these must go first or
+  // they survive as orphans that no later cleanup can find.
+  await prisma.notification.deleteMany({ where: { bookingId: { in: bookingIds } } });
   await prisma.booking.deleteMany({ where: { id: { in: bookingIds } } });
   await prisma.customer.deleteMany({ where: { id: customerId } });
   await prisma.adminUser.deleteMany({ where: { id: actorId } });

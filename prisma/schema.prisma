@@ -425,6 +425,7 @@ model Booking {
   serviceCases   CustomerServiceCase[]
   callRecords    CallRecord[]
   messages       Message[]
+  notifications  Notification[]
 
   @@index([status, bookedAt])
   @@index([customerId, bookedAt])
@@ -1254,6 +1255,16 @@ model Notification {
   eventType String
   channel   NotificationChannel
   status    NotificationStatus  @default(PENDING)
+
+  /// Stable identity for the event this notification represents, e.g.
+  /// `booking:<id>:CONFIRMED`. Unique, so a booking that leaves and re-enters
+  /// a status cannot email the customer the same confirmation twice. Nullable
+  /// because ad-hoc notifications have no natural key, and PostgreSQL treats
+  /// each NULL as distinct under a unique index.
+  dedupeKey String? @unique
+
+  bookingId String?
+  booking   Booking? @relation(fields: [bookingId], references: [id], onDelete: SetNull)
 
   /// Email address, phone number or AdminUser id depending on `channel`.
   recipient String

@@ -13,6 +13,13 @@ import {
 import { prisma } from "@/lib/db/prisma";
 import { loggerFor } from "@/lib/logging/logger";
 
+import {
+  BOOKING_CONFIRMED,
+  BOOKING_TICKETED,
+  dispatchBookingEmail,
+  type BookingEmailEvent,
+} from "./customer-email-service";
+
 const log = loggerFor("booking-status");
 
 /**
@@ -34,6 +41,25 @@ export interface TransitionResult {
   bookingId: string;
   fromStatus: BookingStatus;
   toStatus: BookingStatus;
+  /** False when the booking was already in `toStatus` and nothing was written. */
+  changed: boolean;
+}
+
+/**
+ * Lifecycle statuses the customer is told about, and what they are told.
+ *
+ * Only these two: a customer has no use for an internal NEEDS_REVIEW, and
+ * CANCELLED is a conversation an agent should be having, not an automated mail.
+ */
+const CUSTOMER_EMAIL_FOR_STATUS = {
+  [BookingStatus.CONFIRMED]: BOOKING_CONFIRMED,
+  [BookingStatus.TICKETED]: BOOKING_TICKETED,
+} as const satisfies Partial<Record<BookingStatus, BookingEmailEvent>>;
+
+function customerEmailFor(status: BookingStatus): BookingEmailEvent | undefined {
+  return (CUSTOMER_EMAIL_FOR_STATUS as Partial<Record<BookingStatus, BookingEmailEvent>>)[
+    status
+  ];
 }
 
 export async function transitionBooking({
@@ -48,7 +74,7 @@ export async function transitionBooking({
     throw new ReasonRequiredError(toStatus);
   }
 
-  return prisma.$transaction(async (tx) => {
+  const result = await prisma.$transaction(async (tx) => {
     // Read inside the transaction so a concurrent transition cannot slip
     // between the check and the write.
     const booking = await tx.booking.findUnique({
@@ -71,8 +97,9 @@ export async function transitionBooking({
 
     if (fromStatus === toStatus) {
       // Re-submitting the same status is a no-op rather than an error, so a
-      // double-clicked button does not produce a spurious history row.
-      return { bookingId, fromStatus, toStatus };
+      // double-clicked button does not produce a spurious history row — and,
+      // via `changed`, does not email the customer a second confirmation.
+      return { bookingId, fromStatus, toStatus, changed: false };
     }
 
     if (!isTransitionAllowed(fromStatus, toStatus)) {
@@ -133,8 +160,20 @@ export async function transitionBooking({
 
     log.info({ bookingId, fromStatus, toStatus, actorId }, "Booking status changed");
 
-    return { bookingId, fromStatus, toStatus };
+    return { bookingId, fromStatus, toStatus, changed: true };
   });
+
+  // Outside the transaction, and deliberately so. An SMTP call inside it would
+  // hold the booking's row lock open for the length of a network round trip,
+  // and an email cannot be rolled back — sending one for a transition that
+  // then failed to commit would tell the customer something untrue.
+  const event = result.changed ? customerEmailFor(result.toStatus) : undefined;
+
+  if (event) {
+    dispatchBookingEmail({ bookingId, event });
+  }
+
+  return result;
 }
 
 /** Status history for a booking, newest first. */

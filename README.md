@@ -1,4 +1,3 @@
-<<<<<<< HEAD
 # Travel Booking Admin CRM
 
 Admin-only CRM for flight and cruise booking operations: bookings, customers,
@@ -152,8 +151,11 @@ assert that an external action occurred:
 - A payment is not successful because a URL or reference was saved — only
   `PaymentStatus` says so, and `PaymentCaptureMode` distinguishes a manually
   typed record from a provider-confirmed one.
-- A message is not delivered because the row was written; `MessageStatus`
-  starts at `DRAFT`/`QUEUED`, and `SENT` requires an actual send.
+- An internal message is not delivered because the row was written;
+  `MessageStatus` starts at `DRAFT`/`QUEUED`, and `SENT` requires an actual
+  send. Customer email is now genuinely sent when SMTP is configured — see
+  below — and `NotificationStatus` distinguishes that from a message that was
+  owed and never left.
 - A generated PDF is marked `INTERNALLY_GENERATED` unless there is evidence the
   provider issued it.
 - Creating a supplier record does not open a connection to an airline or cruise
@@ -197,7 +199,7 @@ that it was truncated, and write an EXPORT audit entry.
 ### Testing
 
 ```bash
-npm test          # 228 unit and integration tests, against real PostgreSQL
+npm test          # 239 unit and integration tests, against real PostgreSQL
 npm run test:e2e  # 22 browser tests, against a real server and database
 ```
 
@@ -253,6 +255,41 @@ Three independent mechanisms, all of them needed:
 A refund also cannot be approved by the person who requested it, and amounts at
 or above the configured threshold require a `SUPER_ADMIN`.
 
+### Customer email
+
+The customer is emailed when a booking reaches **CONFIRMED** and when it
+reaches **TICKETED**. The trigger lives inside `transitionBooking`, the single
+place a booking's status may change, so a new route or form cannot skip it.
+
+Four properties, each with a reason:
+
+- **The email cannot fail the booking.** It is dispatched after the transaction
+  commits, through `after()`, so an SMTP timeout cannot roll back a confirmed
+  booking or surface as an error on the status control. Every send path
+  resolves rather than throws.
+- **Nothing claims to have been sent that was not.** `NotificationStatus` is
+  `SENT` only once the provider accepted the message, and the row then carries
+  the provider and its message id. With `MAIL_DRIVER="none"` the notification
+  is recorded as `SUPPRESSED` with the reason, so an operator can see that an
+  email was owed and not sent.
+- **The same event cannot email twice.** A unique `dedupeKey` of
+  `booking:<id>:<event>` backs this, and re-applying a status the booking
+  already has is a no-op that never reaches the mailer. Only an explicit
+  operator resend may send a second copy.
+- **The message carries nothing the customer should not receive.** No passport
+  number, no date of birth, no supplier cost, no margin, no MCO figure — the
+  query behind the template does not even load them. Integration tests assert
+  the absence against a passenger that genuinely has a passport stored.
+
+Configure with `MAIL_DRIVER="smtp"` plus `SMTP_HOST` and `MAIL_FROM`; see
+`.env.example`. SMTP rather than a provider SDK, so changing provider is an
+environment change. For local work, point it at a catcher such as Mailpit on
+`127.0.0.1:1025` — a real send that never leaves the machine.
+
+`npm run smoke` verifies the transport by completing an SMTP greeting and
+authentication without sending, so a wrong host, port, TLS mode or credential
+is found at deployment rather than by a customer who never got a confirmation.
+
 ### Document storage
 
 Documents are stored through `src/lib/storage`, which currently uses a
@@ -261,6 +298,3 @@ anything under `public/` is served to anyone by URL. Bytes leave the server only
 through `/api/admin/documents/[id]/view`, which re-checks `document.view` on
 every fetch; there is no public or pre-signed URL. Adding an S3 adapter is a
 change to `getStorage()` alone.
-=======
-# Travel-Crm
->>>>>>> origin/main

@@ -630,6 +630,60 @@ async function main(): Promise<void> {
     };
   });
 
+  // ------------------------------------------------------- Customer email ----
+  // Checked here, at deploy time, because the alternative way to discover a
+  // broken mail configuration is a customer who never got their confirmation.
+  await check("Email", "Mail transport is reachable", async () => {
+    const driver = process.env["MAIL_DRIVER"] ?? "none";
+
+    if (driver === "none") {
+      return {
+        skip:
+          'MAIL_DRIVER="none" — confirmations are recorded as SUPPRESSED and no email is sent.',
+      };
+    }
+
+    // nodemailer directly rather than `SmtpMailAdapter`: the adapter is marked
+    // `server-only`, which throws outside a Server Component graph. The
+    // transport options below are the same ones `getMailer()` builds.
+    const nodemailer = (await import("nodemailer")).default;
+    const user = process.env["SMTP_USER"];
+    const pass = process.env["SMTP_PASSWORD"];
+
+    const transporter = nodemailer.createTransport({
+      host: process.env["SMTP_HOST"]!,
+      port: Number(process.env["SMTP_PORT"] ?? 587),
+      secure: process.env["SMTP_SECURE"] === "true",
+      ...(user && pass ? { auth: { user, pass } } : {}),
+    });
+
+    // verify() completes the greeting and any authentication without sending,
+    // so a wrong host, port, TLS mode or credential fails here and nowhere else.
+    await transporter.verify();
+
+    return {
+      ok: true,
+      detail: `SMTP at ${process.env["SMTP_HOST"]}:${process.env["SMTP_PORT"] ?? 587} accepted the connection`,
+    };
+  });
+
+  await check("Email", "Nothing claims SENT without a provider", async () => {
+    const { rows } = await pool!.query<{ count: string }>(
+      `SELECT count(*)::text AS count
+         FROM "Notification"
+        WHERE status = 'SENT' AND (provider IS NULL OR "sentAt" IS NULL)`,
+    );
+    const bad = Number(rows[0]?.count ?? 0);
+
+    return {
+      ok: bad === 0,
+      detail:
+        bad === 0
+          ? "every SENT notification names a provider and a send time"
+          : `${bad} notification(s) claim SENT with no provider or no sentAt`,
+    };
+  });
+
   await cleanup();
   await pool?.end();
 

@@ -17,6 +17,11 @@ const redactPaths = [
   "passwordHash",
   "*.password",
   "*.passwordHash",
+  // nodemailer errors carry the transport options, SMTP credentials included.
+  "auth",
+  "*.auth",
+  "SMTP_PASSWORD",
+  "*.SMTP_PASSWORD",
   "passportNumber",
   "*.passportNumber",
   "dateOfBirth",

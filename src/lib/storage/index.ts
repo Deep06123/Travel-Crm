@@ -4,6 +4,7 @@ import { randomBytes } from "node:crypto";
 
 import { getEnv } from "@/lib/env";
 
+import { BlobStorageAdapter } from "./blob-adapter";
 import { LocalStorageAdapter } from "./local-adapter";
 import type { StorageAdapter } from "./types";
 
@@ -12,9 +13,9 @@ export * from "./types";
 /**
  * Storage selection.
  *
- * Only the local adapter exists today because no S3-compatible credentials are
- * configured. When they are, add the S3 adapter here and switch on
- * `STORAGE_DRIVER` — nothing above this module changes.
+ * `local` writes to disk, for a single host. `blob` stores objects privately in
+ * Vercel Blob, for serverless deployments where the filesystem is read-only.
+ * Both satisfy the same interface, so nothing above this module changes.
  */
 
 let cached: StorageAdapter | undefined;
@@ -28,6 +29,13 @@ export function getStorage(): StorageAdapter {
     case "local":
       cached = new LocalStorageAdapter(env.STORAGE_LOCAL_ROOT);
       return cached;
+
+    case "blob": {
+      // Non-null is safe: the env schema refuses to parse a `blob` driver
+      // without this token, so configuration has already failed by here.
+      cached = new BlobStorageAdapter(env.BLOB_READ_WRITE_TOKEN!);
+      return cached;
+    }
 
     default: {
       // Exhaustiveness guard: adding a driver to the enum without handling it

@@ -31,6 +31,7 @@ import {
   RequestRefundForm,
 } from "@/features/finance/booking-finance-forms";
 import { DocumentUploadForm } from "@/features/documents/upload-form";
+import { CustomerEmailPanel } from "@/features/bookings/customer-email-panel";
 import { StatusControl } from "@/features/bookings/status-control";
 import { currentUserCan, requirePermission } from "@/lib/auth/dal";
 import { allowedTransitionsFrom } from "@/lib/bookings/status";
@@ -43,6 +44,11 @@ import {
   redactPassengers,
 } from "@/server/services/booking-service";
 import { getBookingPosition } from "@/server/services/payment-service";
+import {
+  BOOKING_CONFIRMED,
+  BOOKING_TICKETED,
+  getBookingNotifications,
+} from "@/server/services/customer-email-service";
 import { IN_FLIGHT_REFUND_STATUSES } from "@/lib/financial/refund-rules";
 
 export const metadata: Metadata = { title: "Booking · Travel CRM" };
@@ -79,6 +85,7 @@ export default async function BookingDetailPage({
     canUploadDocuments,
     canRecordPayments,
     canRequestRefunds,
+    canResendEmail,
   ] = await Promise.all([
     currentUserCan(PERMISSIONS.BOOKING_CHANGE_STATUS),
     currentUserCan(PERMISSIONS.PASSENGER_VIEW_SENSITIVE),
@@ -90,6 +97,7 @@ export default async function BookingDetailPage({
     currentUserCan(PERMISSIONS.DOCUMENT_UPLOAD),
     currentUserCan(PERMISSIONS.PAYMENT_RECORD),
     currentUserCan(PERMISSIONS.REFUND_REQUEST),
+    currentUserCan(PERMISSIONS.MESSAGE_SEND),
   ]);
 
   const { id } = await params;
@@ -109,6 +117,34 @@ export default async function BookingDetailPage({
         orderBy: { name: "asc" },
       })
     : [];
+
+  // Dates are formatted here rather than in the panel: the panel is a Client
+  // Component, and `@/lib/format` reaches `@/lib/env`, which is server-only.
+  const customerEmails = (await getBookingNotifications(booking.id)).map(
+    (row) => ({
+      id: row.id,
+      eventType: row.eventType,
+      status: row.status,
+      recipient: row.recipient,
+      sentAtLabel: row.sentAt ? formatDateTime(row.sentAt) : null,
+      attemptCount: row.attemptCount,
+      lastError: row.lastError,
+    }),
+  );
+
+  // A resend is only offered for an event this booking has actually reached.
+  // Offering "resend tickets issued" on an unticketed booking would promise
+  // the customer something that has not happened.
+  const resendableEvents = [
+    ...(booking.status === "CONFIRMED" ||
+    booking.status === "TICKETED" ||
+    booking.status === "COMPLETED"
+      ? [BOOKING_CONFIRMED]
+      : []),
+    ...(booking.status === "TICKETED" || booking.status === "COMPLETED"
+      ? [BOOKING_TICKETED]
+      : []),
+  ];
 
   const margin = booking.totalMinor - booking.supplierCostMinor;
 
@@ -699,6 +735,15 @@ export default async function BookingDetailPage({
               />
             </Panel>
           ) : null}
+
+          <Panel title="Customer email" collapsible={false}>
+            <CustomerEmailPanel
+              bookingId={booking.id}
+              rows={customerEmails}
+              canResend={canResendEmail}
+              availableEvents={resendableEvents}
+            />
+          </Panel>
 
           <Panel title="Follow-ups" collapsible={false}>
             {booking.followUps.length === 0 ? (
