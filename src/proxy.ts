@@ -26,7 +26,15 @@ export function proxy(request: NextRequest): NextResponse {
   // Matched against "false" rather than "true" so it follows the same
   // default-on behaviour as the environment schema, which this file cannot
   // import: `proxy` runs before the application's module graph is available.
-  const demoMode = process.env["DEMO_MODE"] !== "false";
+  //
+  // The second clause mirrors the schema's other rule — a hosted database
+  // closes the demo unless DEMO_MODE says "true" outright. Duplicated rather
+  // than shared for the same reason, and the two must be changed together: if
+  // this said "open" where the access layer said "closed", every request would
+  // be waved through here only to be redirected to sign in by the layout.
+  const demoMode =
+    process.env["DEMO_MODE"] === "true" ||
+    (process.env["DEMO_MODE"] !== "false" && !process.env["DATABASE_URL"]);
 
   if (!demoMode && !hasSessionCookie && !isLoginRoute) {
     const loginUrl = new URL("/admin/login", request.url);

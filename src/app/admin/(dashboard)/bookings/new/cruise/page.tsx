@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 
 import { PageHeader } from "@/components/layout/admin-shell";
+import { BookingProduct } from "@/generated/prisma/enums";
 import { createCruiseBookingAction } from "@/features/bookings/actions";
 import { CruiseBookingForm } from "@/features/bookings/cruise-booking-form";
 import { requirePermission } from "@/lib/auth/dal";
@@ -47,17 +48,23 @@ export default async function NewCruiseBookingPage({
       select: { id: true, name: true },
       orderBy: { name: "asc" },
     }),
+    // Suppliers that handle cruise, plus those with no product restriction
+    // recorded yet, so an unconfigured supplier is still selectable.
+    //
+    // The narrowing is done here rather than in the query. Expressed as Prisma
+    // list filters — `{ has: "CRUISE" }` with `{ isEmpty: true }` — it failed
+    // against the embedded database with "malformed array literal", because
+    // the PGlite driver adapter binds the operand of an enum-array comparison
+    // as a scalar. The hosted adapter handles it, so this page worked against
+    // real Postgres and returned a 500 on the demo, which is the worst split
+    // to have: a page nobody can reach in the environment people are sent to.
+    //
+    // Reading the column instead costs nothing worth measuring. Suppliers are
+    // an operator-maintained list of tens of rows, already fetched in full by
+    // the settings pages, and the filter below is exact.
     prisma.supplier.findMany({
-      // Suppliers that handle cruise, plus those with no product restriction
-      // recorded yet, so an unconfigured supplier is still selectable.
-      where: {
-        isActive: true,
-        OR: [
-          { supportedProducts: { has: "CRUISE" } },
-          { supportedProducts: { isEmpty: true } },
-        ],
-      },
-      select: { id: true, name: true },
+      where: { isActive: true },
+      select: { id: true, name: true, supportedProducts: true },
       orderBy: { name: "asc" },
     }),
     prisma.mcoSupplier.findMany({
@@ -74,6 +81,14 @@ export default async function NewCruiseBookingPage({
     getSetting<string>("default_currency", "USD"),
   ]);
 
+  const cruiseSuppliers = suppliers
+    .filter(
+      (supplier) =>
+        supplier.supportedProducts.length === 0 ||
+        supplier.supportedProducts.includes(BookingProduct.CRUISE),
+    )
+    .map(({ id, name }) => ({ id, name }));
+
   return (
     <div className="max-w-6xl">
       <PageHeader
@@ -87,7 +102,7 @@ export default async function NewCruiseBookingPage({
         options={{
           customers,
           agents,
-          suppliers,
+          suppliers: cruiseSuppliers,
           mcoSuppliers,
           bookingTypes,
           // Cruise bookings are not routed through a toll-free number in the

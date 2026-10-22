@@ -4,6 +4,16 @@ import { requireAuth } from "@/lib/auth/dal";
 
 import { ChangePasswordForm } from "./change-password-form";
 
+/**
+ * Never prerendered: this page's content depends on DEMO_MODE and on whether
+ * the visitor already has a valid session, both of which are runtime facts.
+ * Built as static HTML it would keep offering whatever the build decided.
+ */
+export const dynamic = "force-dynamic";
+
+/** See the admin layout: a cold start must build the embedded database first. */
+export const maxDuration = 60;
+
 export const metadata: Metadata = {
   title: "Change password · Travel CRM",
   robots: { index: false, follow: false },

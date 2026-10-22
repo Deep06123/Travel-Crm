@@ -1,5 +1,8 @@
 import { logoutAction } from "@/features/auth/actions";
 
+/** See the admin layout: a cold start must build the embedded database first. */
+export const maxDuration = 60;
+
 /**
  * Sign-out endpoint.
  *

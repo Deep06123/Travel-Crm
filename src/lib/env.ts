@@ -214,6 +214,29 @@ const serverEnvSchema = z.object({
         message: "SMTP_PASSWORD is required when SMTP_USER is set.",
       });
     }
+  })
+  /**
+   * Closes the demo once there is a real database to protect.
+   *
+   * `DEMO_MODE` defaults on so the application can be explored with nothing
+   * provisioned, and that default is only defensible while the data is
+   * fixtures in an in-memory database that dies with the process. Pointing
+   * `DATABASE_URL` at a hosted PostgreSQL changes what is at stake completely:
+   * the same default would then publish real passenger passport details,
+   * payment records and refund approval to anyone who learns the URL, as a
+   * side effect of configuring storage — a step nobody would expect to grant
+   * access.
+   *
+   * So a hosted database turns the demo off unless the operator says otherwise
+   * in as many words. `DEMO_MODE=true` is still honoured: a populated staging
+   * environment someone wants left open is a legitimate thing to run, but it
+   * should be deliberate rather than inherited.
+   */
+  .transform((env) => {
+    if (!env.DEMO_MODE || !env.DATABASE_URL) return env;
+    if (process.env["DEMO_MODE"] === "true") return env;
+
+    return { ...env, DEMO_MODE: false };
   });
 
 export type ServerEnv = z.infer<typeof serverEnvSchema>;

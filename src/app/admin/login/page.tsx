@@ -6,6 +6,16 @@ import { getEnv } from "@/lib/env";
 
 import { LoginForm } from "./login-form";
 
+/**
+ * Never prerendered: this page's content depends on DEMO_MODE and on whether
+ * the visitor already has a valid session, both of which are runtime facts.
+ * Built as static HTML it would keep offering whatever the build decided.
+ */
+export const dynamic = "force-dynamic";
+
+/** See the admin layout: a cold start must build the embedded database first. */
+export const maxDuration = 60;
+
 export const metadata: Metadata = {
   title: "Sign in · Travel CRM",
   // Keep the sign-in page out of search indexes.

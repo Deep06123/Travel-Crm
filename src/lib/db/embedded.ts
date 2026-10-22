@@ -4,7 +4,9 @@ import { readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import { PGlite } from "@electric-sql/pglite";
+import { PrismaPGlite } from "pglite-prisma-adapter";
 
+import { PrismaClient } from "@/generated/prisma/client";
 import { DEMO_ADMIN_EMAIL, DEMO_ADMIN_ID } from "@/lib/auth/demo-identity";
 import { loggerFor } from "@/lib/logging/logger";
 
@@ -153,6 +155,35 @@ async function seedReferenceData(db: PGlite): Promise<number> {
 }
 
 /**
+ * Fills the database with the demo agency.
+ *
+ * Runs through Prisma rather than raw SQL: forty-odd related tables written by
+ * hand in SQL is a second schema to keep in step with the first, and a column
+ * renamed in `schema.prisma` would fail here at runtime instead of at build.
+ *
+ * The client is built on the *raw* instance, deliberately. The gate below holds
+ * every application query until this has finished, so a client that went
+ * through the gate would be waiting on the work it is itself performing.
+ *
+ * A failure here is logged and swallowed. An empty demo is a poor demo; a
+ * deployment that refuses to start because one fixture row conflicted is worse.
+ */
+async function seedDemoDataset(db: PGlite): Promise<string> {
+  const { seedDemoDataset: seed } = await import("./demo-dataset");
+
+  const client = new PrismaClient({ adapter: new PrismaPGlite(db) });
+
+  try {
+    const summary = await seed(client, new Date());
+    return Object.entries(summary)
+      .map(([name, count]) => `${count} ${name}`)
+      .join(", ");
+  } finally {
+    await client.$disconnect();
+  }
+}
+
+/**
  * Creates the database and queues its schema.
  *
  * Returns synchronously, which it must: `prisma` is a plain exported const that
@@ -178,8 +209,15 @@ export function getEmbeddedDatabase(): PGlite {
     const migrations = await applyMigrations(db);
     const grants = await seedReferenceData(db);
 
+    let demo = "none";
+    try {
+      demo = await seedDemoDataset(db);
+    } catch (error: unknown) {
+      log.error({ err: error }, "Demo dataset failed to seed — pages will be empty");
+    }
+
     log.warn(
-      { migrations, grants, ms: Date.now() - started },
+      { migrations, grants, demo, ms: Date.now() - started },
       "Embedded database ready — in-memory, not durable, resets with the process",
     );
   })();

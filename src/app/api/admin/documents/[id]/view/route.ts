@@ -11,6 +11,9 @@ import {
 import { ObjectNotFoundError } from "@/lib/storage";
 import { readDocumentVersion } from "@/server/services/document-service";
 
+/** See the admin layout: a cold start must build the embedded database first. */
+export const maxDuration = 60;
+
 const log = loggerFor("document-view");
 
 /**

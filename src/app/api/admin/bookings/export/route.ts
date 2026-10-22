@@ -19,6 +19,9 @@ import { bookingSearchSchema } from "@/features/bookings/schemas";
 import { buildBookingWhere } from "@/server/services/booking-service";
 import { getBookingExportRows } from "@/server/services/report-service";
 
+/** See the admin layout: a cold start must build the embedded database first. */
+export const maxDuration = 60;
+
 const log = loggerFor("booking-export");
 
 /**
