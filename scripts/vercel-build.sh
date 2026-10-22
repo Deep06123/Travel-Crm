@@ -19,6 +19,17 @@
 
 set -euo pipefail
 
+# Generated, never committed: src/generated/prisma is gitignored, so a clean
+# checkout has no Prisma Client and every import of it fails.
+#
+# `postinstall` normally covers this, but it cannot be relied on alone. Recent
+# npm releases block package install scripts unless they are approved, and a
+# build host that skips ours would fail with dozens of module-not-found errors
+# pointing at a folder nobody deleted. Generating here as well is idempotent and
+# takes under a second, and it needs no database connection.
+echo "▸ Generating Prisma Client"
+npx prisma generate
+
 if [ "${VERCEL_ENV:-}" = "production" ]; then
   echo "▸ Production deployment — applying migrations"
   npx prisma migrate deploy

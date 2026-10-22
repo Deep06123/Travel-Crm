@@ -4,7 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "bash scripts/start-local-postgres.sh ensure && next dev",
-    "build": "next build",
+    "build": "prisma generate && next build",
     "postinstall": "prisma generate",
     "vercel-build": "bash scripts/vercel-build.sh",
     "start": "next start",
