@@ -54,13 +54,23 @@ export function getStorage(): StorageAdapter {
  * logs, backups and object listings. The date prefix is for operational
  * housekeeping only.
  */
-export function generateStorageKey(extension: string): string {
+export function generateStorageKey(
+  extension: string,
+  /**
+   * Top-level folder. Images embedded in an itinerary live apart from
+   * documents: they are illustrations inside a field, not records in their own
+   * right, and mixing them into `documents/` would put them in every listing
+   * and backup that expects verifiable evidence.
+   */
+  prefix = "documents",
+): string {
   const now = new Date();
   const year = now.getUTCFullYear();
   const month = String(now.getUTCMonth() + 1).padStart(2, "0");
   const random = randomBytes(24).toString("hex");
 
   const suffix = extension.replace(/[^a-z0-9]/gi, "").toLowerCase();
+  const folder = prefix.replace(/[^a-z0-9-]/gi, "").toLowerCase() || "documents";
 
-  return `documents/${year}/${month}/${random}${suffix ? `.${suffix}` : ""}`;
+  return `${folder}/${year}/${month}/${random}${suffix ? `.${suffix}` : ""}`;
 }

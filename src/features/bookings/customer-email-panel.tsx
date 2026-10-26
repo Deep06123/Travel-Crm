@@ -1,14 +1,15 @@
 "use client";
 
-import { Loader2, Send } from "lucide-react";
-import { useActionState } from "react";
+import { ExternalLink, Eye, Loader2, Send, X } from "lucide-react";
+import { useActionState, useState } from "react";
 import { useFormStatus } from "react-dom";
 
-import { Button } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
+import { Field, Input, Textarea } from "@/components/ui/field";
 import type {
   NotificationStatus as NotificationStatusEnum,
 } from "@/generated/prisma/enums";
-import { resendBookingEmailAction, type ResendEmailState } from "./email-actions";
+import { bookingEmailAction, type BookingEmailState } from "./email-actions";
 
 /**
  * What the customer has actually been emailed about this booking.
@@ -59,11 +60,13 @@ function label(eventType: string): string {
  * value are included, which is exactly the "which one did they click" signal
  * this needs.
  */
-function ResendButton({
+function EventButton({
   event,
+  icon,
   children,
 }: {
   event: string;
+  icon: React.ReactNode;
   children: React.ReactNode;
 }) {
   const { pending } = useFormStatus();
@@ -77,13 +80,108 @@ function ResendButton({
       size="sm"
       disabled={pending}
     >
-      {pending ? (
-        <Loader2 className="size-4 animate-spin" />
-      ) : (
-        <Send className="size-4" />
-      )}
+      {pending ? <Loader2 className="size-4 animate-spin" /> : icon}
       {children}
     </Button>
+  );
+}
+
+/**
+ * The email as it would be sent, open for correction.
+ *
+ * Shown only after the operator asks for a preview, and pre-filled with the
+ * generated wording. Sending from here sends exactly what is on screen — the
+ * point of the control is that what you read is what the customer gets.
+ *
+ * The body is plain text. A rich editor would imply the operator can control
+ * the layout, which they cannot: the surrounding markup is supplied by the
+ * server precisely so an edited email cannot arrive malformed.
+ */
+function EmailEditor({
+  bookingId,
+  preview,
+  onClose,
+  formAction,
+}: {
+  bookingId: string;
+  preview: NonNullable<BookingEmailState["preview"]>;
+  onClose: () => void;
+  formAction: (payload: FormData) => void;
+}) {
+  const { pending } = useFormStatus();
+
+  return (
+    <form
+      action={formAction}
+      className="flex flex-col gap-3 rounded-md border border-line bg-surface-muted p-3"
+    >
+      <input type="hidden" name="bookingId" value={bookingId} />
+      <input type="hidden" name="event" value={preview.event} />
+      <input type="hidden" name="intent" value="send" />
+
+      <div className="flex items-center justify-between gap-2">
+        <span className="text-sm font-medium text-ink">
+          Preview — {label(preview.event).toLowerCase()}
+        </span>
+        <Button type="button" variant="ghost" size="sm" onClick={onClose}>
+          <X className="size-4" />
+          Close
+        </Button>
+      </div>
+
+      <p className="text-xs text-ink-muted">
+        To: {preview.recipient || "— no contact address on this booking —"}
+      </p>
+
+      {/* Keyed on the event so switching between the confirmation and the
+          ticket preview resets the fields instead of keeping the old text. */}
+      <Field id={`email-subject-${preview.event}`} label="Subject" required>
+        {(props) => (
+          <Input
+            {...props}
+            name="subject"
+            required
+            maxLength={200}
+            defaultValue={preview.subject}
+          />
+        )}
+      </Field>
+
+      <Field
+        id={`email-body-${preview.event}`}
+        label="Message"
+        required
+        hint="Plain text. Leave a blank line between paragraphs."
+      >
+        {(props) => (
+          <Textarea
+            {...props}
+            name="body"
+            rows={14}
+            required
+            className="font-mono text-xs"
+            defaultValue={preview.body}
+          />
+        )}
+      </Field>
+
+      <div className="flex items-center gap-2">
+        <Button type="submit" size="sm" disabled={pending || !preview.recipient}>
+          {pending ? (
+            <Loader2 className="size-4 animate-spin" />
+          ) : (
+            <Send className="size-4" />
+          )}
+          Send this version
+        </Button>
+
+        {preview.recipient ? null : (
+          <span className="text-xs text-status-warning">
+            Add a contact email to the booking before sending.
+          </span>
+        )}
+      </div>
+    </form>
   );
 }
 
@@ -99,10 +197,23 @@ export function CustomerEmailPanel({
   /** Events this booking has reached, so only meaningful resends are offered. */
   availableEvents: readonly string[];
 }) {
-  const [state, formAction] = useActionState<ResendEmailState, FormData>(
-    resendBookingEmailAction,
+  const [state, formAction] = useActionState<BookingEmailState, FormData>(
+    bookingEmailAction,
     {},
   );
+
+  /**
+   * The preview the operator has dismissed, if any.
+   *
+   * Compared by identity against the current result, so a fresh preview of the
+   * same event reopens the editor rather than being swallowed by an earlier
+   * dismissal. Derived rather than mirrored — a successful send returns a
+   * result with no `preview`, which closes the editor on its own.
+   */
+  const [dismissed, setDismissed] = useState<BookingEmailState["preview"]>();
+
+  const editing =
+    state.preview && state.preview !== dismissed ? state.preview : undefined;
 
   return (
     <div className="flex flex-col gap-3">
@@ -167,15 +278,61 @@ export function CustomerEmailPanel({
         </ul>
       )}
 
+      {canResend && editing ? (
+        <EmailEditor
+          bookingId={bookingId}
+          preview={editing}
+          onClose={() => setDismissed(state.preview)}
+          formAction={formAction}
+        />
+      ) : null}
+
+      {/* Opens the document itself, rendered by the same code that builds the
+          email body — so what is checked here is what the customer receives.
+          A new tab rather than a dialog: it is a full page, and the operator
+          usually wants the booking still open beside it. */}
+      <a
+        href={`/admin/bookings/${bookingId}/eticket`}
+        target="_blank"
+        rel="noopener noreferrer"
+        className={buttonVariants({ variant: "secondary", size: "sm" })}
+      >
+        <ExternalLink className="size-4" />
+        Open e-ticket
+      </a>
+
       {canResend && availableEvents.length > 0 ? (
-        <form action={formAction} className="flex flex-wrap gap-2">
-          <input type="hidden" name="bookingId" value={bookingId} />
-          {availableEvents.map((event) => (
-            <ResendButton key={event} event={event}>
-              Resend {label(event).toLowerCase()}
-            </ResendButton>
-          ))}
-        </form>
+        <div className="flex flex-col gap-2">
+          {/* Preview and send are separate forms. They post different fields
+              to different actions, and nesting forms is invalid HTML. */}
+          <form action={formAction} className="flex flex-wrap gap-2">
+            <input type="hidden" name="bookingId" value={bookingId} />
+            <input type="hidden" name="intent" value="preview" />
+            {availableEvents.map((event) => (
+              <EventButton
+                key={event}
+                event={event}
+                icon={<Eye className="size-4" />}
+              >
+                Preview {label(event).toLowerCase()}
+              </EventButton>
+            ))}
+          </form>
+
+          <form action={formAction} className="flex flex-wrap gap-2">
+            <input type="hidden" name="bookingId" value={bookingId} />
+            <input type="hidden" name="intent" value="send" />
+            {availableEvents.map((event) => (
+              <EventButton
+                key={event}
+                event={event}
+                icon={<Send className="size-4" />}
+              >
+                Resend {label(event).toLowerCase()}
+              </EventButton>
+            ))}
+          </form>
+        </div>
       ) : null}
     </div>
   );

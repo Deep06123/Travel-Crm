@@ -80,7 +80,7 @@ export default async function MessageGroupsPage() {
                         ) : (
                           <span className="text-xs">
                             {group.memberIds
-                              .map((id) => nameById.get(id) ?? "Unknown")
+                              .map((id: string) => nameById.get(id) ?? "Unknown")
                               .join(", ")}
                           </span>
                         )}

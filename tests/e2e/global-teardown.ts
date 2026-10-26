@@ -6,9 +6,9 @@
  * cleanup and shutdown belong here.
  *
  * `fixtures` is imported lazily rather than at module load. It opens a pool
- * against DATABASE_URL and throws without one, which would fail the whole run
- * for specs that never touch it — the demo-mode specs drive the embedded
- * database through the browser and need no fixtures at all.
+ * against DATABASE_URL and throws without one, so importing it eagerly would
+ * fail the whole run with a configuration error rather than the clear skip
+ * below.
  */
 export default async function globalTeardown(): Promise<void> {
   if (!process.env["DATABASE_URL"]) return;

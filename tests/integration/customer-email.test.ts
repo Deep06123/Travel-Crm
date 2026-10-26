@@ -193,7 +193,7 @@ describe("confirming a booking", () => {
 
     const message = readMessage();
     expect(message).toContain(`mail-customer-${SUFFIX}@example.invalid`);
-    expect(message).toContain("Booking confirmed");
+    expect(message).toContain("YOUR RESERVATION IS CONFIRMED!!");
     expect(message).toContain("$1,029.97");
     expect(message).toContain("JFK");
     expect(message).toContain("LHR");
@@ -347,7 +347,7 @@ describe("ticketing a booking", () => {
     await flushPendingBookingEmails();
 
     const message = readMessage();
-    expect(message).toContain("Tickets issued");
+    expect(message).toContain("YOUR E-TICKET IS ISSUED!!");
     expect(message).toContain("0062345678901");
     expect(message).toContain("Ada Lovelace");
     expect(message).toContain("ABC123");

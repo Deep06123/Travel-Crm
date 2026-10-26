@@ -103,8 +103,8 @@ export default async function AuditLogsPage({
   if (filters.q) {
     const term = filters.q.trim();
     where.OR = [
-      { summary: { contains: term, mode: "insensitive" } },
-      { entityId: { contains: term, mode: "insensitive" } },
+      { summary: { contains: term } },
+      { entityId: { contains: term } },
     ];
   }
 

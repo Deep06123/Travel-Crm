@@ -6,44 +6,100 @@ import { prisma } from "@/lib/db/prisma";
 /**
  * Human-facing reference numbers.
  *
- * Each kind draws from its own Postgres sequence. `nextval` is atomic, so two
- * agents creating a booking at the same instant receive different numbers —
+ * Each kind draws from its own row in `ReferenceSequence`. MySQL has no
+ * `CREATE SEQUENCE`, so the counter is advanced with the connector's own
+ * idiom:
+ *
+ *     UPDATE ReferenceSequence SET value = LAST_INSERT_ID(value + 1) WHERE ...
+ *
+ * `LAST_INSERT_ID(expr)` stores `expr` against the session *and* returns it, so
+ * the increment and the read are one statement against one row. Two agents
+ * creating a booking at the same instant therefore receive different numbers —
  * unlike `max(...) + 1`, which races and collides on the unique constraint.
  *
- * Sequences do not roll back, so an abandoned transaction leaves a gap. Gaps
- * are fine; duplicates are not.
+ * Two differences from the Postgres sequences this replaces, neither of which
+ * threatens that guarantee:
+ *
+ *   * The update rolls back with its transaction, where `nextval` did not. A
+ *     rolled-back booking returns its number to the pool instead of burning it,
+ *     which is harmless — the column is unique either way.
+ *   * The row stays write-locked until the transaction commits, so concurrent
+ *     allocations of the *same* kind serialise. Callers allocate a reference as
+ *     late as they can and do no slow work afterwards, which keeps that window
+ *     to a single statement.
+ *
+ * Gaps remain fine; duplicates remain not.
  */
 
 const SEQUENCES = {
-  booking: "booking_number_seq",
-  customer: "customer_reference_seq",
-  payment: "payment_reference_seq",
-  refund: "refund_reference_seq",
-  chargeback: "chargeback_reference_seq",
-  serviceCase: "service_case_seq",
+  booking: "booking_number",
+  customer: "customer_reference",
+  payment: "payment_reference",
+  refund: "refund_reference",
+  chargeback: "chargeback_reference",
+  serviceCase: "service_case",
 } as const;
 
 type SequenceKind = keyof typeof SEQUENCES;
 
-async function nextVal(
-  kind: SequenceKind,
-  tx?: Prisma.TransactionClient,
+/**
+ * Advances one counter and returns its new value.
+ *
+ * `client` must be connection-pinned — an interactive transaction, not the
+ * pool. The two statements below communicate through `LAST_INSERT_ID`, which is
+ * per-connection session state: issued against a bare pool they may be handed
+ * different connections, and the SELECT would then read whatever that second
+ * connection last inserted, or zero. `nextVal` below is what guarantees the
+ * pinning; nothing else may call this.
+ */
+async function allocate(
+  client: Prisma.TransactionClient,
+  sequence: string,
 ): Promise<number> {
-  const client = tx ?? prisma;
-  const sequence = SEQUENCES[kind];
+  const updated = await client.$executeRaw`
+    UPDATE \`ReferenceSequence\`
+    SET \`value\` = LAST_INSERT_ID(\`value\` + 1), \`updatedAt\` = NOW(3)
+    WHERE \`kind\` = ${sequence}
+  `;
 
-  // The sequence name comes from the constant map above, never from caller
-  // input, so there is nothing injectable here.
-  const rows = await client.$queryRawUnsafe<{ nextval: bigint }[]>(
-    `SELECT nextval('${sequence}') AS nextval`,
-  );
+  // The migration seeds one row per kind. A missing row means the schema and
+  // this map have diverged, which must not be papered over by inventing a
+  // starting point — the numbers already issued are unknown from here.
+  if (updated === 0) {
+    throw new Error(
+      `Reference sequence "${sequence}" has no row in ReferenceSequence.`,
+    );
+  }
 
-  const value = rows[0]?.nextval;
+  // Reads back what the UPDATE just stored on this same connection.
+  const rows = await client.$queryRaw<{ value: bigint }[]>`
+    SELECT LAST_INSERT_ID() AS \`value\`
+  `;
+
+  const value = rows[0]?.value;
   if (value === undefined) {
     throw new Error(`Sequence ${sequence} returned no value.`);
   }
 
   return Number(value);
+}
+
+/**
+ * Allocates the next value for a kind, joining the caller's transaction when
+ * there is one and opening a short transaction of its own when there is not.
+ *
+ * The transaction is not about atomicity across several writes — it is how a
+ * single connection is held for both statements in `allocate`.
+ */
+async function nextVal(
+  kind: SequenceKind,
+  tx?: Prisma.TransactionClient,
+): Promise<number> {
+  const sequence = SEQUENCES[kind];
+
+  if (tx) return allocate(tx, sequence);
+
+  return prisma.$transaction((pinned) => allocate(pinned, sequence));
 }
 
 /** Booking number in the reference CRM's format, e.g. `MV70056`. */

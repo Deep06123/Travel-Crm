@@ -8,6 +8,9 @@ import { useFormStatus } from "react-dom";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Field, Input, Select, Textarea } from "@/components/ui/field";
 import { Panel } from "@/components/ui/panel";
+
+import { BillingInformation } from "./billing-information";
+import { ItinerarySource } from "./itinerary-source";
 import {
   BookingPriority,
   BookingStatus,
@@ -98,6 +101,42 @@ export function CruiseBookingForm({
             )}
           </Field>
 
+
+          {/* Per-booking email overrides. Left blank, the template decides —
+              which keeps an automatic confirmation reading the same whoever
+              happened to trigger it. */}
+          <Field
+            id="customEmailSubject"
+            label="Custom email subject"
+            hint="Leave blank to use the standard subject."
+            error={error("customEmailSubject")}
+          >
+            {(props) => (
+              <Input
+                {...props}
+                name="customEmailSubject"
+                defaultValue={value("customEmailSubject")}
+                placeholder="Custom Email Subject"
+              />
+            )}
+          </Field>
+
+          <Field
+            id="emailTopHeading"
+            label="Email top heading"
+            hint="Shown in the banner at the top of the email."
+            error={error("emailTopHeading")}
+          >
+            {(props) => (
+              <Input
+                {...props}
+                name="emailTopHeading"
+                defaultValue={value("emailTopHeading")}
+                placeholder="Email Top Heading"
+              />
+            )}
+          </Field>
+
           <Field id="bookedAt" label="Booking date" hint="Defaults to now." error={error("bookedAt")}>
             {(props) => <Input {...props} name="bookedAt" type="date" defaultValue={value("bookedAt")} />}
           </Field>
@@ -163,6 +202,19 @@ export function CruiseBookingForm({
             {(props) => <Input {...props} name="reservationNumber" defaultValue={value("reservationNumber")} />}
           </Field>
 
+          <Field id="tfnId" label="TFN" error={error("tfnId")}>
+            {(props) => (
+              <Select {...props} name="tfnId" defaultValue={value("tfnId")}>
+                <option value="">— Select —</option>
+                {options.tfns.map((tfn) => (
+                  <option key={tfn.id} value={tfn.id}>
+                    {tfn.label} ({tfn.number})
+                  </option>
+                ))}
+              </Select>
+            )}
+          </Field>
+
           <Field id="departurePort" label="Departure port" error={error("departurePort")}>
             {(props) => <Input {...props} name="departurePort" defaultValue={value("departurePort")} />}
           </Field>
@@ -202,6 +254,17 @@ export function CruiseBookingForm({
             )}
           </Field>
         </div>
+
+        <ItinerarySource
+          textName="reservationText"
+          textLabel="Reservation text"
+          textHint="Paste the cruise line's confirmation. Stored exactly as pasted, for reference only — it is never parsed."
+          textPlaceholder="Please copy and paste the reservation here…"
+          textError={error("reservationText")}
+          htmlName="itineraryHtml"
+          defaultText={value("reservationText")}
+          defaultHtml={value("itineraryHtml")}
+        />
       </Panel>
 
       <Panel title="Cabin and dining" collapsible={false}>
@@ -307,7 +370,7 @@ export function CruiseBookingForm({
         </Repeater>
       </Panel>
 
-      <Panel title="Customer and billing" collapsible={false}>
+      <Panel title="Customer" collapsible={false}>
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
           <Field
             id="customerId"
@@ -349,28 +412,12 @@ export function CruiseBookingForm({
             {(props) => <Input {...props} name="contactPhone" type="tel" defaultValue={value("contactPhone")} />}
           </Field>
 
-          <Field id="billingAddressLine1" label="Billing address" error={error("billingAddressLine1")} className="sm:col-span-2">
-            {(props) => <Input {...props} name="billingAddressLine1" defaultValue={value("billingAddressLine1")} />}
-          </Field>
-
-          <Field id="billingCity" label="City" error={error("billingCity")}>
-            {(props) => <Input {...props} name="billingCity" defaultValue={value("billingCity")} />}
-          </Field>
-
-          <Field id="billingPostalCode" label="Postal code" error={error("billingPostalCode")}>
-            {(props) => <Input {...props} name="billingPostalCode" defaultValue={value("billingPostalCode")} />}
-          </Field>
-
-          <Field id="billingCountry" label="Country" error={error("billingCountry")}>
-            {(props) => <Input {...props} name="billingCountry" defaultValue={value("billingCountry")} />}
-          </Field>
         </div>
-
-        <p className="mt-3 text-xs text-ink-muted">
-          Card numbers, CVV and expiry dates are not collected. Payments are
-          recorded against a provider transaction reference.
-        </p>
       </Panel>
+
+      {/* Billing information. The address fields live here rather than above,
+          so there is one place a billing detail is entered. */}
+      <BillingInformation value={value} error={error} />
 
       <Panel title="Accounting information" defaultOpen={false}>
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">

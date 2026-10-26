@@ -18,7 +18,7 @@ import { getEnv, resetEnvCache } from "@/lib/env";
  */
 
 const REQUIRED = {
-  DATABASE_URL: "postgresql://user:pass@localhost:5432/db",
+  DATABASE_URL: "mysql://user:pass@localhost:3306/db",
   AUTH_SECRET: "x".repeat(32),
 };
 

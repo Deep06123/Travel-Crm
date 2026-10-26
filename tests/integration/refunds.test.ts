@@ -30,7 +30,7 @@ import {
  *
  * The plan's Phase 4 completion criterion is that refunds cannot be duplicated
  * through concurrent requests or repeated submissions. Both are tested here
- * against real Postgres — a mock could not exercise the row lock that makes
+ * against a real MySQL — a mock could not exercise the row lock that makes
  * the concurrent case safe.
  */
 

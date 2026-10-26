@@ -2,10 +2,11 @@ import "dotenv/config";
 
 import { randomBytes } from "node:crypto";
 
-import { PrismaPg } from "@prisma/adapter-pg";
+import { PrismaMariaDb } from "@prisma/adapter-mariadb";
 import bcrypt from "bcryptjs";
 
 import { PrismaClient } from "../src/generated/prisma/client";
+import { mysqlPoolConfig } from "../src/lib/db/mysql-url";
 import { AdminRole, SupplierType } from "../src/generated/prisma/enums";
 import {
   DEFAULT_ROLE_PERMISSIONS,
@@ -27,7 +28,9 @@ if (!connectionString) {
 }
 
 const prisma = new PrismaClient({
-  adapter: new PrismaPg({ connectionString }),
+  adapter: new PrismaMariaDb(
+    mysqlPoolConfig(connectionString, { connectionLimit: 2 }),
+  ),
 });
 
 async function seedPermissions(): Promise<void> {
@@ -169,7 +172,14 @@ async function seedSuppliers(): Promise<void> {
 
   await prisma.supplier.upsert({
     where: { name: "Airline website" },
-    create: { name: "Airline website", type: SupplierType.AIRLINE },
+    // `supportedProducts` is written out because a MySQL JSON column has no
+    // literal DEFAULT. Empty means "no product restriction recorded", which
+    // the booking forms read as selectable for everything.
+    create: {
+      name: "Airline website",
+      type: SupplierType.AIRLINE,
+      supportedProducts: [],
+    },
     update: {},
   });
 

@@ -11,6 +11,7 @@ import type { Prisma } from "@/generated/prisma/client";
 import { diffFields, recordAudit } from "@/lib/audit";
 import { hashPassword } from "@/lib/auth/password";
 import { revokeAllSessionsForUser } from "@/lib/auth/session";
+import { toStringList } from "@/lib/db/json-list";
 import { prisma } from "@/lib/db/prisma";
 import {
   paginate,
@@ -22,11 +23,16 @@ import {
 /**
  * Agents — booking-floor staff.
  *
- * The reference CRM's agent list renders a PASSWORD column in plaintext. That
- * is not reproduced and cannot be: passwords exist only as bcrypt digests on
- * AdminUser, and nothing in this module reads `passwordHash`, let alone
- * returns it. An administrator who needs to restore access issues a one-time
- * password that is shown once and never stored in recoverable form.
+ * The reference CRM's agent list renders a PASSWORD column in plaintext — every
+ * agent's real, chosen password, readable forever. That is not reproduced and
+ * cannot be: chosen passwords exist only as bcrypt digests on AdminUser, and
+ * nothing in this module reads `passwordHash`, let alone returns it.
+ *
+ * What is readable is narrower. `AdminUser.pendingPassword` holds the one-time
+ * password an account was provisioned or reset with, so whoever issued it can
+ * pass it on instead of having a single chance to copy it. It is erased the
+ * moment the holder signs in, and a password they choose never lands there —
+ * so the column is empty for every account in normal use.
  *
  * An Agent row is a profile attached to an AdminUser. Authentication always
  * goes through AdminUser, so there is no second credential path.
@@ -51,10 +57,30 @@ const AGENT_SELECT = {
       status: true,
       lastLoginAt: true,
       mustChangePassword: true,
+      // Null for every account that has signed in, which is most of them.
+      // Whether it is rendered is a separate decision, made by the page
+      // against `agent.manage` — selecting it is not the same as showing it.
+      pendingPassword: true,
       createdAt: true,
     },
   },
 } satisfies Prisma.AgentSelect;
+
+/**
+ * Turns the stored JSON allowlist back into a list of strings.
+ *
+ * `allowedIpRanges` is a JSON column on MySQL rather than the `text[]` it was
+ * on Postgres, so Prisma types it as `JsonValue`. Decoding here keeps that an
+ * implementation detail of this module: callers continue to receive
+ * `string[]`, and a malformed row yields an empty allowlist rather than a
+ * crash — which denies nothing, since an empty list means "no IP restriction"
+ * and is the shape the vast majority of rows already hold.
+ */
+function withDecodedIpRanges<T extends { allowedIpRanges: unknown }>(
+  agent: T,
+): Omit<T, "allowedIpRanges"> & { allowedIpRanges: string[] } {
+  return { ...agent, allowedIpRanges: toStringList(agent.allowedIpRanges) };
+}
 
 export class DuplicateAgentError extends Error {
   constructor(field: "email" | "username" | "dialerId", value: string) {
@@ -77,8 +103,9 @@ export interface CreatedAgent {
   agentId: string;
   adminUserId: string;
   /**
-   * Shown to the administrator exactly once. Only its bcrypt digest is stored,
-   * so it cannot be recovered afterwards.
+   * The provisioning password, also kept in `AdminUser.pendingPassword` so the
+   * creator can read it back until the holder first signs in. It is erased at
+   * that point, and a password the holder chooses never lands there.
    */
   oneTimePassword: string;
 }
@@ -107,8 +134,9 @@ export async function createAgent(
   if (usernameTaken) throw new DuplicateAgentError("username", username!);
   if (dialerTaken) throw new DuplicateAgentError("dialerId", input.dialerId!);
 
-  // 24 random bytes, base64url — far beyond guessing, and never persisted in
-  // plaintext.
+  // 24 random bytes, base64url — far beyond guessing. Kept readable in
+  // `pendingPassword` only until the holder first signs in, so whoever created
+  // the account can pass it on rather than having one chance to copy it.
   const oneTimePassword = randomBytes(18).toString("base64url");
 
   return prisma.$transaction(async (tx) => {
@@ -119,6 +147,7 @@ export async function createAgent(
         name: input.name.trim(),
         phone: input.phone?.trim() || null,
         passwordHash: await hashPassword(oneTimePassword),
+        pendingPassword: oneTimePassword,
         role: input.role,
         status: AdminUserStatus.ACTIVE,
         // The provisioning password is never the long-lived credential.
@@ -132,6 +161,10 @@ export async function createAgent(
         adminUserId: adminUser.id,
         dialerId: input.dialerId?.trim() || null,
         team: input.team?.trim() || null,
+        // Supplied explicitly: a MySQL JSON column cannot carry a literal
+        // DEFAULT, so there is no value for an omitted field to fall back to.
+        // A new agent starts with no IP restriction.
+        allowedIpRanges: [],
       },
       select: { id: true },
     });
@@ -292,6 +325,9 @@ export async function resetAgentPassword(
     where: { id: agent.adminUserId },
     data: {
       passwordHash: await hashPassword(oneTimePassword),
+      // Readable again until used: a reset exists because somebody is locked
+      // out, and they have to be told the new one.
+      pendingPassword: oneTimePassword,
       passwordChangedAt: new Date(),
       mustChangePassword: true,
       failedLoginAttempts: 0,
@@ -358,11 +394,11 @@ export async function listAgents(
   if (filters.q) {
     const term = filters.q.trim();
     where.OR = [
-      { dialerId: { contains: term, mode: "insensitive" } },
-      { team: { contains: term, mode: "insensitive" } },
-      { adminUser: { name: { contains: term, mode: "insensitive" } } },
-      { adminUser: { email: { contains: term, mode: "insensitive" } } },
-      { adminUser: { username: { contains: term, mode: "insensitive" } } },
+      { dialerId: { contains: term } },
+      { team: { contains: term } },
+      { adminUser: { name: { contains: term } } },
+      { adminUser: { email: { contains: term } } },
+      { adminUser: { username: { contains: term } } },
       { adminUser: { phone: { contains: term } } },
     ];
   }
@@ -380,14 +416,18 @@ export async function listAgents(
     prisma.agent.count({ where }),
   ]);
 
-  return paginate(rows, total, pagination) as Paginated<(typeof rows)[number]>;
+  const agents = rows.map(withDecodedIpRanges);
+
+  return paginate(agents, total, pagination) as Paginated<(typeof agents)[number]>;
 }
 
 export async function getAgent(agentId: string) {
-  return prisma.agent.findUnique({
+  const agent = await prisma.agent.findUnique({
     where: { id: agentId },
     select: AGENT_SELECT,
   });
+
+  return agent ? withDecodedIpRanges(agent) : null;
 }
 
 /**

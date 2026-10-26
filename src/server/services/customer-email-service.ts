@@ -4,16 +4,20 @@ import { after } from "next/server";
 
 import {
   BookingProduct,
+  BookingStatus,
   NotificationChannel,
   NotificationStatus,
 } from "@/generated/prisma/enums";
 import type { Prisma } from "@/generated/prisma/client";
+import { renderETicket } from "@/lib/mail/eticket";
 import { prisma } from "@/lib/db/prisma";
+import { withUpsertRetry } from "@/lib/db/upsert-retry";
 import { loggerFor } from "@/lib/logging/logger";
 import { getMailer } from "@/lib/mail";
 import {
   renderBookingConfirmed,
   renderBookingTicketed,
+  renderEditedEmail,
   type BookingEmailData,
 } from "@/lib/mail/templates";
 
@@ -70,6 +74,8 @@ const BOOKING_SELECT = {
   totalMinor: true,
   travelStartDate: true,
   airlineConfirmation: true,
+  customEmailSubject: true,
+  emailTopHeading: true,
   contactName: true,
   contactEmail: true,
   customer: { select: { firstName: true, lastName: true, email: true } },
@@ -98,9 +104,19 @@ const BOOKING_SELECT = {
   // email may carry one, and the safest way to guarantee that is for the data
   // never to be loaded.
   passengers: {
-    orderBy: { createdAt: "asc" },
-    select: { firstName: true, lastName: true, ticketNumber: true },
+    // By the sequence captured on the booking form, so the traveller table on
+    // the e-ticket is numbered the way the agent entered it.
+    orderBy: { sequence: "asc" },
+    select: {
+      firstName: true,
+      lastName: true,
+      ticketNumber: true,
+      gender: true,
+      dateOfBirth: true,
+    },
   },
+  // The support number printed in the e-ticket header.
+  tfn: { select: { number: true } },
 } as const;
 
 export interface SendBookingEmailInput {
@@ -111,11 +127,129 @@ export interface SendBookingEmailInput {
    * the operator-triggered resend, and by a retry after a transport was fixed.
    */
   force?: boolean;
+  /**
+   * An operator-edited subject and body to send instead of the generated ones.
+   *
+   * Only ever set from the preview-and-edit control on the booking page, and
+   * only alongside `force`. The automatic sends that follow a status change
+   * never carry this — they must stay reproducible, so a confirmation reads
+   * the same whoever happened to trigger it.
+   *
+   * `body` is plain text. See `renderEditedEmail` for why it is not HTML.
+   */
+  override?: { subject: string; body: string } | undefined;
+}
+
+/** Subject and body as they would be sent, without sending or recording. */
+export interface EmailPreview {
+  /** Empty when the booking has no contact address — nothing could be sent. */
+  recipient: string;
+  subject: string;
+  body: string;
+}
+
+/**
+ * Renders what an email would say, for review before it goes out.
+ *
+ * Writes nothing and sends nothing: an operator checking the wording must not
+ * leave a notification record implying the customer heard from us. The output
+ * is the editable starting point for a corrected send.
+ */
+export async function previewBookingEmail(
+  bookingId: string,
+  event: BookingEmailEvent,
+): Promise<EmailPreview> {
+  const booking = await prisma.booking.findUnique({
+    where: { id: bookingId },
+    select: BOOKING_SELECT,
+  });
+
+  if (!booking) {
+    throw new Error(`Booking ${bookingId} does not exist.`);
+  }
+
+  const data = toEmailData(booking);
+  const rendered =
+    event === BOOKING_CONFIRMED
+      ? renderBookingConfirmed(data)
+      : renderBookingTicketed(data);
+
+  return {
+    recipient:
+      booking.contactEmail?.trim() || booking.customer.email?.trim() || "",
+    subject: rendered.subject,
+    body: rendered.text,
+  };
+}
+
+/** The e-ticket document and who it would reach. */
+export interface ETicketPreview {
+  recipient: string;
+  subject: string;
+  html: string;
+}
+
+/**
+ * Renders the e-ticket exactly as the customer would receive it.
+ *
+ * Writes nothing and sends nothing, for the same reason `previewBookingEmail`
+ * does not: someone checking a document must not leave a notification record
+ * implying the customer heard from us.
+ *
+ * Which event it renders follows the booking's own status rather than being
+ * chosen by the caller — a booking that has not been ticketed has no e-ticket
+ * to show, and offering one would be a drawing of a document that does not
+ * exist.
+ */
+export async function getETicketPreview(
+  bookingId: string,
+  options: { redactDateOfBirth?: boolean } = {},
+): Promise<ETicketPreview | null> {
+  const booking = await prisma.booking.findUnique({
+    where: { id: bookingId },
+    select: { ...BOOKING_SELECT, status: true },
+  });
+
+  if (!booking) return null;
+
+  const data = toEmailData(booking);
+
+  const issued =
+    booking.status === BookingStatus.TICKETED ||
+    booking.status === BookingStatus.COMPLETED;
+
+  const rendered = issued
+    ? renderBookingTicketed(data)
+    : renderBookingConfirmed(data);
+
+  // Re-rendered with the redaction flag. The template's own HTML always shows
+  // the date of birth, which is right for the customer and wrong for a role
+  // that may not see it.
+  const html = renderETicket(
+    data,
+    issued
+      ? data.product === "CRUISE"
+        ? "YOUR CRUISE DOCUMENTS ARE ISSUED!!"
+        : "YOUR E-TICKET IS ISSUED!!"
+      : "YOUR RESERVATION IS CONFIRMED!!",
+    issued
+      ? "Carry photo identification matching the name on the ticket."
+      : "Thank you for booking with us.",
+    { redactDateOfBirth: options.redactDateOfBirth ?? false },
+  );
+
+  return {
+    recipient:
+      booking.contactEmail?.trim() || booking.customer.email?.trim() || "",
+    subject: rendered.subject,
+    html,
+  };
 }
 
 export async function sendBookingEmail({
   bookingId,
   event,
+  override,
   force = false,
 }: SendBookingEmailInput): Promise<EmailOutcome> {
   const dedupeKey = dedupeKeyFor(bookingId, event);
@@ -155,25 +289,38 @@ export async function sendBookingEmail({
     },
     incrementAttempt: boolean,
   ) =>
-    prisma.notification.upsert({
-      where: { dedupeKey },
-      create: {
-        dedupeKey,
-        bookingId,
-        eventType: event,
-        channel: NotificationChannel.EMAIL,
-        template,
-        recipient: recipient ?? "",
-        attemptCount: incrementAttempt ? 1 : 0,
-        payload: { bookingNumber: booking.bookingNumber },
-        ...data,
-      },
-      update: {
-        ...data,
-        ...(incrementAttempt ? { attemptCount: { increment: 1 } } : {}),
-      },
-      select: { id: true },
-    });
+    // Retried on conflict. Prisma's upsert is a SELECT then an INSERT, and the
+    // INSERT's foreign-key check fails with MySQL 1020 when the booking row it
+    // points at is being updated by a transaction that was open at the time of
+    // the SELECT — which is exactly what happens when two status transitions
+    // follow one another and the first one's email is still in flight.
+    withUpsertRetry("notification.upsert", () =>
+      prisma.notification.upsert({
+        where: { dedupeKey },
+        create: {
+          dedupeKey,
+          bookingId,
+          eventType: event,
+          channel: NotificationChannel.EMAIL,
+          template,
+          recipient: recipient ?? "",
+          attemptCount: incrementAttempt ? 1 : 0,
+          // `edited` records that a person rewrote this rather than it being
+          // the generated wording, which matters when someone later asks what
+          // the customer was actually told.
+          payload: {
+            bookingNumber: booking.bookingNumber,
+            ...(override ? { edited: true } : {}),
+          },
+          ...data,
+        },
+        update: {
+          ...data,
+          ...(incrementAttempt ? { attemptCount: { increment: 1 } } : {}),
+        },
+        select: { id: true },
+      }),
+    );
 
   if (!recipient) {
     const reason =
@@ -202,9 +349,13 @@ export async function sendBookingEmail({
     return { result: "suppressed", notificationId: row.id, reason };
   }
 
+  // An operator-edited version replaces the generated one wholesale. The
+  // booking data is still read above, because the recipient and the
+  // suppression checks come from it either way.
   const data = toEmailData(booking);
-  const rendered =
-    event === BOOKING_CONFIRMED
+  const rendered = override
+    ? renderEditedEmail(override.subject, override.body)
+    : event === BOOKING_CONFIRMED
       ? renderBookingConfirmed(data)
       : renderBookingTicketed(data);
 
@@ -279,6 +430,9 @@ function toEmailData(booking: BookingRow): BookingEmailData {
     segments: booking.segments,
     cruise: booking.cruiseDetail,
     passengers: booking.passengers,
+    customEmailSubject: booking.customEmailSubject,
+    emailTopHeading: booking.emailTopHeading,
+    supportPhone: booking.tfn?.number ?? null,
   };
 }
 

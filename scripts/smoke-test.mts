@@ -3,7 +3,9 @@ import "dotenv/config";
 import { createHash, randomBytes } from "node:crypto";
 
 import bcrypt from "bcryptjs";
-import { Pool } from "pg";
+import mariadb from "mariadb";
+
+import { mysqlPoolConfig } from "../src/lib/db/mysql-url.js";
 
 /**
  * Production smoke-test checklist, executed.
@@ -24,7 +26,9 @@ import { Pool } from "pg";
 const BASE_URL = process.env["BASE_URL"] ?? "http://localhost:3000";
 const DATABASE_URL = process.env["DATABASE_URL"];
 
-const pool = DATABASE_URL ? new Pool({ connectionString: DATABASE_URL, max: 3 }) : null;
+const pool = DATABASE_URL
+  ? mariadb.createPool(mysqlPoolConfig(DATABASE_URL, { connectionLimit: 3 }))
+  : null;
 
 type Status = "PASS" | "FAIL" | "SKIP";
 
@@ -105,8 +109,10 @@ async function sql<T = Record<string, unknown>>(
   params: unknown[] = [],
 ): Promise<T[]> {
   if (!pool) throw new Error("DATABASE_URL is required for this check");
-  const result = await pool.query(text, params);
-  return result.rows as T[];
+  // The driver returns the row array itself for a SELECT; a write returns a
+  // result summary object instead, which callers of those never read.
+  const rows = (await pool.query(text, params)) as unknown;
+  return Array.isArray(rows) ? (rows as T[]) : [];
 }
 
 async function makeUserWithSession(
@@ -116,41 +122,58 @@ async function makeUserWithSession(
   const email = `${TAG}-${role.toLowerCase()}@example.invalid`;
 
   await sql(
-    `INSERT INTO "AdminUser" (id,email,name,"passwordHash",role,status,
-       "mustChangePassword","failedLoginAttempts","passwordChangedAt","createdAt","updatedAt")
-     VALUES ($1,$2,$3,$4,$5::"AdminRole",'ACTIVE',false,0,now(),now(),now())`,
+    `INSERT INTO \`AdminUser\` (id,email,name,\`passwordHash\`,role,status,
+       \`mustChangePassword\`,\`failedLoginAttempts\`,\`passwordChangedAt\`,\`createdAt\`,\`updatedAt\`)
+     VALUES (?,?,?,?,?,'ACTIVE',false,0,NOW(3),NOW(3),NOW(3))`,
     [id, email, `Smoke ${role}`, await bcrypt.hash("smoke-password-not-used", 12), role],
   );
   created.users.push(id);
 
   const token = randomBytes(32).toString("base64url");
   await sql(
-    `INSERT INTO "AdminSession" (id,"tokenHash","adminUserId","expiresAt","lastActiveAt","createdAt")
-     VALUES ($1,$2,$3,now()+interval '1 hour',now(),now())`,
+    `INSERT INTO \`AdminSession\` (id,\`tokenHash\`,\`adminUserId\`,\`expiresAt\`,\`lastActiveAt\`,\`createdAt\`)
+     VALUES (?,?,?,DATE_ADD(NOW(3), INTERVAL 1 HOUR),NOW(3),NOW(3))`,
     [`${TAG}s${randomBytes(6).toString("hex")}`, createHash("sha256").update(token).digest("hex"), id],
   );
 
   return { id, email, token };
 }
 
+/**
+ * Runs a cleanup statement over a list of ids.
+ *
+ * MySQL has no equivalent of Postgres' `= ANY($1::text[])`, so the IN list is
+ * built from one placeholder per id. An empty list is skipped rather than
+ * rendered: `IN ()` is a syntax error, where `= ANY('{}')` simply matched
+ * nothing.
+ */
+async function purge(
+  statement: (list: string) => string,
+  ids: string[],
+): Promise<void> {
+  if (ids.length === 0) return;
+  const list = ids.map(() => "?").join(", ");
+  await sql(statement(list), ids);
+}
+
 async function cleanup(): Promise<void> {
   if (!pool) return;
 
-  await sql(`DELETE FROM "ChargebackEvidence" WHERE "documentId" = ANY($1::text[])`, [created.documents]);
-  await sql(`UPDATE "Document" SET "currentVersionId"=NULL WHERE id = ANY($1::text[])`, [created.documents]);
-  await sql(`DELETE FROM "DocumentVersion" WHERE "documentId" = ANY($1::text[])`, [created.documents]);
-  await sql(`DELETE FROM "Document" WHERE id = ANY($1::text[])`, [created.documents]);
-  await sql(`DELETE FROM "Refund" WHERE "bookingId" = ANY($1::text[])`, [created.bookings]);
-  await sql(`DELETE FROM "Payment" WHERE "bookingId" = ANY($1::text[])`, [created.bookings]);
-  await sql(`DELETE FROM "BookingStatusHistory" WHERE "bookingId" = ANY($1::text[])`, [created.bookings]);
-  await sql(`DELETE FROM "Passenger" WHERE "bookingId" = ANY($1::text[])`, [created.bookings]);
-  await sql(`DELETE FROM "FlightDetail" WHERE "bookingId" = ANY($1::text[])`, [created.bookings]);
-  await sql(`DELETE FROM "Booking" WHERE id = ANY($1::text[])`, [created.bookings]);
-  await sql(`DELETE FROM "Customer" WHERE id = ANY($1::text[])`, [created.customers]);
-  await sql(`DELETE FROM "AuditLog" WHERE "adminUserId" = ANY($1::text[])`, [created.users]);
-  await sql(`DELETE FROM "LoginEvent" WHERE "adminUserId" = ANY($1::text[])`, [created.users]);
-  await sql(`DELETE FROM "AdminSession" WHERE "adminUserId" = ANY($1::text[])`, [created.users]);
-  await sql(`DELETE FROM "AdminUser" WHERE id = ANY($1::text[])`, [created.users]);
+  await purge((list) => `DELETE FROM \`ChargebackEvidence\` WHERE \`documentId\` IN (${list})`, created.documents);
+  await purge((list) => `UPDATE \`Document\` SET \`currentVersionId\`=NULL WHERE id IN (${list})`, created.documents);
+  await purge((list) => `DELETE FROM \`DocumentVersion\` WHERE \`documentId\` IN (${list})`, created.documents);
+  await purge((list) => `DELETE FROM \`Document\` WHERE id IN (${list})`, created.documents);
+  await purge((list) => `DELETE FROM \`Refund\` WHERE \`bookingId\` IN (${list})`, created.bookings);
+  await purge((list) => `DELETE FROM \`Payment\` WHERE \`bookingId\` IN (${list})`, created.bookings);
+  await purge((list) => `DELETE FROM \`BookingStatusHistory\` WHERE \`bookingId\` IN (${list})`, created.bookings);
+  await purge((list) => `DELETE FROM \`Passenger\` WHERE \`bookingId\` IN (${list})`, created.bookings);
+  await purge((list) => `DELETE FROM \`FlightDetail\` WHERE \`bookingId\` IN (${list})`, created.bookings);
+  await purge((list) => `DELETE FROM \`Booking\` WHERE id IN (${list})`, created.bookings);
+  await purge((list) => `DELETE FROM \`Customer\` WHERE id IN (${list})`, created.customers);
+  await purge((list) => `DELETE FROM \`AuditLog\` WHERE \`adminUserId\` IN (${list})`, created.users);
+  await purge((list) => `DELETE FROM \`LoginEvent\` WHERE \`adminUserId\` IN (${list})`, created.users);
+  await purge((list) => `DELETE FROM \`AdminSession\` WHERE \`adminUserId\` IN (${list})`, created.users);
+  await purge((list) => `DELETE FROM \`AdminUser\` WHERE id IN (${list})`, created.users);
 }
 
 // --- The checklist ----------------------------------------------------------
@@ -224,7 +247,7 @@ async function main(): Promise<void> {
     const victim = await makeUserWithSession("OPERATIONS");
 
     const before = await raw("/admin", { headers: cookie(victim.token) });
-    await sql(`UPDATE "AdminSession" SET "revokedAt"=now() WHERE "adminUserId"=$1`, [victim.id]);
+    await sql(`UPDATE \`AdminSession\` SET \`revokedAt\`=NOW(3) WHERE \`adminUserId\`=?`, [victim.id]);
     const after = await raw("/admin", { headers: cookie(victim.token) });
 
     return {
@@ -244,8 +267,8 @@ async function main(): Promise<void> {
     async () => {
       if (!pool) return { skip: "needs DATABASE_URL" };
       const rows = await sql<{ mustchangepassword: boolean }>(
-        `SELECT "mustChangePassword" AS mustchangepassword FROM "AdminUser"
-         WHERE role='SUPER_ADMIN' AND email NOT LIKE $1 ORDER BY "createdAt" LIMIT 1`,
+        `SELECT \`mustChangePassword\` AS mustchangepassword FROM \`AdminUser\`
+         WHERE role='SUPER_ADMIN' AND email NOT LIKE ? ORDER BY \`createdAt\` LIMIT 1`,
         [`${TAG}%`],
       );
       const flagged = rows[0]?.mustchangepassword;
@@ -288,32 +311,32 @@ async function main(): Promise<void> {
 
     const customerId = `${TAG}c${randomBytes(6).toString("hex")}`;
     await sql(
-      `INSERT INTO "Customer" (id,reference,"firstName","lastName",email,status,"createdAt","updatedAt")
-       VALUES ($1,$2,'Smoke','Customer',$3,'ACTIVE',now(),now())`,
+      `INSERT INTO \`Customer\` (id,reference,\`firstName\`,\`lastName\`,email,status,\`createdAt\`,\`updatedAt\`)
+       VALUES (?,?,'Smoke','Customer',?,'ACTIVE',NOW(3),NOW(3))`,
       [customerId, `CUS-${TAG}`, `${TAG}@example.invalid`],
     );
     created.customers.push(customerId);
 
     bookingId = `${TAG}b${randomBytes(6).toString("hex")}`;
     await sql(
-      `INSERT INTO "Booking" (id,"bookingNumber",product,status,priority,"customerId","createdById",
-         currency,"baseFareMinor","taxesFeesMinor","totalMinor","supplierCostMinor",
-         "grossMcoMinor","netMcoMinor","ticketStatus","mcoStatus","splitCharges",
-         "bookedAt","createdAt","updatedAt")
-       VALUES ($1,$2,'FLIGHT','PENDING','NORMAL',$3,$4,'USD',82000,20997,102997,92697,
-               102997,92697,'PENDING','NOT_APPLICABLE',false,now(),now(),now())`,
+      `INSERT INTO \`Booking\` (id,\`bookingNumber\`,product,status,priority,\`customerId\`,\`createdById\`,
+         currency,\`baseFareMinor\`,\`taxesFeesMinor\`,\`totalMinor\`,\`supplierCostMinor\`,
+         \`grossMcoMinor\`,\`netMcoMinor\`,\`ticketStatus\`,\`mcoStatus\`,\`splitCharges\`,
+         \`bookedAt\`,\`createdAt\`,\`updatedAt\`)
+       VALUES (?,?,'FLIGHT','PENDING','NORMAL',?,?,'USD',82000,20997,102997,92697,
+               102997,92697,'PENDING','NOT_APPLICABLE',false,NOW(3),NOW(3),NOW(3))`,
       [bookingId, `MV${TAG.toUpperCase()}`, customerId, superAdmin.id],
     );
     created.bookings.push(bookingId);
 
     await sql(
-      `INSERT INTO "FlightDetail" (id,"bookingId",airline,origin,destination,"isRoundTrip","createdAt","updatedAt")
-       VALUES ($1,$2,'Delta','JFK','LHR',false,now(),now())`,
+      `INSERT INTO \`FlightDetail\` (id,\`bookingId\`,airline,origin,destination,\`isRoundTrip\`,\`createdAt\`,\`updatedAt\`)
+       VALUES (?,?,'Delta','JFK','LHR',false,NOW(3),NOW(3))`,
       [`${TAG}f${randomBytes(6).toString("hex")}`, bookingId],
     );
     await sql(
-      `INSERT INTO "Passenger" (id,"bookingId",sequence,"firstName","lastName",type,"passportNumber","createdAt","updatedAt")
-       VALUES ($1,$2,1,'Smoke','Passenger','ADULT',$3,now(),now())`,
+      `INSERT INTO \`Passenger\` (id,\`bookingId\`,sequence,\`firstName\`,\`lastName\`,type,\`passportNumber\`,\`createdAt\`,\`updatedAt\`)
+       VALUES (?,?,1,'Smoke','Passenger','ADULT',?,NOW(3),NOW(3))`,
       [`${TAG}p${randomBytes(6).toString("hex")}`, bookingId, `PSMOKE${TAG}`],
     );
 
@@ -354,9 +377,9 @@ async function main(): Promise<void> {
     if (!pool || !superAdmin || !bookingId) return { skip: "needs DATABASE_URL" };
 
     await sql(
-      `INSERT INTO "Payment" (id,reference,"bookingId","amountMinor",currency,method,
-         "captureMode",status,"reconciliationStatus","recordedById","capturedAt","createdAt","updatedAt")
-       VALUES ($1,$2,$3,40000,'USD','CREDIT_CARD','MANUAL_RECORD','CAPTURED','UNRECONCILED',$4,now(),now(),now())`,
+      `INSERT INTO \`Payment\` (id,reference,\`bookingId\`,\`amountMinor\`,currency,method,
+         \`captureMode\`,status,\`reconciliationStatus\`,\`recordedById\`,\`capturedAt\`,\`createdAt\`,\`updatedAt\`)
+       VALUES (?,?,?,40000,'USD','CREDIT_CARD','MANUAL_RECORD','CAPTURED','UNRECONCILED',?,NOW(3),NOW(3),NOW(3))`,
       [`${TAG}pay`, `PAY-${TAG}`, bookingId, superAdmin.id],
     );
 
@@ -464,7 +487,7 @@ async function main(): Promise<void> {
     if (!pool || !documentId) return { skip: "upload did not run" };
 
     const rows = await sql<{ storagekey: string }>(
-      `SELECT "storageKey" AS storagekey FROM "DocumentVersion" WHERE "documentId"=$1 LIMIT 1`,
+      `SELECT \`storageKey\` AS storagekey FROM \`DocumentVersion\` WHERE \`documentId\`=? LIMIT 1`,
       [documentId],
     );
     const key = rows[0]?.storagekey;
@@ -668,10 +691,10 @@ async function main(): Promise<void> {
   });
 
   await check("Email", "Nothing claims SENT without a provider", async () => {
-    const { rows } = await pool!.query<{ count: string }>(
-      `SELECT count(*)::text AS count
-         FROM "Notification"
-        WHERE status = 'SENT' AND (provider IS NULL OR "sentAt" IS NULL)`,
+    const rows = await sql<{ count: bigint }>(
+      `SELECT COUNT(*) AS count
+         FROM \`Notification\`
+        WHERE status = 'SENT' AND (provider IS NULL OR \`sentAt\` IS NULL)`,
     );
     const bad = Number(rows[0]?.count ?? 0);
 

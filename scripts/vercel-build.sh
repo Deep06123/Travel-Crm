@@ -42,10 +42,15 @@ if [ -z "${DATABASE_URL:-}" ] && [ -f .env ]; then
 fi
 
 if [ -z "${DATABASE_URL:-}${DIRECT_URL:-}" ]; then
-  # No hosted database configured: the application embeds PostgreSQL and
-  # applies these same migrations to it at boot. Running the CLI here would
-  # fail for want of a connection string and take the build down with it.
-  echo "▸ No DATABASE_URL — migrations are applied at runtime to the embedded database"
+  # There is no longer a fallback to fall back to: MySQL has no in-process
+  # equivalent of the embedded PostgreSQL this project used to run without a
+  # connection string, so a deployment with no DATABASE_URL cannot serve a
+  # single page. Failing the build says so now, rather than letting the deploy
+  # succeed and every request 500.
+  echo "✗ DATABASE_URL is not set." >&2
+  echo "  This application requires a MySQL database. Add DATABASE_URL to the" >&2
+  echo "  project's environment variables, as mysql://user:pass@host:3306/db" >&2
+  exit 1
 elif [ "${VERCEL_ENV:-}" = "production" ]; then
   echo "▸ Production deployment — applying migrations"
   npx prisma migrate deploy

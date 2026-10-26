@@ -16,23 +16,37 @@
 
 set -euo pipefail
 
-# Prisma accepts connection-string parameters the libpq tools reject, notably
-# `schema` and the pool tuning options. They are stripped before pg_dump,
-# pg_restore or psql sees the URL.
-strip_prisma_params() {
+# Turns the `mysql://` URL into the arguments the MySQL client tools take.
+#
+# They accept no connection URL at all, so host, port, user, password and
+# schema are passed separately. The password goes through MYSQL_PWD rather than
+# --password, which would expose it in the process list to every user on the
+# machine.
+#
+# Emits shell assignments for `eval`; the values are single-quoted with inner
+# quotes escaped, so a password containing shell metacharacters survives.
+mysql_conn_vars() {
   python3 - "$1" <<'PYEOF'
 import sys
-from urllib.parse import urlsplit, urlunsplit, parse_qsl, urlencode
-
-PRISMA_ONLY = {
-    "schema", "connection_limit", "pool_timeout", "connect_timeout",
-    "socket_timeout", "max_idle_connection_lifetime", "pgbouncer",
-    "sslidentity", "sslpassword",
-}
+from urllib.parse import urlsplit, unquote
 
 parts = urlsplit(sys.argv[1])
-kept = [(k, v) for k, v in parse_qsl(parts.query) if k not in PRISMA_ONLY]
-print(urlunsplit(parts._replace(query=urlencode(kept))))
+
+if parts.scheme not in ("mysql", "mariadb"):
+    sys.exit(f"DATABASE_URL must be a mysql:// connection string, got {parts.scheme}://")
+
+database = unquote(parts.path.lstrip("/"))
+if not database:
+    sys.exit("DATABASE_URL names no database.")
+
+def quote(value: str) -> str:
+    return "'" + value.replace("'", "'\\''") + "'"
+
+print(f"DB_HOST={quote(parts.hostname or '127.0.0.1')}")
+print(f"DB_PORT={quote(str(parts.port or 3306))}")
+print(f"DB_USER={quote(unquote(parts.username or 'root'))}")
+print(f"DB_NAME={quote(database)}")
+print(f"MYSQL_PWD={quote(unquote(parts.password or ''))}")
 PYEOF
 }
 
@@ -56,22 +70,35 @@ if [[ -z "$DATABASE_URL" ]]; then
   exit 1
 fi
 
-PG_URL="$(strip_prisma_params "$DATABASE_URL")"
+eval "$(mysql_conn_vars "$DATABASE_URL")"
+export MYSQL_PWD
+
+MYSQL_ARGS=(--host="$DB_HOST" --port="$DB_PORT" --user="$DB_USER")
 
 STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 TARGET="$DEST/$STAMP"
 mkdir -p "$TARGET"
 
 echo "==> Backing up the database"
-# Custom format: compressed, and restorable selectively with pg_restore.
-pg_dump "$PG_URL" \
-  --format=custom \
-  --no-owner \
-  --no-privileges \
-  --file="$TARGET/database.dump"
+# --single-transaction takes a consistent snapshot without locking writers out,
+# which InnoDB supports and which matters on a database serving a booking floor.
+#
+# --routines and --triggers are included so the dump is the whole schema, not
+# only its tables. --no-tablespaces avoids needing the PROCESS privilege, which
+# a managed provider will not grant.
+#
+# Gzipped rather than mysqldump's plain SQL: these dumps are mostly repetitive
+# text and compress by roughly an order of magnitude.
+mysqldump "${MYSQL_ARGS[@]}" \
+  --single-transaction \
+  --routines \
+  --triggers \
+  --no-tablespaces \
+  --databases "$DB_NAME" \
+  | gzip > "$TARGET/database.sql.gz"
 
-DB_SIZE="$(du -h "$TARGET/database.dump" | cut -f1)"
-echo "    database.dump ($DB_SIZE)"
+DB_SIZE="$(du -h "$TARGET/database.sql.gz" | cut -f1)"
+echo "    database.sql.gz ($DB_SIZE)"
 
 echo "==> Backing up the document store"
 if [[ -d "$STORAGE_ROOT" ]] && [[ -n "$(ls -A "$STORAGE_ROOT" 2>/dev/null)" ]]; then
@@ -86,13 +113,18 @@ else
   : > "$TARGET/documents.none"
 fi
 
+# -N drops the column header, -B gives tab-separated output: between them the
+# query returns the bare value a shell variable wants.
+query() {
+  mysql "${MYSQL_ARGS[@]}" -NB --database="$DB_NAME" -e "$1" 2>/dev/null || echo 'unknown'
+}
+
 echo "==> Recording what was captured"
 {
   echo "taken_at=$STAMP"
-  echo "schema_migrations=$(psql "$PG_URL" -tAc \
-    'SELECT count(*) FROM "_prisma_migrations" WHERE finished_at IS NOT NULL' 2>/dev/null || echo 'unknown')"
+  echo "schema_migrations=$(query 'SELECT count(*) FROM `_prisma_migrations` WHERE finished_at IS NOT NULL')"
   for table in AdminUser Customer Booking Payment Refund Document; do
-    echo "rows_${table}=$(psql "$PG_URL" -tAc "SELECT count(*) FROM \"$table\"" 2>/dev/null || echo 'unknown')"
+    echo "rows_${table}=$(query "SELECT count(*) FROM \`$table\`")"
   done
 } > "$TARGET/manifest.txt"
 
@@ -100,7 +132,7 @@ echo "==> Recording what was captured"
 ( cd "$TARGET" && sha256sum ./* > checksums.sha256 2>/dev/null || true )
 
 echo
-cat "$TARGET/manifest.txt" | sed 's/^/    /'
+sed 's/^/    /' "$TARGET/manifest.txt"
 
 if [[ "$RETAIN_DAYS" -gt 0 ]]; then
   echo

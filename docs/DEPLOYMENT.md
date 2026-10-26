@@ -8,7 +8,7 @@ environment. Be clear about which is which:
 
 | Verified here | Not verified |
 |---|---|
-| Migrations apply to an empty PostgreSQL 18 | Behaviour on a managed Postgres service |
+| Migrations generated for MySQL 8.0 from the schema | Applying them against a running MySQL, and behaviour on a managed service |
 | Seed provisions permissions, roles and the first admin | TLS termination and domain routing |
 | Backup and restore round-trips, rows and document bytes | Restore under real production volume |
 | 239 unit/integration + 22 browser tests pass | Load, concurrency at scale, failover |
@@ -26,7 +26,7 @@ reaches the browser bundle.
 
 | Variable | Required | Notes |
 |---|---|---|
-| `DATABASE_URL` | yes | PostgreSQL connection string. Use the **pooled** one on a serverless host |
+| `DATABASE_URL` | yes | MySQL connection string, `mysql://user:pass@host:3306/db`. Use the **pooled** one on a serverless host. No default — the application cannot start without it |
 | `DIRECT_URL` | serverless | Direct, non-pooled string. Used by the Prisma CLI for migrations and seeding only |
 | `AUTH_SECRET` | yes | ≥32 chars. `openssl rand -base64 32` |
 | `AUTH_URL` | yes | Canonical origin, e.g. `https://crm.example.com` |
@@ -69,7 +69,7 @@ are database-backed — but rotating database credentials requires a redeploy.
 ## Deployment sequence
 
 ```bash
-# 1. Provision PostgreSQL and private object storage.
+# 1. Provision MySQL 8.0+ and private object storage.
 #    The storage root must not be web-served.
 
 # 2. Set the environment variables above.
@@ -95,6 +95,11 @@ seed will not create a second administrator or reset an existing password.
 ### Runtime requirements
 
 - Node.js 20.9+ (22 recommended; developed and tested on 22.22)
+- MySQL 8.0+ (or MariaDB 10.6+). The schema uses JSON columns and the
+  `utf8mb4_unicode_ci` collation, and the search filters rely on that
+  collation being case-insensitive
+- `mysqldump` and `mysql` on the host, for `scripts/backup.sh` and
+  `scripts/restore.sh`
 - A persistent filesystem for `STORAGE_LOCAL_ROOT`, or the `blob` driver
 - Outbound network access is **not** required — no integrations are configured
 
@@ -117,13 +122,22 @@ gitignored, so a clean checkout has no client at all. `postinstall` runs
 
 **Connections are per-instance.** Use the provider's pooled string for
 `DATABASE_URL` and its direct string for `DIRECT_URL`. Migrations run over
-`DIRECT_URL` (`prisma7.config.ts`) because a transaction-mode pooler cannot
-hold the session state that DDL and advisory locks require.
+`DIRECT_URL` (`prisma7.config.ts`) because a proxy that multiplexes connections
+cannot hold the session state that DDL and metadata locks require. Where the
+provider offers only one endpoint, leave `DIRECT_URL` unset.
+
+**`DATABASE_URL` is required.** The application has no no-database mode: it
+once embedded a PostgreSQL in its own process, and MySQL has no in-process
+equivalent. `vercel-build` fails the build when the variable is missing, rather
+than letting a deployment succeed and 500 on every request.
 
 ### Sequence
 
-1. **Create a Postgres database.** Prisma Postgres, Neon and Supabase all have
-   a free tier. Copy both the pooled and the direct connection string.
+1. **Create a MySQL 8.0+ database.** PlanetScale, Aiven and Railway all have
+   a free or low-cost tier. Copy both the pooled and the direct connection
+   string, and note whether the provider requires TLS — if so, append
+   `?ssl=true`. Use the `mysql://` scheme: that is what the Prisma CLI
+   requires, and the application translates it for the driver.
 
 2. **Import the repository** in the Vercel dashboard. The Next.js preset is
    detected automatically; leave the build command alone. `vercel-build` is
@@ -179,7 +193,7 @@ Worth knowing before you rely on it:
 - **Instances sleep.** The first request after idle pays a cold start plus a
   fresh database connection.
 - **No scheduled jobs worth the name.** `scripts/backup.sh` is not run for you.
-  Database backups become the Postgres provider's responsibility — check what
+  Database backups become the MySQL provider's responsibility — check what
   the free tier actually retains, because for most it is days, not months.
 - **Hobby is for non-commercial use.** Running a real agency's bookings on it
   is outside Vercel's terms; that needs a Pro plan.
@@ -203,6 +217,228 @@ not in the application, so local HTTP development is unaffected.
 Session cookies are `secure` whenever `NODE_ENV=production`, so the application
 must be served over HTTPS or sign-in will not work.
 
+## Deploying to a Hostinger VPS
+
+Unlike Vercel, this is the "one long-lived host" the deployment sequence above
+assumes, so that sequence applies unchanged. What follows is the surrounding
+setup Hostinger does not do for you.
+
+**Only a VPS plan works.** Hostinger's Web Hosting and Cloud Hosting tiers are
+PHP/LiteSpeed environments: they cannot hold a long-lived Node process, bind a
+port, or give the SSH access `scripts/backup.sh` needs for `mysqldump`. KVM 2
+(2 vCPU / 8 GB) is the practical floor, because the peak load is `next build`
+rather than serving traffic — this dependency set routinely pushes past 2 GB
+while MySQL is also resident. KVM 1 works if you build elsewhere and ship the
+artefact, or add swap.
+
+### 1. Provision and harden
+
+Create the VPS with Ubuntu 24.04 LTS, then from the hPanel browser terminal or
+over SSH as root:
+
+```bash
+adduser deploy && usermod -aG sudo deploy
+rsync --archive --chown=deploy:deploy ~/.ssh /home/deploy   # keep key access
+
+ufw allow OpenSSH && ufw allow 80 && ufw allow 443 && ufw enable
+```
+
+Only 22, 80 and 443 are ever exposed. MySQL stays on localhost and the Node
+process is never reached directly — nginx is the only thing in front of it.
+
+### 2. Install the runtime
+
+```bash
+curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
+sudo apt-get install -y nodejs mysql-server nginx git
+sudo mysql_secure_installation
+```
+
+`mysql-server` brings `mysqldump` and `mysql`, which the backup and restore
+scripts shell out to.
+
+### 3. Create the database
+
+The collation is not optional. The schema uses `utf8mb4_unicode_ci`, and the
+search filters rely on it being case-insensitive — create the database with the
+wrong one and `q=` searches silently stop matching on case.
+
+```sql
+CREATE DATABASE travel_crm CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+CREATE USER 'travel_crm'@'localhost' IDENTIFIED BY '<strong-password>';
+GRANT ALL PRIVILEGES ON travel_crm.* TO 'travel_crm'@'localhost';
+FLUSH PRIVILEGES;
+```
+
+### 4. Check out and configure
+
+```bash
+sudo mkdir -p /srv/travel-crm /srv/travel-crm-storage
+sudo chown -R deploy:deploy /srv/travel-crm /srv/travel-crm-storage
+git clone <your-repo> /srv/travel-crm && cd /srv/travel-crm
+```
+
+`/srv/travel-crm-storage` is deliberately outside the checkout: the env schema
+rejects a `STORAGE_LOCAL_ROOT` under `public/`, because anything there would be
+served as a static file and bypass the permission check in
+`/api/admin/documents/[id]/view`.
+
+Write `/srv/travel-crm/.env` (`chmod 600`):
+
+```bash
+NODE_ENV="production"
+DATABASE_URL="mysql://travel_crm:<password>@127.0.0.1:3306/travel_crm"
+AUTH_SECRET="<openssl rand -base64 32 — a new one, never the local value>"
+AUTH_URL="https://crm.example.com"
+STORAGE_DRIVER="local"
+STORAGE_LOCAL_ROOT="/srv/travel-crm-storage"
+LOG_LEVEL="info"
+BUSINESS_TIMEZONE="Asia/Kolkata"
+
+INITIAL_ADMIN_EMAIL="you@example.com"
+INITIAL_ADMIN_NAME="Your Name"
+INITIAL_ADMIN_USERNAME="admin"
+# INITIAL_ADMIN_PASSWORD deliberately unset — the seed generates and prints one.
+```
+
+Leave `DIRECT_URL` unset. It exists for serverless hosts whose pooler cannot
+hold the session state DDL requires; here the one connection string is direct.
+
+### 5. Build, migrate, seed
+
+```bash
+npm ci
+npm run build          # prisma generate && next build
+npm run db:deploy      # never `migrate dev` — it can reset data
+npm run db:seed        # capture the one-time password from stdout
+```
+
+`npm run vercel-build` is for Vercel only; on a VPS the migration step is the
+separate `db:deploy` above, so you control when schema changes land relative to
+the process restart.
+
+### 6. Run it under systemd
+
+`next start` must survive logout and reboot. `/etc/systemd/system/travel-crm.service`:
+
+```ini
+[Unit]
+Description=Travel Booking CRM
+After=network.target mysql.service
+
+[Service]
+Type=simple
+User=deploy
+WorkingDirectory=/srv/travel-crm
+EnvironmentFile=/srv/travel-crm/.env
+ExecStart=/usr/bin/npm run start
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
+```
+
+```bash
+sudo systemctl enable --now travel-crm
+journalctl -u travel-crm -f
+```
+
+Pino writes structured JSON to stdout, so journald becomes the log sink the
+Monitoring section refers to. `journalctl -u travel-crm -p err` is the
+`level=error` filter.
+
+### 7. Reverse proxy and TLS
+
+Point the domain's A record at the VPS IP, then:
+
+```nginx
+server {
+    server_name crm.example.com;
+
+    # Documents and PNR uploads exceed the 1 MB default.
+    client_max_body_size 25m;
+
+    location / {
+        proxy_pass http://127.0.0.1:3000;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+    }
+}
+```
+
+```bash
+sudo certbot --nginx -d crm.example.com
+```
+
+Then add HSTS to the server block — at the terminator, not in `next.config.ts`,
+so local HTTP development is unaffected:
+
+```nginx
+add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+```
+
+**HTTPS is not optional.** Session cookies carry `secure` whenever
+`NODE_ENV=production`, so over plain HTTP the cookie is set and never sent
+back: sign-in appears to succeed and every subsequent request is anonymous.
+`AUTH_URL` must match the real origin exactly.
+
+### 8. Verify
+
+```bash
+BASE_URL=https://crm.example.com \
+DATABASE_URL="mysql://travel_crm:<password>@127.0.0.1:3306/travel_crm" \
+npm run smoke
+```
+
+31 checks, non-zero exit on any failure. This is the acceptance gate.
+
+### 9. Backups
+
+Nothing schedules them for you. As the `deploy` user:
+
+```cron
+20 2 * * * cd /srv/travel-crm && scripts/backup.sh /var/backups/travel-crm >> /var/log/travel-crm-backup.log 2>&1
+```
+
+Then copy the archives off the host — Hostinger's own VPS snapshots are a
+separate thing and restore the whole machine, not one database. A backup living
+only on the machine that failed is not a backup.
+
+### Redeploying
+
+```bash
+cd /srv/travel-crm
+scripts/backup.sh /var/backups/travel-crm    # mandatory if the release migrates
+git pull && npm ci && npm run build
+npm run db:deploy
+sudo systemctl restart travel-crm
+BASE_URL=https://crm.example.com npm run smoke
+```
+
+There is a brief outage during the restart. Removing it needs two ports and an
+nginx upstream switch, which is more machinery than a single-agency CRM
+warrants.
+
+### Hostinger-specific gotchas
+
+- **Outbound SMTP is blocked by default** on new VPS instances. Irrelevant
+  while `MAIL_DRIVER` is `none`, but customer email will fail silently-ish
+  until you ask support to unblock the port.
+- **No `output: "standalone"`** is configured, so the runtime needs the full
+  `node_modules` on the box. Building elsewhere means shipping `.next`,
+  `node_modules`, `public`, `package.json` and `prisma/` together.
+- **`prisma migrate dev` will fail** against a user without database-creation
+  rights — it needs a shadow database. `db:deploy` does not, which is the
+  command production uses anyway. Grant the right or set `SHADOW_DATABASE_URL`
+  only if you intend to author migrations on the server, which you should not.
+
 ## Backups
 
 ```bash
@@ -220,7 +456,7 @@ application host — a backup on the machine that failed is not a backup.
 
 ```bash
 scripts/restore.sh /var/backups/travel-crm/20261018T213746Z \
-  'postgresql://user:pass@host:5432/travel_crm' /srv/travel-crm/storage
+  'mysql://user:pass@host:3306/travel_crm' /srv/travel-crm/storage
 ```
 
 The script verifies checksums, refuses to restore over a populated database,

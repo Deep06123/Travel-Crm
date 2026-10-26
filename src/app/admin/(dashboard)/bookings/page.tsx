@@ -12,6 +12,7 @@ import {
   Thead,
   Tr,
 } from "@/components/tables/data-table";
+import { FollowUpState, RowActions } from "@/components/tables/booking-row";
 import { PaginationControls } from "@/components/tables/pagination-controls";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Input, Select } from "@/components/ui/field";
@@ -48,11 +49,13 @@ export default async function BookingsPage({
   searchParams,
 }: PageProps<"/admin/bookings">) {
   await requirePermission(PERMISSIONS.BOOKING_VIEW);
-  const [canCreate, canViewMoney, canExport] = await Promise.all([
-    currentUserCan(PERMISSIONS.BOOKING_CREATE),
-    currentUserCan(PERMISSIONS.PAYMENT_VIEW),
-    currentUserCan(PERMISSIONS.BOOKING_EXPORT),
-  ]);
+  const [canCreate, canViewMoney, canExport, canViewDocuments] =
+    await Promise.all([
+      currentUserCan(PERMISSIONS.BOOKING_CREATE),
+      currentUserCan(PERMISSIONS.PAYMENT_VIEW),
+      currentUserCan(PERMISSIONS.BOOKING_EXPORT),
+      currentUserCan(PERMISSIONS.DOCUMENT_VIEW),
+    ]);
 
   const params = await searchParams;
 
@@ -69,6 +72,8 @@ export default async function BookingsPage({
     priority: pick("priority"),
     agentId: pick("agentId"),
     supplierId: pick("supplierId"),
+    language: pick("language"),
+    cardLast4: pick("cardLast4"),
     currency: pick("currency"),
     from: pick("from"),
     to: pick("to"),
@@ -110,7 +115,9 @@ export default async function BookingsPage({
     return search ? `/admin/bookings?${search}` : "/admin/bookings";
   };
 
-  const columnCount = canViewMoney ? 9 : 8;
+  // Booking, customer, confirmation, status, ticketing, MCO, agent, created
+  // by, follow-up, booked, actions — plus the money column when permitted.
+  const columnCount = canViewMoney ? 12 : 11;
 
   // The export carries exactly the filters the list is showing, so the file
   // matches the screen rather than silently being everything.
@@ -261,6 +268,39 @@ export default async function BookingsPage({
             </div>
 
             <div>
+              <label htmlFor="language" className="mb-1.5 block text-sm font-medium text-ink">
+                Language
+              </label>
+              <Select
+                id="language"
+                name="language"
+                defaultValue={filters.language ?? ""}
+              >
+                <option value="">All languages</option>
+                <option value="en">English</option>
+                <option value="es">Spanish</option>
+                <option value="fr">French</option>
+              </Select>
+            </div>
+
+            <div>
+              <label htmlFor="cardLast4" className="mb-1.5 block text-sm font-medium text-ink">
+                Last 4 of card
+              </label>
+              {/* Matched against the booking's payments: the booking itself
+                  holds no card detail, and never a full number. */}
+              <Input
+                id="cardLast4"
+                name="cardLast4"
+                inputMode="numeric"
+                maxLength={4}
+                pattern="\d{4}"
+                placeholder="4242"
+                defaultValue={filters.cardLast4 ?? ""}
+              />
+            </div>
+
+            <div>
               <label htmlFor="from" className="mb-1.5 block text-sm font-medium text-ink">
                 Booked from
               </label>
@@ -311,7 +351,10 @@ export default async function BookingsPage({
               <Th>Ticketing</Th>
               <Th>MCO</Th>
               <Th>Agent</Th>
+              <Th>Created by</Th>
+              <Th>Follow-up</Th>
               <Th>Booked</Th>
+              <Th>Actions</Th>
             </Tr>
           </Thead>
 
@@ -394,6 +437,14 @@ export default async function BookingsPage({
 
                   <Td className="text-ink-muted">{row.assignedAgent?.name ?? "—"}</Td>
 
+                  {/* Who raised the booking, which is not always who owns it
+                      now — reassignment changes the agent, never the author. */}
+                  <Td className="text-ink-muted">{row.createdBy?.name ?? "—"}</Td>
+
+                  <Td>
+                    <FollowUpState followUps={row.followUps} />
+                  </Td>
+
                   <Td className="whitespace-nowrap text-ink-muted">
                     {formatDateTime(row.bookedAt)}
                     {row.followUpAt ? (
@@ -407,6 +458,14 @@ export default async function BookingsPage({
                         Follow-up {formatRelativeDays(row.followUpAt)}
                       </div>
                     ) : null}
+                  </Td>
+
+                  <Td>
+                    <RowActions
+                      bookingId={row.id}
+                      canViewDocuments={canViewDocuments}
+                      canSeeETicket={row.product === "FLIGHT"}
+                    />
                   </Td>
                 </Tr>
               ))

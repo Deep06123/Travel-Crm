@@ -5,6 +5,7 @@ import { BookingProduct } from "@/generated/prisma/enums";
 import { createCruiseBookingAction } from "@/features/bookings/actions";
 import { CruiseBookingForm } from "@/features/bookings/cruise-booking-form";
 import { requirePermission } from "@/lib/auth/dal";
+import { toStringList } from "@/lib/db/json-list";
 import { prisma } from "@/lib/db/prisma";
 import { PERMISSIONS } from "@/lib/permissions";
 
@@ -51,13 +52,11 @@ export default async function NewCruiseBookingPage({
     // Suppliers that handle cruise, plus those with no product restriction
     // recorded yet, so an unconfigured supplier is still selectable.
     //
-    // The narrowing is done here rather than in the query. Expressed as Prisma
-    // list filters — `{ has: "CRUISE" }` with `{ isEmpty: true }` — it failed
-    // against the embedded database with "malformed array literal", because
-    // the PGlite driver adapter binds the operand of an enum-array comparison
-    // as a scalar. The hosted adapter handles it, so this page worked against
-    // real Postgres and returned a 500 on the demo, which is the worst split
-    // to have: a page nobody can reach in the environment people are sent to.
+    // The narrowing is done here rather than in the query, and on MySQL it has
+    // to be: `supportedProducts` is a JSON column, which has no equivalent of
+    // the Prisma list filters this once used (`{ has: "CRUISE" }` with
+    // `{ isEmpty: true }`). Matching inside a JSON document in SQL would mean
+    // raw `JSON_CONTAINS`, which cannot use an index either.
     //
     // Reading the column instead costs nothing worth measuring. Suppliers are
     // an operator-maintained list of tens of rows, already fetched in full by
@@ -82,11 +81,10 @@ export default async function NewCruiseBookingPage({
   ]);
 
   const cruiseSuppliers = suppliers
-    .filter(
-      (supplier) =>
-        supplier.supportedProducts.length === 0 ||
-        supplier.supportedProducts.includes(BookingProduct.CRUISE),
-    )
+    .filter((supplier) => {
+      const products = toStringList(supplier.supportedProducts);
+      return products.length === 0 || products.includes(BookingProduct.CRUISE);
+    })
     .map(({ id, name }) => ({ id, name }));
 
   return (

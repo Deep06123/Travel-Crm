@@ -20,31 +20,37 @@ const serverEnvSchema = z.object({
     .default("development"),
 
   /**
-   * PostgreSQL connection string.
+   * MySQL connection string, e.g.
+   * `mysql://user:password@host:3306/travel_crm`.
    *
-   * Optional. Left unset, the application runs against an embedded PostgreSQL
-   * (PGlite) inside its own process, which needs nothing installed or
-   * provisioned but keeps its data in memory and loses it when the process
-   * ends. Set this for anything whose records need to outlive a restart.
+   * Required. The application previously ran with this unset, against a
+   * PostgreSQL compiled to WebAssembly inside its own process; MySQL has no
+   * in-process equivalent, so there is now always a server to point at. Failing
+   * at startup with this message is much the better outcome — the alternative
+   * is a deployment that boots and then returns a connection error from every
+   * page.
+   *
+   * Use the `mysql://` scheme even though the driver underneath is mariadb:
+   * that is what Prisma's CLI requires, and `src/lib/db/prisma.ts` translates
+   * it for the driver.
    */
   DATABASE_URL: z
     .preprocess(
       // A variable present but blank is the same as absent. Hosting dashboards
-      // make an empty value easy to create and hard to notice, and failing to
-      // boot over one would be a poor reading of the operator's intent.
+      // make an empty value easy to create and hard to notice, and a blank
+      // string would otherwise fail later and less clearly than a missing one.
       (value) =>
         typeof value === "string" && value.trim() === "" ? undefined : value,
       z
-        .string()
+        .string({
+          error:
+            "DATABASE_URL is required. Set it to a MySQL connection string, e.g. mysql://user:password@localhost:3306/travel_crm",
+        })
         .refine(
-          (value) =>
-            value.startsWith("postgres://") ||
-            value.startsWith("postgresql://"),
-          "DATABASE_URL must be a PostgreSQL connection string",
-        )
-        .optional(),
-    )
-    .optional(),
+          (value) => value.startsWith("mysql://"),
+          "DATABASE_URL must be a MySQL connection string beginning with mysql://",
+        ),
+    ),
 
   /**
    * Secret used to sign and encrypt session cookies. Must be at least 32
@@ -66,27 +72,6 @@ const serverEnvSchema = z.object({
    */
   DB_POOL_MAX: z.coerce.number().int().positive().max(100).optional(),
 
-  /**
-   * Opens the application without a sign-in.
-   *
-   * When enabled, the login page offers a "Skip sign-in" control that
-   * provisions a demo SUPER_ADMIN and issues a real session, so every page and
-   * permission check behaves exactly as it does for a signed-in administrator.
-   *
-   * On by default, because this deployment exists to be explored rather than
-   * to hold a real agency's bookings, and requiring a seeded database and a
-   * password before anything can be seen made it unusable for that.
-   *
-   * Set it to "false" the moment real customer data goes in. Anyone who reaches
-   * the URL while it is on has full access to everything the database holds:
-   * passenger passport details, payment records and refund approval. The value
-   * is read server-side only, so a visitor cannot change it either way.
-   */
-  DEMO_MODE: z
-    .enum(["true", "false"])
-    .default("true")
-    .transform((value) => value === "true"),
-
   /** Session idle lifetime, in seconds. Defaults to 8 hours. */
   SESSION_MAX_AGE_SECONDS: z.coerce.number().int().positive().default(28_800),
 
@@ -103,10 +88,6 @@ const serverEnvSchema = z.object({
   /** Default business timezone for date bucketing in reports. */
   BUSINESS_TIMEZONE: z.string().default("UTC"),
 
-  /**
-   * Where uploaded documents are stored. Only `local` is implemented; add `s3`
-   * here and in `getStorage()` once S3-compatible credentials exist.
-   */
   /**
    * Where uploaded documents are stored.
    *
@@ -214,29 +195,6 @@ const serverEnvSchema = z.object({
         message: "SMTP_PASSWORD is required when SMTP_USER is set.",
       });
     }
-  })
-  /**
-   * Closes the demo once there is a real database to protect.
-   *
-   * `DEMO_MODE` defaults on so the application can be explored with nothing
-   * provisioned, and that default is only defensible while the data is
-   * fixtures in an in-memory database that dies with the process. Pointing
-   * `DATABASE_URL` at a hosted PostgreSQL changes what is at stake completely:
-   * the same default would then publish real passenger passport details,
-   * payment records and refund approval to anyone who learns the URL, as a
-   * side effect of configuring storage — a step nobody would expect to grant
-   * access.
-   *
-   * So a hosted database turns the demo off unless the operator says otherwise
-   * in as many words. `DEMO_MODE=true` is still honoured: a populated staging
-   * environment someone wants left open is a legitimate thing to run, but it
-   * should be deliberate rather than inherited.
-   */
-  .transform((env) => {
-    if (!env.DEMO_MODE || !env.DATABASE_URL) return env;
-    if (process.env["DEMO_MODE"] === "true") return env;
-
-    return { ...env, DEMO_MODE: false };
   });
 
 export type ServerEnv = z.infer<typeof serverEnvSchema>;

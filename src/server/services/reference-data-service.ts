@@ -1,8 +1,16 @@
 import "server-only";
 
-import { AuditAction, type BookingProduct, type SupplierType } from "@/generated/prisma/enums";
+import {
+  AuditAction,
+  BookingProduct,
+  type SupplierType,
+} from "@/generated/prisma/enums";
 import { diffFields, recordAudit } from "@/lib/audit";
+import { toEnumList } from "@/lib/db/json-list";
 import { prisma } from "@/lib/db/prisma";
+
+/** Every member of the enum, for validating what a JSON column gives back. */
+const BOOKING_PRODUCTS = Object.values(BookingProduct);
 
 /**
  * Operational reference data: suppliers, MCO suppliers, TFNs and booking types.
@@ -30,7 +38,7 @@ export interface SupplierInput {
 }
 
 export async function listSuppliers(includeInactive = true) {
-  return prisma.supplier.findMany({
+  const suppliers = await prisma.supplier.findMany({
     where: includeInactive ? {} : { isActive: true },
     orderBy: [{ isActive: "desc" }, { name: "asc" }],
     select: {
@@ -48,6 +56,15 @@ export async function listSuppliers(includeInactive = true) {
       _count: { select: { bookings: true } },
     },
   });
+
+  // `supportedProducts` is a JSON column on MySQL, so Prisma hands back
+  // `JsonValue`. Decoding against the enum here keeps callers typed as
+  // `BookingProduct[]`, and drops any value the enum no longer contains rather
+  // than letting it reach code that cannot handle it.
+  return suppliers.map((supplier) => ({
+    ...supplier,
+    supportedProducts: toEnumList(supplier.supportedProducts, BOOKING_PRODUCTS),
+  }));
 }
 
 export async function createSupplier(

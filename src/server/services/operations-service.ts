@@ -60,9 +60,9 @@ export async function listHighPriorityBookings(
   if (filters.q) {
     const term = filters.q.trim();
     where.OR = [
-      { bookingNumber: { contains: term, mode: "insensitive" } },
-      { customer: { lastName: { contains: term, mode: "insensitive" } } },
-      { customer: { email: { contains: term, mode: "insensitive" } } },
+      { bookingNumber: { contains: term } },
+      { customer: { lastName: { contains: term } } },
+      { customer: { email: { contains: term } } },
     ];
   }
 
@@ -276,11 +276,11 @@ export async function listServiceCases(
   if (filters.q) {
     const term = filters.q.trim();
     where.OR = [
-      { caseNumber: { contains: term, mode: "insensitive" } },
-      { category: { contains: term, mode: "insensitive" } },
-      { description: { contains: term, mode: "insensitive" } },
-      { customer: { lastName: { contains: term, mode: "insensitive" } } },
-      { booking: { bookingNumber: { contains: term, mode: "insensitive" } } },
+      { caseNumber: { contains: term } },
+      { category: { contains: term } },
+      { description: { contains: term } },
+      { customer: { lastName: { contains: term } } },
+      { booking: { bookingNumber: { contains: term } } },
     ];
   }
 
@@ -377,9 +377,9 @@ export async function listCalls(filters: CallFilters, pagination: PaginationInpu
   if (filters.q) {
     const term = filters.q.trim();
     where.OR = [
-      { notes: { contains: term, mode: "insensitive" } },
-      { booking: { bookingNumber: { contains: term, mode: "insensitive" } } },
-      { customer: { lastName: { contains: term, mode: "insensitive" } } },
+      { notes: { contains: term } },
+      { booking: { bookingNumber: { contains: term } } },
+      { customer: { lastName: { contains: term } } },
       { customer: { phone: { contains: term } } },
     ];
   }
@@ -433,9 +433,9 @@ export async function listLatestComments(
   if (filters.q) {
     const term = filters.q.trim();
     where.OR = [
-      { body: { contains: term, mode: "insensitive" } },
-      { category: { contains: term, mode: "insensitive" } },
-      { booking: { bookingNumber: { contains: term, mode: "insensitive" } } },
+      { body: { contains: term } },
+      { category: { contains: term } },
+      { booking: { bookingNumber: { contains: term } } },
     ];
   }
 

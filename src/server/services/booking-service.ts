@@ -3,6 +3,7 @@ import "server-only";
 import {
   AuditAction,
   BookingProduct,
+  FollowUpStatus,
   type BookingPriority,
   type BookingStatus,
   type McoStatus,
@@ -10,6 +11,7 @@ import {
 } from "@/generated/prisma/enums";
 import type { Prisma } from "@/generated/prisma/client";
 import { recordAudit } from "@/lib/audit";
+import { sanitiseRichText } from "@/lib/html/sanitise";
 import { prisma } from "@/lib/db/prisma";
 import { nextBookingNumber } from "@/lib/db/references";
 import {
@@ -76,6 +78,8 @@ export async function createFlightBooking(
         tfnId: booking.tfnId ?? null,
         source: booking.source ?? null,
         language: booking.language ?? null,
+        customEmailSubject: booking.customEmailSubject ?? null,
+        emailTopHeading: booking.emailTopHeading ?? null,
 
         contactName: booking.contactName ?? null,
         contactEmail: booking.contactEmail ?? null,
@@ -86,6 +90,16 @@ export async function createFlightBooking(
         billingState: booking.billingState ?? null,
         billingPostalCode: booking.billingPostalCode ?? null,
         billingCountry: booking.billingCountry ?? null,
+
+        // The card number and CVV are not in `booking` to be written: the form
+        // never submits them. Only what is safe to keep reaches this far.
+        cardHolderName: booking.cardHolderName ?? null,
+        cardType: booking.cardType ?? null,
+        cardLast4: booking.cardLast4 ?? null,
+        cardExpiry: booking.cardExpiry ?? null,
+        inboundPhone: booking.inboundPhone ?? null,
+        billingPhone: booking.billingPhone ?? null,
+        billingEmails: booking.billingEmails ?? null,
 
         ticketStatus: booking.ticketStatus,
         airlineConfirmation: booking.airlineConfirmation ?? null,
@@ -114,6 +128,9 @@ export async function createFlightBooking(
             // Stored exactly as typed. Decoding a PNR into segments is a
             // separate, explicit action — this field is never assumed parsed.
             pnrText: booking.pnrText ?? null,
+            // Markup is the one value here kept as markup rather than escaped at
+            // render, so it is made safe on the way in.
+            itineraryHtml: sanitiseRichText(booking.itineraryHtml),
             pnrLocator: booking.pnrLocator ?? null,
             airline: booking.airline ?? null,
             bookingClass: booking.bookingClass ?? null,
@@ -210,6 +227,17 @@ export interface BookingListFilters {
   priority?: BookingPriority | undefined;
   agentId?: string | undefined;
   supplierId?: string | undefined;
+  /** Language the booking is handled in, e.g. `en`. */
+  language?: string | undefined;
+  /**
+   * Last four digits of a card used to pay for the booking.
+   *
+   * Matched against the payments attached to it, because that is the only
+   * place card detail exists — the booking itself holds none. Full numbers
+   * are never stored, so four digits is the most that can ever be searched
+   * on, and they identify a card weakly: expect several bookings back.
+   */
+  cardLast4?: string | undefined;
   bookingTypeId?: string | undefined;
   currency?: string | undefined;
   from?: Date | undefined;
@@ -227,6 +255,11 @@ export function buildBookingWhere(
   if (filters.mcoStatus) where.mcoStatus = filters.mcoStatus;
   if (filters.priority) where.priority = filters.priority;
   if (filters.agentId) where.assignedAgentId = filters.agentId;
+  if (filters.language) where.language = filters.language;
+
+  if (filters.cardLast4) {
+    where.payments = { some: { cardLast4: filters.cardLast4.trim() } };
+  }
   if (filters.supplierId) where.supplierId = filters.supplierId;
   if (filters.bookingTypeId) where.bookingTypeId = filters.bookingTypeId;
   if (filters.currency) where.currency = filters.currency.toUpperCase();
@@ -244,18 +277,18 @@ export function buildBookingWhere(
   if (filters.q) {
     const term = filters.q.trim();
     where.OR = [
-      { bookingNumber: { contains: term, mode: "insensitive" } },
-      { airlineConfirmation: { contains: term, mode: "insensitive" } },
-      { contactEmail: { contains: term, mode: "insensitive" } },
+      { bookingNumber: { contains: term } },
+      { airlineConfirmation: { contains: term } },
+      { contactEmail: { contains: term } },
       { contactPhone: { contains: term } },
-      { contactName: { contains: term, mode: "insensitive" } },
-      { customer: { firstName: { contains: term, mode: "insensitive" } } },
-      { customer: { lastName: { contains: term, mode: "insensitive" } } },
-      { customer: { email: { contains: term, mode: "insensitive" } } },
+      { contactName: { contains: term } },
+      { customer: { firstName: { contains: term } } },
+      { customer: { lastName: { contains: term } } },
+      { customer: { email: { contains: term } } },
       { customer: { phone: { contains: term } } },
-      { customer: { reference: { contains: term, mode: "insensitive" } } },
-      { flightDetail: { pnrLocator: { contains: term, mode: "insensitive" } } },
-      { passengers: { some: { ticketNumber: { contains: term, mode: "insensitive" } } } },
+      { customer: { reference: { contains: term } } },
+      { flightDetail: { pnrLocator: { contains: term } } },
+      { passengers: { some: { ticketNumber: { contains: term } } } },
     ];
   }
 
@@ -280,7 +313,17 @@ export interface BookingListRow {
   customer: { id: string; firstName: string; lastName: string; email: string | null };
   bookingType: { label: string } | null;
   assignedAgent: { id: string; name: string } | null;
+  /** Who raised the booking. Reassignment changes the agent, not the author. */
+  createdBy: { id: string; name: string } | null;
   supplier: { name: string } | null;
+  /**
+   * Only the follow-ups still outstanding.
+   *
+   * The list column answers "is anything owed on this booking", so a resolved
+   * follow-up is not interesting here and a booking with ten of them has
+   * nothing outstanding.
+   */
+  followUps: { id: string; dueAt: Date | null }[];
 }
 
 export async function listBookings(
@@ -321,7 +364,19 @@ export async function listBookings(
         },
         bookingType: { select: { label: true } },
         assignedAgent: { select: { id: true, name: true } },
+        // Who raised the booking, which is not always who now owns it.
+        createdBy: { select: { id: true, name: true } },
         supplier: { select: { name: true } },
+        // Only the open ones: the column answers "is anything outstanding",
+        // and a booking with ten resolved follow-ups has nothing outstanding.
+        followUps: {
+          where: {
+            status: {
+              in: [FollowUpStatus.OPEN, FollowUpStatus.IN_PROGRESS],
+            },
+          },
+          select: { id: true, dueAt: true },
+        },
       },
     }),
     prisma.booking.count({ where }),
@@ -356,6 +411,13 @@ export async function getBookingDetail(id: string) {
       billingState: true,
       billingPostalCode: true,
       billingCountry: true,
+      cardHolderName: true,
+      cardType: true,
+      cardLast4: true,
+      cardExpiry: true,
+      inboundPhone: true,
+      billingPhone: true,
+      billingEmails: true,
       ticketStatus: true,
       airlineConfirmation: true,
       ticketingReference: true,
@@ -558,8 +620,11 @@ export async function createCruiseBooking(
         assignedAgentId: booking.assignedAgentId ?? null,
         supplierId: booking.supplierId ?? null,
         mcoSupplierId: booking.mcoSupplierId ?? null,
+        tfnId: booking.tfnId ?? null,
         source: booking.source ?? null,
         language: booking.language ?? null,
+        customEmailSubject: booking.customEmailSubject ?? null,
+        emailTopHeading: booking.emailTopHeading ?? null,
 
         contactName: booking.contactName ?? null,
         contactEmail: booking.contactEmail ?? null,
@@ -569,6 +634,15 @@ export async function createCruiseBooking(
         billingState: booking.billingState ?? null,
         billingPostalCode: booking.billingPostalCode ?? null,
         billingCountry: booking.billingCountry ?? null,
+
+        // As on the flight path: the card number and CVV never arrive here.
+        cardHolderName: booking.cardHolderName ?? null,
+        cardType: booking.cardType ?? null,
+        cardLast4: booking.cardLast4 ?? null,
+        cardExpiry: booking.cardExpiry ?? null,
+        inboundPhone: booking.inboundPhone ?? null,
+        billingPhone: booking.billingPhone ?? null,
+        billingEmails: booking.billingEmails ?? null,
 
         // Cruise bookings are confirmed by the cruise line, not ticketed by an
         // airline, so the ticketing lifecycle does not apply to them.
@@ -597,6 +671,8 @@ export async function createCruiseBooking(
             cruiseLine: booking.cruiseLine,
             ship: booking.ship ?? null,
             reservationNumber: booking.reservationNumber ?? null,
+            reservationText: booking.reservationText ?? null,
+            itineraryHtml: sanitiseRichText(booking.itineraryHtml),
             itinerary: booking.itinerary ?? null,
             departurePort: booking.departurePort ?? null,
             arrivalPort: booking.arrivalPort ?? null,

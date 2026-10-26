@@ -9,15 +9,12 @@ import {
   DATABASE_UNAVAILABLE_MESSAGE,
   isDatabaseUnavailable,
 } from "@/lib/db/errors";
-import { getEnv } from "@/lib/env";
 import { MIN_PASSWORD_LENGTH } from "@/lib/auth/password";
 import {
   clearSessionCookie,
-  createSession,
   readSessionToken,
   setSessionCookie,
 } from "@/lib/auth/session";
-import { provisionDemoAdmin } from "@/server/services/demo-service";
 import { loggerFor } from "@/lib/logging/logger";
 import {
   changePassword,
@@ -121,43 +118,6 @@ export async function loginAction(
       ? "/admin/change-password"
       : safeRedirectTarget(parsed.data.next),
   );
-}
-
-/**
- * Enters the application without a sign-in, when DEMO_MODE is on.
- *
- * The demo administrator is a real `AdminUser` row holding a real session, not
- * a special case threaded through the request. That matters: the Data Access
- * Layer, the permission checks and the audit trail all behave exactly as they
- * do for anyone else, so what a visitor sees is the real application rather
- * than a version of it with the checks switched off.
- *
- * The account is created on first use and reused afterwards. Its password is
- * random and discarded — sign-in for this account is only ever through here.
- */
-export async function demoSignInAction(): Promise<FormState | void> {
-  if (!getEnv().DEMO_MODE) {
-    // Re-checked on the server. The control is hidden when the flag is off,
-    // but hiding a button is presentation, never enforcement.
-    return { error: "Demo access is not enabled on this deployment." };
-  }
-
-  try {
-    const user = await provisionDemoAdmin();
-    const session = await createSession(user.id, await requestContext());
-    await setSessionCookie(session);
-  } catch (error) {
-    if (isDatabaseUnavailable(error)) {
-      log.error({ err: error }, "Demo sign-in failed: database unreachable");
-      return { error: DATABASE_UNAVAILABLE_MESSAGE };
-    }
-
-    log.error({ err: error }, "Demo sign-in failed unexpectedly");
-    return { error: "Demo access could not be started. Try again." };
-  }
-
-  // Outside the try: `redirect` throws to unwind and must not be caught.
-  redirect("/admin");
 }
 
 export async function logoutAction(): Promise<void> {

@@ -17,8 +17,8 @@ over.
 | Framework | Next.js 16 (App Router, Turbopack) |
 | Language | TypeScript, strict |
 | Styling | Tailwind CSS v4 |
-| Database | PostgreSQL |
-| ORM | Prisma 7 with the `@prisma/adapter-pg` driver adapter |
+| Database | MySQL 8.0+ |
+| ORM | Prisma 7 with the `@prisma/adapter-mariadb` driver adapter |
 | Validation | Zod 4 |
 | Tables / charts | TanStack Table, Recharts |
 | Forms | React Hook Form + Zod |
@@ -30,23 +30,42 @@ over.
 ```bash
 npm install
 cp .env.example .env     # then fill in DATABASE_URL and AUTH_SECRET
-npm run dev:db           # only if using the bundled Prisma Postgres (see below)
-npm run db:migrate       # applies migrations
+npm run dev:db           # starts a local MySQL in Docker (see below)
+npm run db:deploy        # applies migrations
 npm run db:seed          # permissions, roles, reference data, first admin
 npm run dev
 ```
 
 ### The database must be running
 
-`npm run dev` starts the local PostgreSQL cluster first, but only when
-`DATABASE_URL` points at it (port 55432). If you repoint `DATABASE_URL` at a
-system PostgreSQL or any other server, `npm run dev` says so and leaves it
-alone — starting that server is then up to you.
+`DATABASE_URL` is required. There is no fallback — the application cannot serve
+a page without a MySQL to talk to, and says so at startup rather than failing
+per request.
 
-The cluster is a background process owned by your user, so it keeps running
-after `next dev` exits; `npm run dev:db:stop` shuts it down. Its data lives in
-`~/.local/share/travel-crm-postgres` and survives reboots, but the process does
-not, which is why `npm run dev` re-checks every time.
+`npm run dev` starts the local MySQL container first, but only when
+`DATABASE_URL` points at it (port 53306). If you repoint `DATABASE_URL` at a
+system MySQL or any other server, `npm run dev` says so and leaves it alone —
+starting that server is then up to you.
+
+The container keeps running after `next dev` exits; `npm run dev:db:stop` shuts
+it down and `npm run dev:db:reset` discards its data. The data itself lives in
+a named Docker volume and survives both a restart and a reboot.
+
+Running MySQL yourself instead is fine. Create a database and a user, then put
+the connection string in `.env`:
+
+```bash
+mysql -u root -p -e "CREATE DATABASE travel_crm CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;"
+mysql -u root -p -e "CREATE USER 'crm'@'%' IDENTIFIED BY 'devpassword';"
+mysql -u root -p -e "GRANT ALL PRIVILEGES ON travel_crm.* TO 'crm'@'%';"
+```
+
+```
+DATABASE_URL="mysql://crm:devpassword@127.0.0.1:3306/travel_crm"
+```
+
+Use the `mysql://` scheme even though the driver underneath is mariadb: that is
+what the Prisma CLI requires, and the application translates it.
 
 When the database is unreachable the application degrades rather than crashing:
 the sign-in page still renders and reports the outage in plain words, and
@@ -55,13 +74,6 @@ protected routes redirect to sign-in instead of returning a stack trace.
 The seed prints a one-time password for the first administrator when
 `INITIAL_ADMIN_PASSWORD` is not set. The account is flagged to change it at
 first sign-in.
-
-### Creating the local database
-
-```bash
-sudo -u postgres psql -c "CREATE ROLE travel_crm LOGIN PASSWORD 'devpassword';"
-sudo -u postgres psql -c "CREATE DATABASE travel_crm OWNER travel_crm;"
-```
 
 ## Scripts
 
@@ -199,7 +211,7 @@ that it was truncated, and write an EXPORT audit entry.
 ### Testing
 
 ```bash
-npm test          # 239 unit and integration tests, against real PostgreSQL
+npm test          # 239 unit and integration tests, against a real MySQL
 npm run test:e2e  # 22 browser tests, against a real server and database
 ```
 

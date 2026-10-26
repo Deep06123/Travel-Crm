@@ -6,6 +6,8 @@ import {
   McoStatus,
 } from "@/generated/prisma/enums";
 
+import { billingInformationFields } from "./schemas";
+
 /**
  * Cruise booking validation.
  *
@@ -78,11 +80,20 @@ export const cruiseBookingSchema = z
       .default(BookingStatus.PENDING),
     assignedAgentId: optionalText(40),
     bookedAt: optionalDate,
+    // Left blank, the template decides. See Booking.customEmailSubject.
+    customEmailSubject: optionalText(200),
+    emailTopHeading: optionalText(200),
 
     // Cruise details
     cruiseLine: requiredText(120, "Enter a cruise line."),
     ship: optionalText(120),
     reservationNumber: optionalText(60),
+    // The confirmation pasted verbatim, as a flight booking takes a PNR.
+    reservationText: optionalText(10_000),
+    // Markup from the rich-text editor. Larger than the raw-text limit because
+    // tags are verbose; sanitised on the server before it is stored.
+    itineraryHtml: optionalText(50_000),
+    tfnId: optionalText(40),
     itinerary: optionalText(500),
     departurePort: optionalText(120),
     arrivalPort: optionalText(120),
@@ -115,11 +126,13 @@ export const cruiseBookingSchema = z
       .transform((value) => (value === "" ? undefined : value))
       .optional(),
     contactPhone: optionalText(40),
-    billingAddressLine1: optionalText(200),
+    // Now a free-text block in the billing panel rather than a single line.
+    billingAddressLine1: optionalText(500),
     billingCity: optionalText(100),
     billingState: optionalText(100),
     billingPostalCode: optionalText(20),
     billingCountry: optionalText(100),
+    ...billingInformationFields,
 
     // Confirmation
     confirmationReference: optionalText(100),

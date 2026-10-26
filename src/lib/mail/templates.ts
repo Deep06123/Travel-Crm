@@ -3,6 +3,8 @@ import "server-only";
 import { formatDate } from "@/lib/format";
 import { formatMoney } from "@/lib/financial/money";
 
+import { renderETicket } from "./eticket";
+
 /**
  * Customer-facing email bodies.
  *
@@ -39,6 +41,9 @@ export interface TicketedPassenger {
   firstName: string;
   lastName: string;
   ticketNumber: string | null;
+  /** Shown on the e-ticket's traveller table. */
+  gender?: string | null;
+  dateOfBirth?: Date | null;
 }
 
 export interface BookingEmailData {
@@ -52,6 +57,17 @@ export interface BookingEmailData {
   segments: readonly SegmentSummary[];
   cruise: CruiseSummary | null;
   passengers: readonly TicketedPassenger[];
+  /**
+   * Per-booking overrides, both optional.
+   *
+   * Applied at the end of rendering rather than threaded through each
+   * template, so a template cannot forget to honour one and the generated
+   * wording stays the fallback rather than being replaced wholesale.
+   */
+  customEmailSubject?: string | null;
+  emailTopHeading?: string | null;
+  /** Support number for the e-ticket header, from the booking's TFN. */
+  supportPhone?: string | null;
 }
 
 export interface RenderedEmail {
@@ -99,27 +115,34 @@ function itineraryLines(data: BookingEmailData): string[] {
   );
 }
 
-function layout(heading: string, intro: string, rows: string[], footer: string): string {
-  // Table-based and inline-styled on purpose: Outlook's rendering engine
-  // ignores flexbox, grid and most of a <style> block.
-  const body = rows
-    .map(
-      (row) =>
-        `<tr><td style="padding:6px 0;border-bottom:1px solid #e5e7eb;font-size:14px;color:#111827;">${row}</td></tr>`,
-    )
-    .join("");
+/**
+ * Applies the booking's subject and heading overrides, if it has any.
+ *
+ * The heading is substituted inside the rendered HTML rather than passed into
+ * `layout`, because `layout` is also used by paths that have no booking to
+ * take an override from. Blank or whitespace-only values are ignored: an empty
+ * input left in the form means "no override", not "send an empty subject".
+ */
+function withOverrides(
+  rendered: RenderedEmail,
+  data: BookingEmailData,
+  generatedHeading: string,
+): RenderedEmail {
+  const subject = data.customEmailSubject?.trim();
+  const heading = data.emailTopHeading?.trim();
 
-  return `<!doctype html>
-<html><body style="margin:0;padding:24px;background:#f3f4f6;font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;">
-  <table role="presentation" cellpadding="0" cellspacing="0" style="max-width:560px;margin:0 auto;background:#ffffff;border-radius:8px;overflow:hidden;">
-    <tr><td style="background:#1e3a8a;padding:16px 24px;color:#ffffff;font-size:18px;font-weight:bold;">${escapeHtml(heading)}</td></tr>
-    <tr><td style="padding:24px;">
-      <p style="margin:0 0 16px;font-size:14px;color:#374151;line-height:1.5;">${intro}</p>
-      <table role="presentation" cellpadding="0" cellspacing="0" style="width:100%;">${body}</table>
-      <p style="margin:16px 0 0;font-size:12px;color:#6b7280;line-height:1.5;">${footer}</p>
-    </td></tr>
-  </table>
-</body></html>`;
+  return {
+    ...rendered,
+    ...(subject ? { subject } : {}),
+    ...(heading
+      ? {
+          html: rendered.html.replace(
+            escapeHtml(generatedHeading),
+            escapeHtml(heading),
+          ),
+        }
+      : {}),
+  };
 }
 
 export function renderBookingConfirmed(data: BookingEmailData): RenderedEmail {
@@ -148,16 +171,20 @@ export function renderBookingConfirmed(data: BookingEmailData): RenderedEmail {
     "Thank you for booking with us.",
   ].join("\n");
 
-  return {
-    subject: `Booking confirmed — ${data.bookingNumber}`,
-    text,
-    html: layout(
-      "Booking confirmed",
-      `Hello ${escapeHtml(data.customerName)}, your booking is confirmed.`,
-      facts.map(escapeHtml),
-      "Please check the names and dates above and reply to this email if anything needs correcting.",
-    ),
-  };
+  // The status line doubles as the document's heading, so `emailTopHeading`
+  // has something to replace. Passing a different string to `withOverrides`
+  // than the one rendered would make the override silently do nothing.
+  const generatedHeading = "YOUR RESERVATION IS CONFIRMED!!";
+
+  return withOverrides(
+    {
+      subject: `Booking confirmed — ${data.bookingNumber}`,
+      text,
+      html: renderETicket(data, generatedHeading, "Thank you for booking with us."),
+    },
+    data,
+    generatedHeading,
+  );
 }
 
 export function renderBookingTicketed(data: BookingEmailData): RenderedEmail {
@@ -192,14 +219,72 @@ export function renderBookingTicketed(data: BookingEmailData): RenderedEmail {
     "Thank you for booking with us.",
   ].join("\n");
 
+  // A cruise is confirmed by the cruise line rather than ticketed by an
+  // airline, so the generated heading differs by product — and the override
+  // has to be told which one it is replacing.
+  const generatedHeading =
+    data.product === "CRUISE"
+      ? "YOUR CRUISE DOCUMENTS ARE ISSUED!!"
+      : "YOUR E-TICKET IS ISSUED!!";
+
+  return withOverrides(
+    {
+      subject: `Tickets issued — ${data.bookingNumber}`,
+      text,
+      html: renderETicket(
+        data,
+        generatedHeading,
+        "Carry photo identification matching the name on the ticket.",
+      ),
+    },
+    data,
+    generatedHeading,
+  );
+}
+
+/**
+ * Wraps an operator-edited message in the standard email shell.
+ *
+ * The operator edits plain text, never HTML, and this is what turns it back
+ * into a styled email. That is a deliberate limitation rather than a missing
+ * feature: anything typed into a textarea and sent verbatim as HTML is an
+ * injection path into a customer's inbox, and a half-closed tag pasted from a
+ * word processor would wreck the layout for everyone who received it. Escaping
+ * the text and supplying the markup ourselves means an edited email cannot be
+ * malformed and cannot carry anything the operator did not intend.
+ *
+ * Blank lines separate paragraphs; single newlines are kept as line breaks, so
+ * what the operator sees in the textarea is what the customer receives.
+ */
+export function renderEditedEmail(
+  subject: string,
+  body: string,
+): RenderedEmail {
+  const text = body.trim();
+
+  const paragraphs = text
+    .split(/\n{2,}/)
+    .map((paragraph) => paragraph.trim())
+    .filter(Boolean)
+    .map(
+      (paragraph) =>
+        `<p style="margin:0 0 16px;font-size:14px;color:#374151;line-height:1.5;">${escapeHtml(
+          paragraph,
+        ).replace(/\n/g, "<br>")}</p>`,
+    )
+    .join("");
+
   return {
-    subject: `Tickets issued — ${data.bookingNumber}`,
+    subject: subject.trim(),
     text,
-    html: layout(
-      data.product === "CRUISE" ? "Documents issued" : "Tickets issued",
-      `Hello ${escapeHtml(data.customerName)}, your ${data.product === "CRUISE" ? "cruise documents have" : "tickets have"} been issued.`,
-      facts.map(escapeHtml),
-      "Carry photo identification matching the name on the ticket, and check your carrier's advice on how early to arrive.",
-    ),
+    // Same shell as the generated templates, so an edited email still looks
+    // like it came from the same agency.
+    html: `<!doctype html>
+<html><body style="margin:0;padding:24px;background:#f3f4f6;font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;">
+  <table role="presentation" cellpadding="0" cellspacing="0" style="max-width:560px;margin:0 auto;background:#ffffff;border-radius:8px;overflow:hidden;">
+    <tr><td style="background:#1e3a8a;padding:16px 24px;color:#ffffff;font-size:18px;font-weight:bold;">${escapeHtml(subject.trim())}</td></tr>
+    <tr><td style="padding:24px;">${paragraphs}</td></tr>
+  </table>
+</body></html>`,
   };
 }

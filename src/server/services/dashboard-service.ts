@@ -204,38 +204,98 @@ export async function getDashboardMetrics(
   // booking that was never fulfilled.
   const valueWhere = { ...inRange, status: { not: BookingStatus.CANCELLED } };
 
-  const bookingMoney = await sumBookingMoney(valueWhere);
+  /**
+   * The seven independent aggregates, issued together.
+   *
+   * None of them reads another's result — each is a separate roll-up over the
+   * same date range — so awaiting them one at a time bought nothing and cost a
+   * full round trip each. That is invisible against a database on localhost
+   * and very visible against a managed one: at 20ms of network latency this
+   * was 140ms of the page spent waiting in series for queries that could have
+   * gone out at once.
+   *
+   * The follow-ups that genuinely do depend on these — resolving supplier and
+   * agent names from the ids the roll-ups return — stay below, where they
+   * belong.
+   */
+  const [
+    bookingMoney,
+    paymentRows,
+    refundRows,
+    trendRows,
+    distributionRows,
+    supplierGroups,
+    agentGroups,
+  ] = await Promise.all([
+    sumBookingMoney(valueWhere),
+
+    // Only captured payments count as collected. A pending payment, or a saved
+    // payment link, is not money received.
+    prisma.payment.groupBy({
+      by: ["currency"],
+      where: {
+        status: PaymentStatus.CAPTURED,
+        createdAt: { gte: range.from, lte: range.to },
+      },
+      _sum: { amountMinor: true },
+    }),
+
+    // Only completed refunds count as issued; an approved-but-unprocessed
+    // refund has not left the account.
+    prisma.refund.groupBy({
+      by: ["currency"],
+      where: {
+        status: RefundStatus.COMPLETED,
+        completedAt: { gte: range.from, lte: range.to },
+      },
+      _sum: { approvedAmountMinor: true },
+    }),
+
+    // Daily booking counts, bucketed in SQL so the grouping happens once in
+    // the database rather than over every row in JavaScript.
+    //
+    // DATE_FORMAT yields the `YYYY-MM-DD` string this is rendered as, which
+    // also sidesteps a conversion that was never safe: a DATE coming back
+    // through the driver is a JS Date at local midnight, and reading the day
+    // back out of it in UTC can land on the day before.
+    prisma.$queryRaw<{ day: string; count: bigint }[]>`
+      SELECT DATE_FORMAT(\`bookedAt\`, '%Y-%m-%d') AS day, COUNT(*) AS count
+      FROM \`Booking\`
+      WHERE \`bookedAt\` >= ${range.from} AND \`bookedAt\` <= ${range.to}
+      GROUP BY day
+      ORDER BY day ASC
+    `,
+
+    prisma.booking.groupBy({
+      by: ["status"],
+      where: inRange,
+      _count: true,
+    }),
+
+    prisma.booking.groupBy({
+      by: ["supplierId", "currency"],
+      where: { ...valueWhere, supplierId: { not: null } },
+      _count: true,
+      _sum: { grossMcoMinor: true, netMcoMinor: true },
+    }),
+
+    prisma.booking.groupBy({
+      by: ["assignedAgentId", "currency"],
+      where: { ...valueWhere, assignedAgentId: { not: null } },
+      _count: true,
+      _sum: { totalMinor: true },
+    }),
+  ]);
+
   const grossBookingValue = bookingMoney.totalMinor;
   const supplierCost = bookingMoney.supplierCostMinor;
   const grossMco = bookingMoney.grossMcoMinor;
   const netMco = bookingMoney.netMcoMinor;
 
-  // Only captured payments count as collected. A pending payment, or a saved
-  // payment link, is not money received.
-  const paymentRows = await prisma.payment.groupBy({
-    by: ["currency"],
-    where: {
-      status: PaymentStatus.CAPTURED,
-      createdAt: { gte: range.from, lte: range.to },
-    },
-    _sum: { amountMinor: true },
-  });
-
   const paymentsCollected: CurrencyTotal[] = paymentRows.map((row) => ({
     currency: row.currency,
     amountMinor: row._sum.amountMinor ?? 0,
   }));
-
-  // Only completed refunds count as issued; an approved-but-unprocessed refund
-  // has not left the account.
-  const refundRows = await prisma.refund.groupBy({
-    by: ["currency"],
-    where: {
-      status: RefundStatus.COMPLETED,
-      completedAt: { gte: range.from, lte: range.to },
-    },
-    _sum: { approvedAmountMinor: true },
-  });
 
   const refundsIssued: CurrencyTotal[] = refundRows.map((row) => ({
     currency: row.currency,
@@ -244,40 +304,17 @@ export async function getDashboardMetrics(
 
   const netCollections = subtractTotals(paymentsCollected, refundsIssued);
 
-  // Daily booking counts. Bucketed in SQL against the business timezone so a
-  // late-evening booking lands on the day the office considers it.
-  const trendRows = await prisma.$queryRaw<{ day: Date; count: bigint }[]>`
-    SELECT date_trunc('day', "bookedAt") AS day, count(*) AS count
-    FROM "Booking"
-    WHERE "bookedAt" >= ${range.from} AND "bookedAt" <= ${range.to}
-    GROUP BY day
-    ORDER BY day ASC
-  `;
-
   const trend = trendRows.map((row) => ({
-    date: row.day.toISOString().slice(0, 10),
+    date: row.day,
     bookings: Number(row.count),
   }));
-
-  const distributionRows = await prisma.booking.groupBy({
-    by: ["status"],
-    where: inRange,
-    _count: true,
-  });
 
   const statusDistribution = distributionRows.map((row) => ({
     status: row.status,
     count: row._count,
   }));
 
-  // --- Supplier performance -------------------------------------------------
-  const supplierGroups = await prisma.booking.groupBy({
-    by: ["supplierId", "currency"],
-    where: { ...valueWhere, supplierId: { not: null } },
-    _count: true,
-    _sum: { grossMcoMinor: true, netMcoMinor: true },
-  });
-
+  // --- Supplier performance -----------------------------------------------
   const supplierIds = [
     ...new Set(supplierGroups.map((group) => group.supplierId).filter(Boolean)),
   ] as string[];
@@ -309,14 +346,7 @@ export async function getDashboardMetrics(
     };
   });
 
-  // --- Agent performance ----------------------------------------------------
-  const agentGroups = await prisma.booking.groupBy({
-    by: ["assignedAgentId", "currency"],
-    where: { ...valueWhere, assignedAgentId: { not: null } },
-    _count: true,
-    _sum: { totalMinor: true },
-  });
-
+  // --- Agent performance --------------------------------------------------
   const agentIds = [
     ...new Set(agentGroups.map((group) => group.assignedAgentId).filter(Boolean)),
   ] as string[];

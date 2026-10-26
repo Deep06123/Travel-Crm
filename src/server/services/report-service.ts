@@ -66,10 +66,13 @@ export async function getBookingReport(range: ReportRange): Promise<BookingRepor
       prisma.booking.groupBy({ by: ["bookingTypeId"], where, _count: true }),
       prisma.booking.groupBy({ by: ["assignedAgentId"], where, _count: true }),
       prisma.booking.groupBy({ by: ["supplierId"], where, _count: true }),
-      prisma.$queryRaw<{ day: Date; count: bigint }[]>`
-        SELECT date_trunc('day', "bookedAt") AS day, count(*) AS count
-        FROM "Booking"
-        WHERE "bookedAt" >= ${range.from} AND "bookedAt" <= ${range.to}
+      // DATE_FORMAT rather than a DATE column: the string is what this is
+      // rendered as, and it avoids reading a local-midnight Date back out in
+      // UTC, which can report the previous day.
+      prisma.$queryRaw<{ day: string; count: bigint }[]>`
+        SELECT DATE_FORMAT(\`bookedAt\`, '%Y-%m-%d') AS day, COUNT(*) AS count
+        FROM \`Booking\`
+        WHERE \`bookedAt\` >= ${range.from} AND \`bookedAt\` <= ${range.to}
         GROUP BY day
         ORDER BY day ASC
       `,
@@ -127,7 +130,7 @@ export async function getBookingReport(range: ReportRange): Promise<BookingRepor
       count: row._count,
     })),
     trend: trendRows.map((row) => ({
-      date: row.day.toISOString().slice(0, 10),
+      date: row.day,
       count: Number(row.count),
     })),
   };

@@ -248,10 +248,10 @@ export async function listChargebacks(
   if (filters.q) {
     const term = filters.q.trim();
     where.OR = [
-      { reference: { contains: term, mode: "insensitive" } },
-      { reason: { contains: term, mode: "insensitive" } },
-      { reasonCode: { contains: term, mode: "insensitive" } },
-      { booking: { bookingNumber: { contains: term, mode: "insensitive" } } },
+      { reference: { contains: term } },
+      { reason: { contains: term } },
+      { reasonCode: { contains: term } },
+      { booking: { bookingNumber: { contains: term } } },
     ];
   }
 

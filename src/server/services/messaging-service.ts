@@ -3,6 +3,7 @@ import "server-only";
 import { AuditAction, MessageStatus } from "@/generated/prisma/enums";
 import type { Prisma } from "@/generated/prisma/client";
 import { recordAudit } from "@/lib/audit";
+import { toStringList } from "@/lib/db/json-list";
 import { prisma } from "@/lib/db/prisma";
 import {
   paginate,
@@ -57,7 +58,9 @@ export async function composeMessage(
       });
 
       if (group) {
-        recipientIds = [...new Set([...recipientIds, ...group.memberIds])];
+        recipientIds = [
+          ...new Set([...recipientIds, ...toStringList(group.memberIds)]),
+        ];
       }
     }
 
@@ -143,8 +146,8 @@ export async function listInbox(
     const term = filters.q.trim();
     where.message = {
       OR: [
-        { subject: { contains: term, mode: "insensitive" } },
-        { body: { contains: term, mode: "insensitive" } },
+        { subject: { contains: term } },
+        { body: { contains: term } },
       ],
     };
   }
@@ -197,8 +200,8 @@ export async function listSent(
   if (filters.q) {
     const term = filters.q.trim();
     where.OR = [
-      { subject: { contains: term, mode: "insensitive" } },
-      { body: { contains: term, mode: "insensitive" } },
+      { subject: { contains: term } },
+      { body: { contains: term } },
     ];
   }
 
@@ -238,7 +241,7 @@ export async function listSent(
 // --- Groups -----------------------------------------------------------------
 
 export async function listMessageGroups() {
-  return prisma.messageGroup.findMany({
+  const groups = await prisma.messageGroup.findMany({
     orderBy: [{ isActive: "desc" }, { name: "asc" }],
     select: {
       id: true,
@@ -250,6 +253,13 @@ export async function listMessageGroups() {
       _count: { select: { messages: true } },
     },
   });
+
+  // `memberIds` is a JSON column on MySQL, so Prisma hands back `JsonValue`.
+  // Decoding here means callers keep receiving `string[]`.
+  return groups.map((group) => ({
+    ...group,
+    memberIds: toStringList(group.memberIds),
+  }));
 }
 
 export async function saveMessageGroup(
@@ -323,9 +333,9 @@ export async function listNotifications(
   if (filters.q) {
     const term = filters.q.trim();
     where.OR = [
-      { eventType: { contains: term, mode: "insensitive" } },
-      { recipient: { contains: term, mode: "insensitive" } },
-      { template: { contains: term, mode: "insensitive" } },
+      { eventType: { contains: term } },
+      { recipient: { contains: term } },
+      { template: { contains: term } },
     ];
   }
 

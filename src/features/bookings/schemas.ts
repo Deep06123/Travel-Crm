@@ -3,6 +3,7 @@ import { z } from "zod";
 import {
   BookingPriority,
   BookingStatus,
+  CardType,
   McoStatus,
   PassengerType,
   TicketStatus,
@@ -28,6 +29,50 @@ const optionalText = (max: number) =>
 
 const requiredText = (max: number, message: string) =>
   z.string().trim().min(1, message).max(max);
+
+/**
+ * Billing information shared by the flight and cruise forms.
+ *
+ * There is no `cardNumber` or `cvv` here, and there must never be one. The
+ * form does not submit them (see `billing-information.tsx`), so a field added
+ * here would be the thing that starts accepting them.
+ */
+export const billingInformationFields = {
+  cardHolderName: optionalText(200),
+  cardType: z
+    .union([z.enum(CardType), z.literal("")])
+    .transform((value) => (value === "" ? undefined : value))
+    .optional(),
+  /** Derived in the browser from a number the server never receives. */
+  cardLast4: z
+    .string()
+    .trim()
+    .regex(/^(\d{4})?$/, "Enter the last four digits.")
+    .transform((value) => (value === "" ? undefined : value))
+    .optional(),
+  cardExpiry: z
+    .string()
+    .trim()
+    .regex(/^((0[1-9]|1[0-2])\d{2})?$/, "Enter the expiry as MMYY, e.g. 0428.")
+    .transform((value) => (value === "" ? undefined : value))
+    .optional(),
+  inboundPhone: optionalText(40),
+  billingPhone: optionalText(40),
+  billingEmails: z
+    .string()
+    .trim()
+    .max(500)
+    .refine(
+      (value) =>
+        value === "" ||
+        value
+          .split(",")
+          .every((part) => z.email().safeParse(part.trim()).success),
+      "One of those email addresses is not valid.",
+    )
+    .transform((value) => (value === "" ? undefined : value))
+    .optional(),
+} as const;
 
 /** IATA airport code. Stored uppercase so searches match regardless of entry. */
 const airportCode = z
@@ -163,9 +208,15 @@ export const flightBookingSchema = z
       .default(BookingStatus.PENDING),
     assignedAgentId: optionalText(40),
     bookedAt: optionalDateTime,
+    // Left blank, the template decides. See Booking.customEmailSubject.
+    customEmailSubject: optionalText(200),
+    emailTopHeading: optionalText(200),
 
     // B. Flight information
     pnrText: optionalText(10_000),
+    // Markup from the rich-text editor. Larger than the raw-text limit because
+    // tags are verbose; sanitised on the server before it is stored.
+    itineraryHtml: optionalText(50_000),
     pnrLocator: optionalText(20),
     airline: optionalText(100),
     bookingClass: optionalText(40),
@@ -193,12 +244,14 @@ export const flightBookingSchema = z
       .transform((value) => (value === "" ? undefined : value))
       .optional(),
     contactPhone: optionalText(40),
-    billingAddressLine1: optionalText(200),
+    // Now a free-text block in the billing panel rather than a single line.
+    billingAddressLine1: optionalText(500),
     billingAddressLine2: optionalText(200),
     billingCity: optionalText(100),
     billingState: optionalText(100),
     billingPostalCode: optionalText(20),
     billingCountry: optionalText(100),
+    ...billingInformationFields,
 
     // E. Ticketing
     airlineConfirmation: optionalText(100),
@@ -248,6 +301,18 @@ export const bookingSearchSchema = z.object({
   priority: z.enum(BookingPriority).optional(),
   agentId: optionalText(40),
   supplierId: optionalText(40),
+  language: optionalText(10),
+  // Four digits exactly. Anything else cannot match a stored value, and
+  // accepting it would return everything rather than nothing.
+  cardLast4: z
+    .string()
+    .trim()
+    .transform((value) => (value === "" ? undefined : value))
+    .optional()
+    .refine(
+      (value) => value === undefined || /^\d{4}$/.test(value),
+      "Enter the last four digits.",
+    ),
   bookingTypeId: optionalText(40),
   currency: optionalText(3),
   from: optionalDate,

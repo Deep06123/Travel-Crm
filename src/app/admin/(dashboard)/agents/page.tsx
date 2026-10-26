@@ -153,6 +153,7 @@ export default async function AgentsPage({
                   <Th>Phone</Th>
                   <Th>Role</Th>
                   <Th>Status</Th>
+                  {canManage ? <Th>Pending password</Th> : null}
                   <Th>Last sign-in</Th>
                   <Th>Created</Th>
                 </Tr>
@@ -208,6 +209,18 @@ export default async function AgentsPage({
                           </div>
                         ) : null}
                       </Td>
+                      {canManage ? (
+                        <Td>
+                          {agent.adminUser.pendingPassword ? (
+                            <code className="rounded bg-status-warning-bg px-1.5 py-0.5 font-mono text-xs break-all text-status-warning">
+                              {agent.adminUser.pendingPassword}
+                            </code>
+                          ) : (
+                            <span className="text-xs text-ink-subtle">—</span>
+                          )}
+                        </Td>
+                      ) : null}
+
                       <Td className="whitespace-nowrap text-ink-muted">
                         {agent.adminUser.lastLoginAt
                           ? formatDateTime(agent.adminUser.lastLoginAt)
@@ -231,14 +244,17 @@ export default async function AgentsPage({
             />
           </div>
 
-          {/* The reference CRM printed every agent's password in this table.
-              Saying why it is absent is worth more than silently omitting it. */}
+          {/* The reference CRM printed every agent's *real* password here.
+              What this column shows is narrower, and the difference is worth
+              stating rather than leaving someone to assume the worse one. */}
           <p className="mt-3 flex items-start gap-2 text-xs text-ink-muted">
             <ShieldCheck className="mt-0.5 size-3.5 shrink-0" />
-            There is no password column. Passwords are stored only as bcrypt
-            hashes and cannot be displayed or recovered by anyone, including
-            super administrators. Use “Reset password” to issue a new one-time
-            password instead.
+            “Pending password” is the one-time password an account was created
+            or reset with, readable until that account first signs in and then
+            erased. Chosen passwords are never shown: they are stored only as
+            bcrypt hashes and cannot be displayed or recovered by anyone,
+            including super administrators. Use “Reset password” on an agent to
+            issue a new one.
           </p>
         </div>
 

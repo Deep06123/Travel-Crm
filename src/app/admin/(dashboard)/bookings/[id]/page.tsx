@@ -32,8 +32,14 @@ import {
 } from "@/features/finance/booking-finance-forms";
 import { DocumentUploadForm } from "@/features/documents/upload-form";
 import { CustomerEmailPanel } from "@/features/bookings/customer-email-panel";
+import { McoControl } from "@/features/bookings/mco-control";
 import { StatusControl } from "@/features/bookings/status-control";
+import { TicketingControl } from "@/features/bookings/ticketing-control";
 import { currentUserCan, requirePermission } from "@/lib/auth/dal";
+import {
+  allowedMcoTransitionsFrom,
+  mcoSupplierIsSettled,
+} from "@/lib/bookings/mco";
 import { allowedTransitionsFrom } from "@/lib/bookings/status";
 import { prisma } from "@/lib/db/prisma";
 import { formatMoney } from "@/lib/financial/money";
@@ -86,6 +92,8 @@ export default async function BookingDetailPage({
     canRecordPayments,
     canRequestRefunds,
     canResendEmail,
+    canUpdateBooking,
+    canUpdateMco,
   ] = await Promise.all([
     currentUserCan(PERMISSIONS.BOOKING_CHANGE_STATUS),
     currentUserCan(PERMISSIONS.PASSENGER_VIEW_SENSITIVE),
@@ -98,6 +106,8 @@ export default async function BookingDetailPage({
     currentUserCan(PERMISSIONS.PAYMENT_RECORD),
     currentUserCan(PERMISSIONS.REFUND_REQUEST),
     currentUserCan(PERMISSIONS.MESSAGE_SEND),
+    currentUserCan(PERMISSIONS.BOOKING_UPDATE),
+    currentUserCan(PERMISSIONS.BOOKING_MCO_UPDATE),
   ]);
 
   const { id } = await params;
@@ -113,6 +123,17 @@ export default async function BookingDetailPage({
   const agents = canManageFollowUps
     ? await prisma.adminUser.findMany({
         where: { status: "ACTIVE" },
+        select: { id: true, name: true },
+        orderBy: { name: "asc" },
+      })
+    : [];
+
+  // Only the active ones are offered. A booking already pointing at a retired
+  // supplier keeps it — the control shows that separately rather than letting
+  // the field read as empty.
+  const mcoSuppliers = canUpdateMco
+    ? await prisma.mcoSupplier.findMany({
+        where: { isActive: true },
         select: { id: true, name: true },
         orderBy: { name: "asc" },
       })
@@ -204,14 +225,60 @@ export default async function BookingDetailPage({
               <DetailRow label="Created by" value={booking.createdBy?.name} />
               <DetailRow label="Assigned agent" value={booking.assignedAgent?.name} />
               <DetailRow label="Supplier" value={booking.supplier?.name} />
-              <DetailRow label="MCO supplier" value={booking.mcoSupplier?.name} />
-              <DetailRow
-                label="MCO status"
-                value={<McoStatusBadge status={booking.mcoStatus} />}
-              />
+              {/* The MCO panel in the right column owns both of these for
+                  anyone who can change them. Repeated here only for the roles
+                  that cannot, who would otherwise not see them at all. */}
+              {canUpdateMco ? null : (
+                <>
+                  <DetailRow
+                    label="MCO supplier"
+                    value={booking.mcoSupplier?.name}
+                  />
+                  <DetailRow
+                    label="MCO status"
+                    value={<McoStatusBadge status={booking.mcoStatus} />}
+                  />
+                </>
+              )}
               <DetailRow label="Contact" value={booking.contactName} />
               <DetailRow label="Email" value={booking.contactEmail} />
               <DetailRow label="Phone" value={booking.contactPhone} />
+            </dl>
+          </Panel>
+
+          {/* What was taken down at booking time, minus the parts that were
+              never submitted. There is no card number or CVV to show because
+              neither was ever sent to the server. */}
+          <Panel title="Billing information" defaultOpen={false}>
+            <dl className="grid gap-x-6 sm:grid-cols-2 lg:grid-cols-3">
+              <DetailRow label="Card holder" value={booking.cardHolderName} />
+              <DetailRow
+                label="Card"
+                value={
+                  booking.cardLast4
+                    ? `${booking.cardType ? humanise(booking.cardType) : "Card"} ····${booking.cardLast4}`
+                    : null
+                }
+              />
+              <DetailRow
+                label="Expires"
+                value={
+                  booking.cardExpiry
+                    ? `${booking.cardExpiry.slice(0, 2)}/${booking.cardExpiry.slice(2)}`
+                    : null
+                }
+              />
+              <DetailRow label="Inbound no." value={booking.inboundPhone} />
+              <DetailRow label="Billing no." value={booking.billingPhone} />
+              <DetailRow label="Email IDs" value={booking.billingEmails} />
+              <DetailRow
+                label="Billing address"
+                value={booking.billingAddressLine1}
+              />
+              <DetailRow label="City" value={booking.billingCity} />
+              <DetailRow label="State" value={booking.billingState} />
+              <DetailRow label="Zip code" value={booking.billingPostalCode} />
+              <DetailRow label="Country" value={booking.billingCountry} />
             </dl>
           </Panel>
 
@@ -435,6 +502,21 @@ export default async function BookingDetailPage({
               <p className="mt-3 rounded-md bg-surface-muted p-3 text-sm whitespace-pre-wrap text-ink">
                 {booking.ticketingNotes}
               </p>
+            ) : null}
+
+            {/* Hidden once issued: re-issuing is a void-and-reissue, which is a
+                different operation with its own consequences, not this form
+                submitted twice. The service refuses it either way. */}
+            {canUpdateBooking && booking.ticketStatus !== "ISSUED" ? (
+              <TicketingControl
+                bookingId={booking.id}
+                ticketingReference={booking.ticketingReference}
+                passengers={booking.passengers.map((passenger) => ({
+                  id: passenger.id,
+                  fullName: fullName(passenger),
+                  ticketNumber: passenger.ticketNumber,
+                }))}
+              />
             ) : null}
           </Panel>
           ) : null}
@@ -732,6 +814,24 @@ export default async function BookingDetailPage({
                 bookingId={booking.id}
                 currentStatus={booking.status}
                 allowedStatuses={allowedTransitionsFrom(booking.status)}
+              />
+            </Panel>
+          ) : null}
+
+          {/* Owns the MCO status outright — the Overview panel shows only the
+              supplier, so the status is not stated in two places that could
+              disagree mid-render. Sits outside the `canViewPayments` gate: a
+              role that can move the settlement forward should not also need
+              permission to see the booking's money to do it. */}
+          {canUpdateMco ? (
+            <Panel title="MCO" collapsible={false}>
+              <McoControl
+                bookingId={booking.id}
+                currentStatus={booking.mcoStatus}
+                currentSupplierId={booking.mcoSupplier?.id ?? null}
+                allowedStatuses={allowedMcoTransitionsFrom(booking.mcoStatus)}
+                suppliers={mcoSuppliers}
+                supplierLocked={mcoSupplierIsSettled(booking.mcoStatus)}
               />
             </Panel>
           ) : null}

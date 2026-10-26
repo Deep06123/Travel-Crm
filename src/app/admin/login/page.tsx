@@ -2,19 +2,15 @@ import type { Metadata } from "next";
 import { redirect } from "next/navigation";
 
 import { getCurrentUser } from "@/lib/auth/dal";
-import { getEnv } from "@/lib/env";
 
 import { LoginForm } from "./login-form";
 
 /**
- * Never prerendered: this page's content depends on DEMO_MODE and on whether
- * the visitor already has a valid session, both of which are runtime facts.
- * Built as static HTML it would keep offering whatever the build decided.
+ * Never prerendered: this page redirects when the visitor already holds a
+ * valid session, which is a runtime fact. Built as static HTML it would show
+ * the form to someone already signed in.
  */
 export const dynamic = "force-dynamic";
-
-/** See the admin layout: a cold start must build the embedded database first. */
-export const maxDuration = 60;
 
 export const metadata: Metadata = {
   title: "Sign in · Travel CRM",
@@ -34,11 +30,7 @@ export default async function LoginPage({
 
   return (
     <div className="flex min-h-screen items-center justify-center bg-surface-muted px-4 py-12">
-      <LoginForm
-        next={next}
-        passwordChanged={params["changed"] === "1"}
-        demoMode={getEnv().DEMO_MODE}
-      />
+      <LoginForm next={next} passwordChanged={params["changed"] === "1"} />
     </div>
   );
 }

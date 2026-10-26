@@ -18,25 +18,10 @@ export function proxy(request: NextRequest): NextResponse {
 
   const isLoginRoute = pathname === "/admin/login";
 
-  // A demo deployment has no sign-in to send anyone to. The access layer
-  // resolves the demo administrator without a session, so a missing cookie is
-  // the normal case rather than a signed-out visitor — and bouncing them to a
-  // login page they are not expected to use would make the site unreachable.
-  //
-  // Matched against "false" rather than "true" so it follows the same
-  // default-on behaviour as the environment schema, which this file cannot
-  // import: `proxy` runs before the application's module graph is available.
-  //
-  // The second clause mirrors the schema's other rule — a hosted database
-  // closes the demo unless DEMO_MODE says "true" outright. Duplicated rather
-  // than shared for the same reason, and the two must be changed together: if
-  // this said "open" where the access layer said "closed", every request would
-  // be waved through here only to be redirected to sign in by the layout.
-  const demoMode =
-    process.env["DEMO_MODE"] === "true" ||
-    (process.env["DEMO_MODE"] !== "false" && !process.env["DATABASE_URL"]);
-
-  if (!demoMode && !hasSessionCookie && !isLoginRoute) {
+  // Every protected route requires a session cookie. There is no longer a
+  // demo mode to exempt anyone: the access layer has a single way in, and this
+  // guard mirrors it rather than keeping a second rule that could disagree.
+  if (!hasSessionCookie && !isLoginRoute) {
     const loginUrl = new URL("/admin/login", request.url);
 
     // Preserve where the user was heading so sign-in can return them there.

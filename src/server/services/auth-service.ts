@@ -159,10 +159,23 @@ export async function login({
 
   // Successful sign-in: clear the failure counter and upgrade the stored digest
   // if it predates the current bcrypt cost.
-  const updates: { failedLoginAttempts: number; lockedUntil: null; lastLoginAt: Date; passwordHash?: string } = {
+  //
+  // `pendingPassword` is erased here, and this is the only thing that bounds
+  // how long a provisioning credential stays readable. It exists so whoever
+  // created the account can pass it on; once the holder has signed in it has
+  // served its purpose, and leaving it would turn a hand-over note into a
+  // stored password. A reset issues a fresh one if it is needed again.
+  const updates: {
+    failedLoginAttempts: number;
+    lockedUntil: null;
+    lastLoginAt: Date;
+    pendingPassword: null;
+    passwordHash?: string;
+  } = {
     failedLoginAttempts: 0,
     lockedUntil: null,
     lastLoginAt: new Date(),
+    pendingPassword: null,
   };
 
   if (needsRehash(user.passwordHash)) {
@@ -230,6 +243,9 @@ export async function changePassword(
       mustChangePassword: false,
       failedLoginAttempts: 0,
       lockedUntil: null,
+      // Belt and braces alongside the clear on sign-in: whatever route led
+      // here, the provisioning credential is certainly no longer the password.
+      pendingPassword: null,
     },
   });
 

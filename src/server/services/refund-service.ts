@@ -103,7 +103,7 @@ export async function requestRefund(
     // two requests can both read a 1,000.00 balance and both be accepted for
     // 1,000.00 — the classic double-refund. The lock is taken before any
     // balance is read, and held until commit.
-    await tx.$executeRaw`SELECT id FROM "Booking" WHERE id = ${input.bookingId} FOR UPDATE`;
+    await tx.$executeRaw`SELECT \`id\` FROM \`Booking\` WHERE \`id\` = ${input.bookingId} FOR UPDATE`;
 
     const booking = await tx.booking.findUnique({
       where: { id: input.bookingId },
@@ -260,7 +260,7 @@ export async function approveRefund(
 
     // Re-check against the live balance: the position may have moved between
     // the request and this decision.
-    await tx.$executeRaw`SELECT id FROM "Booking" WHERE id = ${refund.bookingId} FOR UPDATE`;
+    await tx.$executeRaw`SELECT \`id\` FROM \`Booking\` WHERE \`id\` = ${refund.bookingId} FOR UPDATE`;
 
     const position = await getBookingPosition(refund.bookingId, tx);
     if (!position) throw new Error("Could not compute the booking balance.");
@@ -446,10 +446,10 @@ export async function listRefunds(
   if (filters.q) {
     const term = filters.q.trim();
     where.OR = [
-      { reference: { contains: term, mode: "insensitive" } },
-      { reason: { contains: term, mode: "insensitive" } },
-      { booking: { bookingNumber: { contains: term, mode: "insensitive" } } },
-      { booking: { customer: { lastName: { contains: term, mode: "insensitive" } } } },
+      { reference: { contains: term } },
+      { reason: { contains: term } },
+      { booking: { bookingNumber: { contains: term } } },
+      { booking: { customer: { lastName: { contains: term } } } },
     ];
   }
 

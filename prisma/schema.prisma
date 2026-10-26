@@ -6,8 +6,11 @@
 //     suffixed `...Minor`, always paired with an ISO-4217 `currency` column on
 //     the same row. Amounts in different currencies are never summed without an
 //     explicit exchange-rate policy. Int holds roughly ±21,000,000.00 per row,
-//     which is well above any single booking; Postgres widens to bigint when
-//     aggregating, so report totals do not overflow.
+//     which is well above any single booking; MySQL accumulates SUM() over an
+//     integer column into a BIGINT, so report totals do not overflow.
+//   * MySQL has no array column type. The three fields that were Postgres
+//     arrays are JSON documents, decoded through `src/lib/db/json-list.ts`
+//     rather than read straight off the row.
 //   * Historical and financial rows are never cascade-deleted. Cancelling a
 //     booking or deactivating a customer must leave the payment, refund,
 //     chargeback and audit trail intact, so those relations use Restrict.
@@ -21,7 +24,7 @@ generator client {
 }
 
 datasource db {
-  provider = "postgresql"
+  provider = "mysql"
 }
 
 // ---------------------------------------------------------------------------
@@ -64,6 +67,19 @@ model AdminUser {
   passwordChangedAt   DateTime  @default(now())
   /// Forces a password change on next sign-in, used for provisioned accounts.
   mustChangePassword  Boolean   @default(false)
+
+  /// The one-time password this account was provisioned with, readable until
+  /// it is first used.
+  ///
+  /// Not the holder's password and never becomes one: it is generated here,
+  /// has never been chosen or reused by a person, and is erased the moment
+  /// they sign in — see `clearPendingPassword`. Its only purpose is so whoever
+  /// created the account can read it back long enough to pass it on, instead
+  /// of it being shown once and lost.
+  ///
+  /// `passwordHash` remains the only thing ever checked at sign-in. This is
+  /// never compared against anything, and a chosen password never lands here.
+  pendingPassword     String?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -110,7 +126,7 @@ model AdminSession {
   lastActiveAt DateTime  @default(now())
   revokedAt    DateTime?
   ipAddress    String?
-  userAgent    String?
+  userAgent    String? @db.Text
   createdAt    DateTime  @default(now())
 
   @@index([adminUserId, revokedAt])
@@ -135,8 +151,8 @@ model LoginEvent {
   adminUserId String?
   adminUser   AdminUser?     @relation(fields: [adminUserId], references: [id], onDelete: SetNull)
   ipAddress   String?
-  userAgent   String?
-  reason      String?
+  userAgent   String? @db.Text
+  reason      String? @db.Text
   createdAt   DateTime       @default(now())
 
   @@index([adminUserId, createdAt])
@@ -193,12 +209,12 @@ model AuditLog {
   entityId    String
   adminUserId String?
   adminUser   AdminUser?  @relation(fields: [adminUserId], references: [id], onDelete: SetNull)
-  summary     String
+  summary     String @db.Text
   /// Redacted before/after field values. Never contains passwords, full card
   /// numbers or passport numbers.
   changes     Json?
   ipAddress   String?
-  userAgent   String?
+  userAgent   String? @db.Text
   createdAt   DateTime    @default(now())
 
   @@index([entityType, entityId, createdAt])
@@ -234,8 +250,7 @@ model Customer {
   billingCountry      String?
 
   preferredLanguage String? @default("en")
-  notes             String?
-
+  notes             String? @db.Text
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -258,7 +273,7 @@ model CustomerNote {
   id          String    @id @default(cuid())
   customerId  String
   customer    Customer  @relation(fields: [customerId], references: [id], onDelete: Cascade)
-  body        String
+  body        String @db.Text
   authorId    String?
   author      AdminUser? @relation(fields: [authorId], references: [id], onDelete: SetNull)
   createdAt   DateTime  @default(now())
@@ -296,6 +311,18 @@ enum TicketStatus {
   VOIDED
   EXCHANGED
   FAILED
+}
+
+/// Card scheme recorded against a booking. Stored for reconciliation and for
+/// the agent to recognise the card on a follow-up call; never the card itself.
+enum CardType {
+  VISA
+  MASTERCARD
+  AMERICAN_EXPRESS
+  DISCOVER
+  DINERS_CLUB
+  JCB
+  OTHER
 }
 
 enum McoStatus {
@@ -363,6 +390,14 @@ model Booking {
   source   String?
   language String? @default("en")
 
+  /// Overrides for the customer emails this booking sends.
+  ///
+  /// Both are optional, and blank means "no override" rather than "send an
+  /// empty subject" — some bookings need wording the standard template cannot
+  /// produce, most do not. Applied in `src/lib/mail/templates.ts`.
+  customEmailSubject String?
+  emailTopHeading    String?
+
   // --- Contact snapshot -----------------------------------------------------
   // Captured on the booking so historical records keep the details actually
   // used at the time, even if the customer profile is later edited.
@@ -377,13 +412,34 @@ model Booking {
   billingPostalCode   String?
   billingCountry      String?
 
+  // --- Billing information --------------------------------------------------
+  // What the agent took down from the customer at booking time, minus the parts
+  // that must never be kept. The card number and CVV are typed into the form so
+  // the agent can key them into the terminal, and are discarded in the browser:
+  // they are not submitted, so there is no column here for them to land in.
+  // Storing a CVV after authorization is prohibited outright (PCI-DSS 3.3.1),
+  // and a stored PAN would put this database in SAQ-D scope.
+  cardHolderName String?
+  cardType       CardType?
+  /// Last four digits only, derived in the browser from a number never sent.
+  cardLast4      String?   @db.Char(4)
+  /// Card expiry as MMYY. Not sensitive authentication data on its own.
+  cardExpiry     String?   @db.Char(4)
+  /// The number the customer called in on, which is not always their contact
+  /// number and is what the call floor reconciles against.
+  inboundPhone   String?
+  /// The number registered against the card's billing address.
+  billingPhone   String?
+  /// Comma-separated addresses the billing paperwork goes to. Free text rather
+  /// than a relation: these are whoever the customer nominated, not accounts.
+  billingEmails  String?   @db.Text
+
   // --- Ticketing ------------------------------------------------------------
   ticketStatus        TicketStatus @default(PENDING)
   airlineConfirmation String?
   ticketingReference  String?
   ticketedAt          DateTime?
-  ticketingNotes      String?
-
+  ticketingNotes      String? @db.Text
   // --- MCO ------------------------------------------------------------------
   mcoStatus McoStatus @default(NOT_APPLICABLE)
 
@@ -400,8 +456,7 @@ model Booking {
   netMcoMinor    Int    @default(0)
   /// Whether the total is collected across multiple card charges.
   splitCharges   Boolean @default(false)
-  financialNotes String?
-
+  financialNotes String? @db.Text
   travelStartDate DateTime?
   travelEndDate   DateTime?
   followUpAt      DateTime?
@@ -448,8 +503,13 @@ model FlightDetail {
 
   /// Raw PNR text as supplied by the agent. Parsing into structured segments is
   /// a separate, explicit step — this field is never assumed to be decoded.
-  pnrText       String?
+  pnrText       String? @db.Text
   pnrLocator    String?
+
+  /// Itinerary composed in the rich-text editor, offered as the alternative to
+  /// pasting a PNR. Sanitised on the server before storage — see
+  /// `src/lib/html/sanitise.ts`. Like `pnrText`, it is never parsed.
+  itineraryHtml String? @db.Text
   airline       String?
   bookingClass  String?
   origin        String? @db.Char(3)
@@ -497,7 +557,16 @@ model CruiseDetail {
   cruiseLine        String
   ship              String?
   reservationNumber String?
-  itinerary         String?
+
+  /// Raw reservation text as supplied by the agent — the cruise counterpart to
+  /// `FlightDetail.pnrText`. Stored exactly as pasted and never parsed.
+  reservationText   String? @db.Text
+
+  /// Itinerary composed in the rich-text editor, the alternative to pasting a
+  /// reservation. Sanitised on the server before storage.
+  itineraryHtml     String? @db.Text
+
+  itinerary         String? @db.Text
   departurePort     String?
   arrivalPort       String?
   sailDate          DateTime?
@@ -512,8 +581,7 @@ model CruiseDetail {
 
   gratuitiesIncluded Boolean @default(false)
   insuranceIncluded  Boolean @default(false)
-  assistanceNotes    String?
-
+  assistanceNotes    String? @db.Text
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -553,8 +621,7 @@ model Passenger {
   /// Cabin assignment for cruise bookings.
   cabinNumber String?
   ticketNumber String?
-  notes        String?
-
+  notes        String? @db.Text
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -573,8 +640,7 @@ model BookingStatusHistory {
 
   fromStatus BookingStatus?
   toStatus   BookingStatus
-  reason     String?
-
+  reason     String? @db.Text
   changedById String?
   changedBy   AdminUser? @relation(fields: [changedById], references: [id], onDelete: SetNull)
   createdAt   DateTime   @default(now())
@@ -593,7 +659,7 @@ model BookingComment {
   bookingId String
   booking   Booking @relation(fields: [bookingId], references: [id], onDelete: Cascade)
 
-  body       String
+  body       String @db.Text
   category   String?
   visibility CommentVisibility @default(INTERNAL)
 
@@ -621,7 +687,7 @@ model BookingFollowUp {
   bookingId String
   booking   Booking @relation(fields: [bookingId], references: [id], onDelete: Cascade)
 
-  reason   String
+  reason   String @db.Text
   priority BookingPriority @default(NORMAL)
   status   FollowUpStatus  @default(OPEN)
   dueAt    DateTime
@@ -633,8 +699,8 @@ model BookingFollowUp {
   createdBy   AdminUser? @relation("FollowUpCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
 
   lastActionAt    DateTime?
-  lastActionNote  String?
-  resolutionNotes String?
+  lastActionNote  String? @db.Text
+  resolutionNotes String? @db.Text
   completedAt     DateTime?
 
   createdAt DateTime @default(now())
@@ -697,8 +763,7 @@ model Document {
   verifiedById       String?
   verifiedBy         AdminUser?                 @relation("DocumentVerifiedBy", fields: [verifiedById], references: [id], onDelete: SetNull)
   verifiedAt         DateTime?
-  verificationNotes  String?
-
+  verificationNotes  String? @db.Text
   uploadedById String?
   uploadedBy   AdminUser? @relation("DocumentUploadedBy", fields: [uploadedById], references: [id], onDelete: SetNull)
 
@@ -799,9 +864,8 @@ model Payment {
   providerTransactionId String?
   /// Payment link sent to the customer. Its presence says nothing about
   /// whether money was collected — only `status` does.
-  paymentUrl            String?
-  failureReason         String?
-
+  paymentUrl            String? @db.Text
+  failureReason         String? @db.Text
   /// Last four digits only. Full card numbers and CVV are never stored.
   cardLast4 String? @db.Char(4)
   cardBrand String?
@@ -860,7 +924,7 @@ model Refund {
   approvedAmountMinor  Int?
   currency             String @db.Char(3)
 
-  reason String
+  reason String @db.Text
   status RefundStatus @default(PENDING)
 
   requestedById String?
@@ -870,14 +934,13 @@ model Refund {
   approvedById String?
   approvedBy   AdminUser? @relation("RefundApprovedBy", fields: [approvedById], references: [id], onDelete: SetNull)
   approvedAt   DateTime?
-  decisionNote String?
-
+  decisionNote String? @db.Text
   /// Null until an integrated provider returns a reference. A manual refund
   /// records the operator action instead and stays clearly labelled as such.
   provider           String?
   providerRefundId   String?
   providerResponse   Json?
-  failureReason      String?
+  failureReason      String? @db.Text
   completedAt        DateTime?
 
   /// Guards against duplicate refunds from retried or concurrent submissions.
@@ -918,8 +981,7 @@ model Chargeback {
   disputedAmountMinor Int
   currency            String @db.Char(3)
   reasonCode          String?
-  reason              String
-
+  reason              String @db.Text
   status       ChargebackStatus @default(RECEIVED)
   receivedAt   DateTime
   /// Processor deadline for a response. Drives the deadline-monitoring views.
@@ -929,7 +991,7 @@ model Chargeback {
   /// the case is only prepared and tracked inside the CRM.
   submissionReference String?
   resolvedAt   DateTime?
-  resolution   String?
+  resolution   String? @db.Text
   /// Net financial effect once resolved; negative when funds are lost.
   outcomeAmountMinor Int?
 
@@ -977,8 +1039,7 @@ model FinancialAdjustment {
   /// Signed amount in minor units: positive increases what we collect.
   amountMinor Int
   currency    String @db.Char(3)
-  reason      String
-
+  reason      String @db.Text
   createdById String?
   createdBy   AdminUser? @relation(fields: [createdById], references: [id], onDelete: SetNull)
   createdAt   DateTime   @default(now())
@@ -1002,9 +1063,14 @@ model Agent {
   dialerId  String?  @unique
   team      String?
   isActive  Boolean  @default(true)
-  /// Optional CIDR allowlist. A network control only — never a substitute for
-  /// authentication.
-  allowedIpRanges String[] @default([])
+  /// Optional CIDR allowlist, held as a JSON array of strings. A network
+  /// control only — never a substitute for authentication.
+  ///
+  /// MySQL has no array column type, so what Postgres stored as `text[]` is a
+  /// JSON document here. Readers must go through `toStringList` in
+  /// `src/lib/db/json-list.ts` rather than trusting the column's shape: JSON is
+  /// unvalidated by the database, so a hand-edited row can hold anything.
+  allowedIpRanges Json
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -1030,10 +1096,11 @@ model Supplier {
   contactEmail String?
   contactPhone String?
   isActive     Boolean  @default(true)
-  /// Products this supplier can be selected for.
-  supportedProducts BookingProduct[] @default([])
-  notes        String?
-
+  /// Products this supplier can be selected for, as a JSON array of
+  /// BookingProduct names. See the note on `Agent.allowedIpRanges` for why this
+  /// is JSON rather than an array column; decode with `toEnumList`.
+  supportedProducts Json
+  notes        String? @db.Text
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -1052,8 +1119,7 @@ model McoSupplier {
   contactEmail String?
   contactPhone String?
   isActive     Boolean @default(true)
-  notes        String?
-
+  notes        String? @db.Text
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -1069,8 +1135,7 @@ model Tfn {
   label       String
   category    String?
   isActive    Boolean @default(true)
-  notes       String?
-
+  notes       String? @db.Text
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -1098,14 +1163,14 @@ model CustomerServiceCase {
   booking   Booking? @relation(fields: [bookingId], references: [id], onDelete: Restrict)
 
   category    String
-  description String
+  description String @db.Text
   priority    BookingPriority   @default(NORMAL)
   status      ServiceCaseStatus @default(OPEN)
 
   assignedToId String?
   assignedTo   AdminUser? @relation(fields: [assignedToId], references: [id], onDelete: SetNull)
 
-  resolution String?
+  resolution String? @db.Text
   resolvedAt DateTime?
 
   createdAt DateTime @default(now())
@@ -1148,8 +1213,7 @@ model CallRecord {
   outcome         CallOutcome
   occurredAt      DateTime
   durationSeconds Int?
-  notes           String?
-
+  notes           String? @db.Text
   followUpRequired Boolean   @default(false)
   followUpAt       DateTime?
 
@@ -1178,8 +1242,7 @@ enum MessageStatus {
 model Message {
   id      String @id @default(cuid())
   subject String
-  body    String
-
+  body    String @db.Text
   senderId String?
   sender   AdminUser? @relation(fields: [senderId], references: [id], onDelete: SetNull)
 
@@ -1191,8 +1254,7 @@ model Message {
 
   status MessageStatus @default(DRAFT)
   sentAt DateTime?
-  failureReason String?
-
+  failureReason String? @db.Text
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -1222,10 +1284,11 @@ model MessageRecipient {
 model MessageGroup {
   id          String   @id @default(cuid())
   name        String   @unique
-  description String?
-  /// AdminUser ids belonging to the group, expanded into MessageRecipient rows
-  /// at send time so delivery state stays per-recipient.
-  memberIds   String[] @default([])
+  description String? @db.Text
+  /// AdminUser ids belonging to the group, as a JSON array, expanded into
+  /// MessageRecipient rows at send time so delivery state stays per-recipient.
+  /// Decode with `toStringList`.
+  memberIds   Json
   isActive    Boolean  @default(true)
 
   createdAt DateTime @default(now())
@@ -1259,8 +1322,8 @@ model Notification {
   /// Stable identity for the event this notification represents, e.g.
   /// `booking:<id>:CONFIRMED`. Unique, so a booking that leaves and re-enters
   /// a status cannot email the customer the same confirmation twice. Nullable
-  /// because ad-hoc notifications have no natural key, and PostgreSQL treats
-  /// each NULL as distinct under a unique index.
+  /// because ad-hoc notifications have no natural key, and MySQL — like
+  /// PostgreSQL before it — treats each NULL as distinct under a unique index.
   dedupeKey String? @unique
 
   bookingId String?
@@ -1274,8 +1337,7 @@ model Notification {
   provider          String?
   providerReference String?
   attemptCount      Int     @default(0)
-  lastError         String?
-
+  lastError         String? @db.Text
   sentAt    DateTime?
   createdAt DateTime  @default(now())
   updatedAt DateTime  @updatedAt
@@ -1295,7 +1357,7 @@ model WebhookEvent {
   payload    Json
 
   processedAt  DateTime?
-  processError String?
+  processError String? @db.Text
   receivedAt   DateTime  @default(now())
 
   @@unique([provider, externalId])
@@ -1311,9 +1373,28 @@ model IntegrationConfiguration {
   isEnabled Boolean @default(false)
   /// Non-secret settings only: endpoints, feature toggles, account identifiers.
   settings Json?
-  notes    String?
-
+  notes    String? @db.Text
   createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+/// Monotonic counter behind a human-facing reference number.
+///
+/// Postgres supplied these as real sequences; MySQL has no `CREATE SEQUENCE`,
+/// so one row per counter stands in. The row is advanced with MySQL's
+/// `LAST_INSERT_ID(value + 1)` idiom, which increments and reads atomically
+/// within a single statement — see `src/lib/db/references.ts`. Prisma Client
+/// never writes this table; the one statement that does is raw SQL.
+///
+/// Unlike a Postgres sequence this *does* roll back with its transaction, and
+/// the row lock it takes is held until commit. Both differences are safe for
+/// the property that matters — no two bookings get the same number — but a
+/// long transaction that allocates a reference will serialise others wanting
+/// the same kind, so references are allocated late and the work is short.
+model ReferenceSequence {
+  /// Counter name, e.g. `booking_number`.
+  kind      String   @id
+  value     BigInt   @default(0)
   updatedAt DateTime @updatedAt
 }
 
@@ -1323,7 +1404,7 @@ model BusinessSetting {
   id          String   @id @default(cuid())
   key         String   @unique
   value       Json
-  description String?
+  description String? @db.Text
   updatedAt   DateTime @updatedAt
   createdAt   DateTime @default(now())
 }

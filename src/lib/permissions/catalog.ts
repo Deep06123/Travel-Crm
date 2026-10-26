@@ -38,6 +38,7 @@ export const PERMISSIONS = {
   BOOKING_CREATE: "booking.create",
   BOOKING_UPDATE: "booking.update",
   BOOKING_CHANGE_STATUS: "booking.changeStatus",
+  BOOKING_MCO_UPDATE: "booking.mcoUpdate",
   BOOKING_CANCEL: "booking.cancel",
   BOOKING_ASSIGN: "booking.assign",
   BOOKING_SET_PRIORITY: "booking.setPriority",
@@ -127,6 +128,7 @@ export const PERMISSION_DEFINITIONS: readonly PermissionDefinition[] = [
   { key: PERMISSIONS.BOOKING_CREATE, description: "Create flight and cruise bookings", category: BOOKINGS },
   { key: PERMISSIONS.BOOKING_UPDATE, description: "Edit booking details", category: BOOKINGS },
   { key: PERMISSIONS.BOOKING_CHANGE_STATUS, description: "Move a booking through its lifecycle", category: BOOKINGS },
+  { key: PERMISSIONS.BOOKING_MCO_UPDATE, description: "Move a booking's MCO through its settlement cycle", category: BOOKINGS },
   { key: PERMISSIONS.BOOKING_CANCEL, description: "Cancel a booking", category: BOOKINGS },
   { key: PERMISSIONS.BOOKING_ASSIGN, description: "Assign a booking to an agent", category: BOOKINGS },
   { key: PERMISSIONS.BOOKING_SET_PRIORITY, description: "Change booking priority and escalation", category: BOOKINGS },
@@ -232,6 +234,7 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<AdminRole, PermissionKey[]> = {
     PERMISSIONS.BOOKING_CREATE,
     PERMISSIONS.BOOKING_UPDATE,
     PERMISSIONS.BOOKING_CHANGE_STATUS,
+    PERMISSIONS.BOOKING_MCO_UPDATE,
     PERMISSIONS.BOOKING_CANCEL,
     PERMISSIONS.BOOKING_ASSIGN,
     PERMISSIONS.BOOKING_SET_PRIORITY,
@@ -269,6 +272,10 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<AdminRole, PermissionKey[]> = {
 
   [AdminRole.FINANCE]: [
     PERMISSIONS.BOOKING_VIEW,
+    // Settling an MCO against a supplier is finance work, which is why this is
+    // its own capability rather than riding on BOOKING_UPDATE: finance does not
+    // edit itineraries but does have to move this field.
+    PERMISSIONS.BOOKING_MCO_UPDATE,
     PERMISSIONS.PASSENGER_VIEW,
     PERMISSIONS.COMMENT_VIEW,
     PERMISSIONS.COMMENT_CREATE,

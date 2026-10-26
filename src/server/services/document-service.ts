@@ -26,7 +26,7 @@ const log = loggerFor("document-service");
  * Documents.
  *
  * Bytes go to private object storage; only metadata and an opaque key are kept
- * in Postgres. Nothing here ever returns a public URL — reads go through the
+ * in MySQL. Nothing here ever returns a public URL — reads go through the
  * protected route handler, which re-checks permissions on every fetch.
  */
 
@@ -341,10 +341,10 @@ export async function listDocuments(
   if (filters.q) {
     const term = filters.q.trim();
     where.OR = [
-      { title: { contains: term, mode: "insensitive" } },
-      { booking: { bookingNumber: { contains: term, mode: "insensitive" } } },
-      { customer: { reference: { contains: term, mode: "insensitive" } } },
-      { customer: { lastName: { contains: term, mode: "insensitive" } } },
+      { title: { contains: term } },
+      { booking: { bookingNumber: { contains: term } } },
+      { customer: { reference: { contains: term } } },
+      { customer: { lastName: { contains: term } } },
     ];
   }
 

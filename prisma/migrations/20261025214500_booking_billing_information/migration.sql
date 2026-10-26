@@ -1,0 +1,8 @@
+-- AlterTable
+ALTER TABLE `Booking` ADD COLUMN `billingEmails` TEXT NULL,
+    ADD COLUMN `billingPhone` VARCHAR(191) NULL,
+    ADD COLUMN `cardExpiry` CHAR(4) NULL,
+    ADD COLUMN `cardHolderName` VARCHAR(191) NULL,
+    ADD COLUMN `cardLast4` CHAR(4) NULL,
+    ADD COLUMN `cardType` ENUM('VISA', 'MASTERCARD', 'AMERICAN_EXPRESS', 'DISCOVER', 'DINERS_CLUB', 'JCB', 'OTHER') NULL,
+    ADD COLUMN `inboundPhone` VARCHAR(191) NULL;

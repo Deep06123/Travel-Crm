@@ -92,7 +92,7 @@ describe("provisioning", () => {
     expect(user.passwordHash).toMatch(/^\$2[aby]\$\d{2}\$/);
   });
 
-  it("never returns a password or hash from any read path", async () => {
+  it("never returns a hash from any read path", async () => {
     const created = await makeAgent();
 
     const agent = await getAgent(created.agentId);
@@ -102,9 +102,27 @@ describe("provisioning", () => {
     const serialised = JSON.stringify({ agent, rows: list.rows });
 
     expect(serialised).not.toContain("passwordHash");
-    expect(serialised).not.toContain(created.oneTimePassword);
     expect(serialised).not.toContain("$2b$");
     expect(serialised).not.toContain("$2a$");
+  });
+
+  /**
+   * The provisioning password is readable, and only until it is used.
+   *
+   * This replaces an assertion that no read path returned any password at all.
+   * That was true before `pendingPassword` existed; the invariant now is
+   * narrower and worth stating exactly, because the difference between "the
+   * one-time password until first sign-in" and "the holder's password" is the
+   * whole justification for the column.
+   */
+  it("exposes the provisioning password through the read path", async () => {
+    const created = await makeAgent();
+
+    const agent = await getAgent(created.agentId);
+
+    expect(agent?.adminUser.pendingPassword).toBe(created.oneTimePassword);
+    // That it is erased on first sign-in is asserted in
+    // tests/integration/pending-password.test.ts, which owns that lifetime.
   });
 
   it("forces the agent to choose their own password at first sign-in", async () => {

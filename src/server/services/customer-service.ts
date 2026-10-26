@@ -56,7 +56,7 @@ export async function findPotentialDuplicates(
   const conditions: Prisma.CustomerWhereInput[] = [];
 
   if (input.email) {
-    conditions.push({ email: { equals: input.email, mode: "insensitive" } });
+    conditions.push({ email: { equals: input.email } });
   }
 
   if (input.phone) {
@@ -236,7 +236,7 @@ export interface CustomerListFilters {
 /**
  * Paginated customer search.
  *
- * Filtering and counting both run in Postgres; no page loads the full table.
+ * Filtering and counting both run in MySQL; no page loads the full table.
  * The free-text term matches the customer's own fields and their booking
  * numbers, which is how staff actually search — from a number on a call.
  */
@@ -251,12 +251,12 @@ export async function listCustomers(
   if (filters.q) {
     const term = filters.q.trim();
     where.OR = [
-      { firstName: { contains: term, mode: "insensitive" } },
-      { lastName: { contains: term, mode: "insensitive" } },
-      { email: { contains: term, mode: "insensitive" } },
+      { firstName: { contains: term } },
+      { lastName: { contains: term } },
+      { email: { contains: term } },
       { phone: { contains: term } },
-      { reference: { contains: term, mode: "insensitive" } },
-      { bookings: { some: { bookingNumber: { contains: term, mode: "insensitive" } } } },
+      { reference: { contains: term } },
+      { bookings: { some: { bookingNumber: { contains: term } } } },
     ];
   }
 

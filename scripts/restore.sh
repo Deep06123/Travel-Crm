@@ -10,27 +10,34 @@
 # the usual reason to restore is that the current data is already wrong.
 #
 # To replace an existing database deliberately:
-#   psql '<target>' -c 'DROP SCHEMA public CASCADE; CREATE SCHEMA public;'
+#   mysql '<host flags>' -e 'DROP DATABASE `travel_crm`; CREATE DATABASE `travel_crm`;'
 
 set -euo pipefail
 
-# Prisma accepts connection-string parameters the libpq tools reject, notably
-# `schema` and the pool tuning options. They are stripped before pg_dump,
-# pg_restore or psql sees the URL.
-strip_prisma_params() {
+# Turns the `mysql://` URL into the arguments the MySQL client tools take. See
+# the matching function in backup.sh for why the password goes via MYSQL_PWD.
+mysql_conn_vars() {
   python3 - "$1" <<'PYEOF'
 import sys
-from urllib.parse import urlsplit, urlunsplit, parse_qsl, urlencode
-
-PRISMA_ONLY = {
-    "schema", "connection_limit", "pool_timeout", "connect_timeout",
-    "socket_timeout", "max_idle_connection_lifetime", "pgbouncer",
-    "sslidentity", "sslpassword",
-}
+from urllib.parse import urlsplit, unquote
 
 parts = urlsplit(sys.argv[1])
-kept = [(k, v) for k, v in parse_qsl(parts.query) if k not in PRISMA_ONLY]
-print(urlunsplit(parts._replace(query=urlencode(kept))))
+
+if parts.scheme not in ("mysql", "mariadb"):
+    sys.exit(f"Target must be a mysql:// connection string, got {parts.scheme}://")
+
+database = unquote(parts.path.lstrip("/"))
+if not database:
+    sys.exit("The target connection string names no database.")
+
+def quote(value: str) -> str:
+    return "'" + value.replace("'", "'\\''") + "'"
+
+print(f"DB_HOST={quote(parts.hostname or '127.0.0.1')}")
+print(f"DB_PORT={quote(str(parts.port or 3306))}")
+print(f"DB_USER={quote(unquote(parts.username or 'root'))}")
+print(f"DB_NAME={quote(database)}")
+print(f"MYSQL_PWD={quote(unquote(parts.password or ''))}")
 PYEOF
 }
 
@@ -43,12 +50,15 @@ if [[ -z "$BACKUP_DIR" || -z "$TARGET_URL" ]]; then
   exit 1
 fi
 
-if [[ ! -f "$BACKUP_DIR/database.dump" ]]; then
-  echo "No database.dump in $BACKUP_DIR." >&2
+if [[ ! -f "$BACKUP_DIR/database.sql.gz" ]]; then
+  echo "No database.sql.gz in $BACKUP_DIR." >&2
   exit 1
 fi
 
-PG_URL="$(strip_prisma_params "$TARGET_URL")"
+eval "$(mysql_conn_vars "$TARGET_URL")"
+export MYSQL_PWD
+
+MYSQL_ARGS=(--host="$DB_HOST" --port="$DB_PORT" --user="$DB_USER")
 
 echo "==> Verifying the archive is intact"
 if [[ -f "$BACKUP_DIR/checksums.sha256" ]]; then
@@ -60,28 +70,27 @@ else
 fi
 
 echo "==> Checking the target is reachable and empty"
-if ! psql "$PG_URL" -c 'SELECT 1' >/dev/null 2>&1; then
-  echo "Cannot reach the target database." >&2
+if ! mysql "${MYSQL_ARGS[@]}" -e 'SELECT 1' >/dev/null 2>&1; then
+  echo "Cannot reach the target server." >&2
   exit 1
 fi
 
-EXISTING="$(psql "$PG_URL" -tAc \
-  "SELECT count(*) FROM information_schema.tables WHERE table_schema='public'")"
+# The dump carries CREATE DATABASE, so the schema need not exist yet — but if
+# it does and holds tables, this is not an empty target.
+EXISTING="$(mysql "${MYSQL_ARGS[@]}" -NB -e \
+  "SELECT count(*) FROM information_schema.tables WHERE table_schema = '$DB_NAME'")"
 
 if [[ "$EXISTING" != "0" ]]; then
   echo "The target already holds $EXISTING table(s). Refusing to restore over it." >&2
-  echo "Drop them first if that is really the intent:" >&2
-  echo "  psql '$TARGET_URL' -c 'DROP SCHEMA public CASCADE; CREATE SCHEMA public;'" >&2
+  echo "Drop it first if that is really the intent:" >&2
+  echo "  mysql --host=$DB_HOST --port=$DB_PORT --user=$DB_USER -e 'DROP DATABASE \`$DB_NAME\`;'" >&2
   exit 1
 fi
 
 echo "==> Restoring the database"
-pg_restore \
-  --dbname="$PG_URL" \
-  --no-owner \
-  --no-privileges \
-  --exit-on-error \
-  "$BACKUP_DIR/database.dump"
+# No --database flag: the dump was taken with --databases, so it carries its own
+# CREATE DATABASE and USE statements and chooses its own target.
+gunzip -c "$BACKUP_DIR/database.sql.gz" | mysql "${MYSQL_ARGS[@]}"
 
 echo "==> Restoring the document store"
 if [[ -f "$BACKUP_DIR/documents.tar.gz" ]]; then
@@ -117,7 +126,8 @@ if [[ -f "$BACKUP_DIR/manifest.txt" ]]; then
   while IFS='=' read -r key expected; do
     [[ "$key" == rows_* ]] || continue
     table="${key#rows_}"
-    actual="$(psql "$PG_URL" -tAc "SELECT count(*) FROM \"$table\"" 2>/dev/null || echo 'error')"
+    actual="$(mysql "${MYSQL_ARGS[@]}" -NB --database="$DB_NAME" \
+      -e "SELECT count(*) FROM \`$table\`" 2>/dev/null || echo 'error')"
 
     if [[ "$actual" == "$expected" ]]; then
       printf '    %-12s %s\n' "$table" "$actual"

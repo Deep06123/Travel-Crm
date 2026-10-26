@@ -10,7 +10,7 @@ import { isDatabaseUnavailable } from "@/lib/db/errors";
  * mistaken for a transient blip.
  */
 
-/** Shaped like the error Prisma throws when Postgres is unreachable. */
+/** Shaped like the error Prisma throws when MySQL is unreachable. */
 function prismaError(code: string, message = "Prisma failure"): Error {
   return Object.assign(new Error(message), { code });
 }

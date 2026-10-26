@@ -1,5 +1,3 @@
-import "server-only";
-
 import {
   AdjustmentKind,
   AdminRole,
@@ -34,33 +32,34 @@ import {
 } from "@/generated/prisma/enums";
 import type { Prisma, PrismaClient } from "@/generated/prisma/client";
 
-import { DEMO_ADMIN_ID } from "@/lib/auth/demo-identity";
-
 /**
- * The agency this demo depicts.
+ * A sample agency, for looking at the application with something in it.
  *
- * The embedded database starts empty, which left every page of the application
- * showing its empty state: no bookings to open, no payments to reconcile, no
- * refund to approve, nothing to report on. A reviewer could reach each screen
- * and learn nothing from any of them.
+ * An empty database leaves every page showing its empty state: no bookings to
+ * open, no payments to reconcile, no refund to approve, nothing to report on.
+ * You can reach each screen and learn nothing from any of them.
  *
  * This writes a small but complete agency — staff, customers, bookings and the
  * financial and operational records hanging off them — so every list, detail
  * page, filter and report has something real to show.
  *
- * Two properties matter and are deliberate:
+ * Two properties are deliberate:
  *
- * Every identifier is fixed. A serverless deployment builds this database once
- * per instance, so a generated id would differ between instances and a link
- * copied from one would 404 on the next. Fixed ids make every instance
- * identical, which is the only thing that makes the demo navigable.
+ * Every identifier is fixed and prefixed `demo`. That makes the whole dataset
+ * trivially identifiable afterwards, which is what lets `db:sample:clear`
+ * remove exactly these rows and nothing an operator typed in.
  *
- * Dates are relative to boot. A follow-up that was overdue when the fixtures
- * were written would still claim to be overdue by a growing number of years;
- * anchoring to `now` keeps "due in 2 days" true whenever the demo is opened.
+ * Dates are relative to the moment of seeding. A follow-up that was overdue
+ * when the fixtures were written would otherwise claim to be overdue by a
+ * growing number of years; anchoring to `now` keeps "due in 2 days" true
+ * whenever this is run.
  *
- * None of this runs when DATABASE_URL points at a hosted database — that path
- * never loads the embedded database, and so never loads this.
+ * THIS IS NOT PRODUCTION DATA. The staff rows are real AdminUser records with
+ * SUPER_ADMIN and FINANCE roles among them, created with an unusable password
+ * hash so none can be signed into. Seeding this into a database that serves
+ * real customers would put fictional people in the agent list and fictional
+ * money in the reports. `npm run db:sample` refuses to run where real bookings
+ * already exist.
  */
 
 /** Minor units: 1234.56 USD is 123456. */
@@ -82,7 +81,7 @@ function clockFrom(now: Date): Clock {
 }
 
 /** Counts written, for the one log line the bootstrap emits. */
-export interface DemoSeedSummary {
+export interface SampleSeedSummary {
   staff: number;
   customers: number;
   bookings: number;
@@ -552,21 +551,23 @@ const PASSENGER_NAMES = [
  * the cost here, and this runs on the critical path of a cold start — the
  * difference between batching and not is seconds on every new instance.
  */
-export async function seedDemoDataset(
+export async function seedSampleDataset(
   client: PrismaClient,
   now: Date,
-): Promise<DemoSeedSummary> {
+  /** Administrator the sample mail and message groups are addressed to. */
+  ownerId: string,
+): Promise<SampleSeedSummary> {
   const clock = clockFrom(now);
 
   await seedStaff(client, clock);
-  await seedOperationalReference(client);
+  const ids = await seedOperationalReference(client);
   await seedCustomers(client, clock);
-  await seedBookings(client, clock);
+  await seedBookings(client, clock, ids);
 
   const payments = await seedMoney(client, clock);
   const documents = await seedDocuments(client, clock);
   const operations = await seedOperations(client, clock);
-  const messaging = await seedMessaging(client, clock);
+  const messaging = await seedMessaging(client, clock, ownerId);
 
   await seedAuditTrail(client, clock);
   await alignReferenceSequences(client);
@@ -608,40 +609,72 @@ async function seedStaff(client: PrismaClient, clock: Clock): Promise<void> {
       dialerId: person.dialerId,
       team: person.team,
       isActive: true,
+      // A JSON column has no literal DEFAULT in MySQL, so the empty allowlist
+      // is written rather than assumed.
+      allowedIpRanges: [],
       updatedAt: now_(clock),
     })),
     skipDuplicates: true,
   });
 }
 
-async function seedOperationalReference(client: PrismaClient): Promise<void> {
-  await client.supplier.createMany({
-    data: SUPPLIERS.map((s) => ({
-      id: s.id,
-      name: s.name,
-      type: s.type,
-      contactName: s.contactName,
-      contactEmail: s.contactEmail,
-      contactPhone: s.contactPhone,
-      supportedProducts: [...s.supportedProducts],
-      isActive: true,
-      updatedAt: new Date(),
-    })),
-    skipDuplicates: true,
-  });
+/**
+ * Maps a fixture's intended id to the one actually in the database.
+ *
+ * Suppliers and MCO suppliers are unique by NAME, and the real seed already
+ * creates some of the same names with generated ids. Inserting the fixture
+ * version is then skipped as a duplicate, the fixed `demo…` id never exists,
+ * and every booking pointing at it is dropped — silently, because Prisma
+ * compiles `skipDuplicates` to MySQL's `INSERT IGNORE`, which downgrades a
+ * foreign-key violation to a warning rather than an error.
+ *
+ * That is exactly how this failed the first time: five of eighteen bookings
+ * vanished with no diagnostic, and the seed only tripped later, on an
+ * unrelated update. So these two tables are upserted by name and the resulting
+ * id recorded here, and anything referencing them resolves through this map.
+ */
+export type IdMap = ReadonlyMap<string, string>;
 
-  await client.mcoSupplier.createMany({
-    data: MCO_SUPPLIERS.map((s) => ({
-      id: s.id,
-      name: s.name,
-      mailFrom: s.mailFrom,
-      contactEmail: s.contactEmail,
-      contactPhone: s.contactPhone,
-      isActive: true,
-      updatedAt: new Date(),
-    })),
-    skipDuplicates: true,
-  });
+async function seedOperationalReference(
+  client: PrismaClient,
+): Promise<IdMap> {
+  const resolved = new Map<string, string>();
+
+  for (const s of SUPPLIERS) {
+    const row = await client.supplier.upsert({
+      where: { name: s.name },
+      create: {
+        id: s.id,
+        name: s.name,
+        type: s.type,
+        contactName: s.contactName,
+        contactEmail: s.contactEmail,
+        contactPhone: s.contactPhone,
+        supportedProducts: [...s.supportedProducts],
+        isActive: true,
+      },
+      update: {},
+      select: { id: true },
+    });
+    resolved.set(s.id, row.id);
+  }
+
+  for (const s of MCO_SUPPLIERS) {
+    const row = await client.mcoSupplier.upsert({
+      where: { name: s.name },
+      create: {
+        id: s.id,
+        name: s.name,
+        mailFrom: s.mailFrom,
+        contactEmail: s.contactEmail,
+        contactPhone: s.contactPhone,
+        isActive: true,
+      },
+      update: {},
+      select: { id: true },
+    });
+    resolved.set(s.id, row.id);
+  }
 
   await client.tfn.createMany({
     data: TFNS.map((t) => ({
@@ -690,6 +723,8 @@ async function seedOperationalReference(client: PrismaClient): Promise<void> {
     ],
     skipDuplicates: true,
   });
+
+  return resolved;
 }
 
 async function seedCustomers(client: PrismaClient, clock: Clock): Promise<void> {
@@ -742,7 +777,14 @@ async function seedCustomers(client: PrismaClient, clock: Clock): Promise<void> 
   });
 }
 
-async function seedBookings(client: PrismaClient, clock: Clock): Promise<void> {
+async function seedBookings(
+  client: PrismaClient,
+  clock: Clock,
+  /** Resolves a fixture id to the row that actually exists. See IdMap. */
+  ids: IdMap,
+): Promise<void> {
+  const resolve = (id: string): string => ids.get(id) ?? id;
+
   const bookingTypes = await client.bookingType.findMany({
     select: { id: true, code: true },
   });
@@ -768,9 +810,11 @@ async function seedBookings(client: PrismaClient, clock: Clock): Promise<void> {
         customerId: customerId(spec.customer),
         createdById: spec.agent,
         assignedAgentId: spec.agent,
-        supplierId: supplier.id,
+        supplierId: resolve(supplier.id),
         mcoSupplierId:
-          spec.index % 4 === 0 ? MCO_SUPPLIERS[spec.index % 3]!.id : null,
+          spec.index % 4 === 0
+            ? resolve(MCO_SUPPLIERS[spec.index % 3]!.id)
+            : null,
         tfnId: TFNS[spec.index % TFNS.length]!.id,
         source: spec.source,
         language: "en",
@@ -1421,6 +1465,15 @@ async function seedOperations(
 async function seedMessaging(
   client: PrismaClient,
   clock: Clock,
+  /**
+   * The administrator this mail belongs to.
+   *
+   * These fixtures once addressed a fixed demo account that the embedded
+   * database created at boot. There is no such account now, so the sample mail
+   * is addressed to whoever is actually signed in — otherwise the inbox would
+   * be full of messages for a user that does not exist.
+   */
+  ownerId: string,
 ): Promise<{ messages: number }> {
   await client.messageGroup.createMany({
     data: [
@@ -1428,7 +1481,7 @@ async function seedMessaging(
         id: "demogroup00000000000001",
         name: "Air desk",
         description: "Everyone working flight bookings.",
-        memberIds: [NADIA, MARCUS, DEMO_ADMIN_ID],
+        memberIds: [NADIA, MARCUS, ownerId],
         isActive: true,
         updatedAt: new Date(),
       },
@@ -1436,7 +1489,7 @@ async function seedMessaging(
         id: "demogroup00000000000002",
         name: "Finance",
         description: "Payments, refunds and chargebacks.",
-        memberIds: [ELENA, DEMO_ADMIN_ID],
+        memberIds: [ELENA, ownerId],
         isActive: true,
         updatedAt: new Date(),
       },
@@ -1444,7 +1497,7 @@ async function seedMessaging(
         id: "demogroup00000000000003",
         name: "Customer care",
         description: "Service cases and inbound calls.",
-        memberIds: [TOMAS, GRACE, DEMO_ADMIN_ID],
+        memberIds: [TOMAS, GRACE, ownerId],
         isActive: true,
         updatedAt: new Date(),
       },
@@ -1467,8 +1520,8 @@ async function seedMessaging(
     { subject: "Refund queue over threshold", body: "Two refunds are waiting on a SUPER_ADMIN decision because they are above the approval threshold.", sender: ELENA, group: "demogroup00000000000002", booking: null, status: MessageStatus.SENT, daysAgo: -2, read: false },
     { subject: "Chargeback CBK-000005 deadline passed", body: "We are past the response deadline on the Meridian dispute. Please confirm whether evidence went out.", sender: ELENA, group: "demogroup00000000000002", booking: 2, status: MessageStatus.SENT, daysAgo: -2, read: true },
     { subject: "Cruise desk cover on Friday", body: "Grace is out Friday. Cruise enquiries route to the air desk for the day.", sender: GRACE, group: "demogroup00000000000003", booking: null, status: MessageStatus.SENT, daysAgo: -4, read: true },
-    { subject: "Draft — quarterly supplier review", body: "Starting the notes for the supplier review. Not ready to send yet.", sender: DEMO_ADMIN_ID, group: null, booking: null, status: MessageStatus.DRAFT, daysAgo: 0, read: false },
-    { subject: "Weekly booking summary", body: "Eighteen bookings on file this week, four flagged high or urgent. Details in the booking report.", sender: DEMO_ADMIN_ID, group: "demogroup00000000000001", booking: null, status: MessageStatus.SENT, daysAgo: -6, read: true },
+    { subject: "Draft — quarterly supplier review", body: "Starting the notes for the supplier review. Not ready to send yet.", sender: ownerId, group: null, booking: null, status: MessageStatus.DRAFT, daysAgo: 0, read: false },
+    { subject: "Weekly booking summary", body: "Eighteen bookings on file this week, four flagged high or urgent. Details in the booking report.", sender: ownerId, group: "demogroup00000000000001", booking: null, status: MessageStatus.SENT, daysAgo: -6, read: true },
   ];
 
   await client.message.createMany({
@@ -1494,12 +1547,12 @@ async function seedMessaging(
       .map((spec, i) => ({ spec, i }))
       .filter(
         ({ spec }) =>
-          spec.sender !== DEMO_ADMIN_ID && spec.status === MessageStatus.SENT,
+          spec.sender !== ownerId && spec.status === MessageStatus.SENT,
       )
       .map(({ spec, i }) => ({
         id: `demorcp${String(i).padStart(3, "0")}000000000000000`,
         messageId: `demomsg${String(i).padStart(3, "0")}000000000000000`,
-        recipientId: DEMO_ADMIN_ID,
+        recipientId: ownerId,
         readAt: spec.read ? clock.days(spec.daysAgo + 1) : null,
         createdAt: clock.days(spec.daysAgo),
       })),
@@ -1613,27 +1666,34 @@ async function seedAuditTrail(client: PrismaClient, clock: Clock): Promise<void>
 }
 
 /**
- * Moves the reference sequences past the fixtures.
+ * Moves the reference counters past the fixtures.
  *
- * Booking numbers, customer references and the rest are drawn from Postgres
- * sequences that know nothing about rows inserted with explicit values. Left
- * alone, the first booking created in the demo would be handed MV70001 — which
- * this file already used — and fail on the unique constraint. Advancing the
- * sequences makes creating records work, which is most of what there is to try.
+ * Booking numbers, customer references and the rest are drawn from the
+ * `ReferenceSequence` counters, which know nothing about rows inserted here
+ * with explicit values. Left alone, the next booking created through the UI
+ * would be handed MV70001 — which this file already used — and fail on the
+ * unique constraint.
+ *
+ * `GREATEST` rather than a plain assignment: a database that has already
+ * issued numbers beyond these must not have its counter wound backwards onto
+ * values that are taken.
  */
 async function alignReferenceSequences(client: PrismaClient): Promise<void> {
   const highest = {
-    booking_number_seq: 70_000 + BOOKINGS.length,
-    customer_reference_seq: 100_000 + CUSTOMERS.length,
-    payment_reference_seq: BOOKINGS.length * 2 + 2,
-    refund_reference_seq: 32,
-    chargeback_reference_seq: 32,
-    service_case_seq: 32,
+    booking_number: 70_000 + BOOKINGS.length,
+    customer_reference: 100_000 + CUSTOMERS.length,
+    payment_reference: BOOKINGS.length * 2 + 2,
+    refund_reference: 32,
+    chargeback_reference: 32,
+    service_case: 32,
   };
 
-  for (const [sequence, value] of Object.entries(highest)) {
-    // Names come from the literal above, never from input.
-    await client.$executeRawUnsafe(`SELECT setval('${sequence}', ${value})`);
+  for (const [kind, value] of Object.entries(highest)) {
+    await client.$executeRaw`
+      UPDATE \`ReferenceSequence\`
+      SET \`value\` = GREATEST(\`value\`, ${value}), \`updatedAt\` = NOW(3)
+      WHERE \`kind\` = ${kind}
+    `;
   }
 }
 

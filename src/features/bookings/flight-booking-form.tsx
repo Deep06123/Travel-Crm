@@ -8,6 +8,9 @@ import { useFormStatus } from "react-dom";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Field, Input, Select, Textarea } from "@/components/ui/field";
 import { Panel } from "@/components/ui/panel";
+
+import { BillingInformation } from "./billing-information";
+import { ItinerarySource } from "./itinerary-source";
 import {
   BookingPriority,
   BookingStatus,
@@ -103,6 +106,42 @@ export function FlightBookingForm({
                 <option value="es">Spanish</option>
                 <option value="fr">French</option>
               </Select>
+            )}
+          </Field>
+
+
+          {/* Per-booking email overrides. Left blank, the template decides —
+              which keeps an automatic confirmation reading the same whoever
+              happened to trigger it. */}
+          <Field
+            id="customEmailSubject"
+            label="Custom email subject"
+            hint="Leave blank to use the standard subject."
+            error={error("customEmailSubject")}
+          >
+            {(props) => (
+              <Input
+                {...props}
+                name="customEmailSubject"
+                defaultValue={value("customEmailSubject")}
+                placeholder="Custom Email Subject"
+              />
+            )}
+          </Field>
+
+          <Field
+            id="emailTopHeading"
+            label="Email top heading"
+            hint="Shown in the banner at the top of the email."
+            error={error("emailTopHeading")}
+          >
+            {(props) => (
+              <Input
+                {...props}
+                name="emailTopHeading"
+                defaultValue={value("emailTopHeading")}
+                placeholder="Email Top Heading"
+              />
             )}
           </Field>
 
@@ -238,18 +277,16 @@ export function FlightBookingForm({
           </Field>
         </div>
 
-        <div className="mt-4">
-          <Field
-            id="pnrText"
-            label="PNR text"
-            hint="Stored as pasted, for reference only."
-            error={error("pnrText")}
-          >
-            {(props) => (
-              <Textarea {...props} name="pnrText" rows={5} className="font-mono text-xs" defaultValue={value("pnrText")} />
-            )}
-          </Field>
-        </div>
+        <ItinerarySource
+          textName="pnrText"
+          textLabel="PNR text"
+          textHint="Stored exactly as pasted, for reference only — it is never parsed."
+          textPlaceholder="Please copy and paste PNR here…"
+          textError={error("pnrText")}
+          htmlName="itineraryHtml"
+          defaultText={value("pnrText")}
+          defaultHtml={value("itineraryHtml")}
+        />
 
         <div className="mt-5">
           <h3 className="mb-2 text-sm font-semibold text-ink">
@@ -348,8 +385,8 @@ export function FlightBookingForm({
         </Repeater>
       </Panel>
 
-      {/* D — Customer and billing */}
-      <Panel title="Customer and billing" collapsible={false}>
+      {/* D — Customer */}
+      <Panel title="Customer" collapsible={false}>
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
           <Field
             id="customerId"
@@ -392,32 +429,12 @@ export function FlightBookingForm({
             {(props) => <Input {...props} name="contactPhone" type="tel" defaultValue={value("contactPhone")} />}
           </Field>
 
-          <Field id="billingCountry" label="Billing country" error={error("billingCountry")}>
-            {(props) => <Input {...props} name="billingCountry" defaultValue={value("billingCountry")} />}
-          </Field>
-
-          <Field id="billingAddressLine1" label="Billing address" error={error("billingAddressLine1")} className="sm:col-span-2">
-            {(props) => <Input {...props} name="billingAddressLine1" defaultValue={value("billingAddressLine1")} />}
-          </Field>
-
-          <Field id="billingCity" label="City" error={error("billingCity")}>
-            {(props) => <Input {...props} name="billingCity" defaultValue={value("billingCity")} />}
-          </Field>
-
-          <Field id="billingState" label="State" error={error("billingState")}>
-            {(props) => <Input {...props} name="billingState" defaultValue={value("billingState")} />}
-          </Field>
-
-          <Field id="billingPostalCode" label="Postal code" error={error("billingPostalCode")}>
-            {(props) => <Input {...props} name="billingPostalCode" defaultValue={value("billingPostalCode")} />}
-          </Field>
         </div>
-
-        <p className="mt-3 text-xs text-ink-muted">
-          Card numbers, CVV and expiry dates are not collected. Payments are
-          recorded against a provider transaction reference.
-        </p>
       </Panel>
+
+      {/* D2 — Billing information. The address fields live here rather than
+          above, so there is one place a billing detail is entered. */}
+      <BillingInformation value={value} error={error} />
 
       {/* E — Ticketing */}
       <Panel title="Ticketing information" defaultOpen={false}>

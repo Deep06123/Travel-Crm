@@ -3,7 +3,7 @@ import "server-only";
 /**
  * Database failure classification.
  *
- * An outage is not a user error. When Postgres is unreachable the caller should
+ * An outage is not a user error. When MySQL is unreachable the caller should
  * show "temporarily unavailable" rather than letting a Prisma stack trace reach
  * the browser — the trace names internal paths and query shapes, and tells the
  * operator nothing they can act on.
@@ -31,7 +31,8 @@ export function isDatabaseUnavailable(error: unknown): boolean {
   const code = codeOf(error);
   if (code !== undefined && INFRASTRUCTURE_CODES.has(code)) return true;
 
-  // The pg driver surfaces connection refusal before Prisma assigns a code.
+  // The mariadb driver surfaces connection refusal before Prisma assigns a
+  // code, passing the underlying socket error through unchanged.
   if (code === "ECONNREFUSED" || code === "ETIMEDOUT" || code === "ENOTFOUND") {
     return true;
   }

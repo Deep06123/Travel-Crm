@@ -357,12 +357,12 @@ export async function listPayments(
   if (filters.q) {
     const term = filters.q.trim();
     where.OR = [
-      { reference: { contains: term, mode: "insensitive" } },
-      { providerTransactionId: { contains: term, mode: "insensitive" } },
+      { reference: { contains: term } },
+      { providerTransactionId: { contains: term } },
       { cardLast4: { contains: term } },
-      { booking: { bookingNumber: { contains: term, mode: "insensitive" } } },
-      { customer: { lastName: { contains: term, mode: "insensitive" } } },
-      { customer: { email: { contains: term, mode: "insensitive" } } },
+      { booking: { bookingNumber: { contains: term } } },
+      { customer: { lastName: { contains: term } } },
+      { customer: { email: { contains: term } } },
     ];
   }
 

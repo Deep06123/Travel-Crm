@@ -18,10 +18,11 @@
  */
 import { randomBytes } from "node:crypto";
 
-import { PrismaPg } from "@prisma/adapter-pg";
+import { PrismaMariaDb } from "@prisma/adapter-mariadb";
 import bcrypt from "bcryptjs";
 
 import { PrismaClient } from "../src/generated/prisma/client.js";
+import { mysqlPoolConfig } from "../src/lib/db/mysql-url.js";
 
 // Mirrors src/lib/auth/password.ts, which cannot be imported here: it is
 // marked `server-only`, a guard meant to keep hashing out of client bundles.
@@ -48,7 +49,13 @@ if (!connectionString) {
   process.exit(1);
 }
 
-const prisma = new PrismaClient({ adapter: new PrismaPg({ connectionString }) });
+// A one-shot script needs barely any pool; two connections keep it from
+// competing with a running server for a small MySQL's connection budget.
+const prisma = new PrismaClient({
+  adapter: new PrismaMariaDb(
+    mysqlPoolConfig(connectionString, { connectionLimit: 2 }),
+  ),
+});
 
 const normalised = identifier.trim().toLowerCase();
 const user = await prisma.adminUser.findFirst({
