@@ -8,6 +8,8 @@
     "postinstall": "prisma generate",
     "vercel-build": "bash scripts/vercel-build.sh",
     "start": "next start",
+    "hostinger:setup": "bash scripts/hostinger-setup.sh",
+    "hostinger:deploy": "bash scripts/hostinger-deploy.sh",
     "lint": "eslint",
     "typecheck": "tsc --noEmit",
     "db:generate": "prisma generate",

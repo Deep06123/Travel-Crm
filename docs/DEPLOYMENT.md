@@ -14,6 +14,7 @@ environment. Be clear about which is which:
 | 239 unit/integration + 22 browser tests pass | Load, concurrency at scale, failover |
 | Customer email sends over real SMTP, verified in a browser against a live server | Deliverability: SPF, DKIM, DMARC, and whether a provider accepts your domain |
 | Build, typecheck and lint are clean | Monitoring and alert delivery |
+| A standalone release boots, serves `/admin/login` with its stylesheet, reaches MySQL through `/api/health`, and emits the security headers — from an 88 MB directory with no build toolchain beside it | `hostinger-setup.sh` and `hostinger-deploy.sh` against a real VPS: they have been syntax-checked and reasoned through, not run on Ubuntu |
 
 Treat the smoke-test checklist at the end as the acceptance gate. Until it has
 been run against the real environment, this application is not deployed —
@@ -219,49 +220,118 @@ must be served over HTTPS or sign-in will not work.
 
 ## Deploying to a Hostinger VPS
 
-Unlike Vercel, this is the "one long-lived host" the deployment sequence above
-assumes, so that sequence applies unchanged. What follows is the surrounding
-setup Hostinger does not do for you.
+This is the "one long-lived host" the deployment sequence above assumes, and
+the repository carries the pieces for it:
+
+| File | What it is |
+|---|---|
+| `scripts/hostinger-setup.sh` | First run. Creates the release layout, installs the systemd unit and the nginx site, then stops and lists what is left for you |
+| `scripts/hostinger-deploy.sh` | Every release after that. Backup → build → migrate → switch → restart → health-check, with automatic rollback |
+| `deploy/travel-crm.service` | systemd unit, hardened, bound to loopback |
+| `deploy/nginx.conf` | Reverse proxy, 25 MB upload ceiling, asset caching |
+| `deploy/env.production.example` | Annotated template for `shared/.env` |
 
 **Only a VPS plan works.** Hostinger's Web Hosting and Cloud Hosting tiers are
 PHP/LiteSpeed environments: they cannot hold a long-lived Node process, bind a
-port, or give the SSH access `scripts/backup.sh` needs for `mysqldump`. KVM 2
-(2 vCPU / 8 GB) is the practical floor, because the peak load is `next build`
-rather than serving traffic — this dependency set routinely pushes past 2 GB
-while MySQL is also resident. KVM 1 works if you build elsewhere and ship the
-artefact, or add swap.
+port, or give the SSH access `scripts/backup.sh` needs for `mysqldump`. Among
+the VPS plans, KVM 2 (2 vCPU / 8 GB) is the comfortable floor — the peak load
+is `next build`, not serving traffic. KVM 1 (1 vCPU / 4 GB) does work: the
+deploy script caps the build heap at 1536 MB precisely so V8 collects instead
+of growing into swap and stalling. Expect the build to take several minutes
+there.
+
+### What a release looks like
+
+```
+/srv/travel-crm/
+├── repo/                  the git checkout — this is where the build happens
+├── shared/
+│   ├── .env               secrets, chmod 600, survives every release
+│   └── storage/           uploaded documents, survives every release
+├── releases/
+│   ├── 20261026T084500Z/  a standalone bundle, ~90 MB
+│   └── 20261026T142200Z/
+└── current -> releases/20261026T142200Z
+```
+
+`current` is a symlink, and switching it is an atomic rename, so no request
+ever sees a half-replaced directory. The five most recent releases are kept;
+rolling back by hand is repointing the symlink and restarting.
+
+Everything that must outlive a release lives in `shared/`. A release directory
+is replaced wholesale, so a document or a secret kept inside one is gone at the
+next deploy.
+
+### Why the running host carries no build toolchain
+
+`next.config.ts` sets `output: "standalone"`. The build traces what the server
+actually imports and writes that, with a pruned `node_modules`, to
+`.next/standalone`. The numbers from this repository:
+
+| | Size |
+|---|---|
+| `node_modules` in the checkout | 1.2 GB |
+| A standalone release | 88 MB |
+
+The Prisma driver-adapter setup is part of why that number is small. A classic
+Prisma client ships a native query engine per platform; `@prisma/adapter-mariadb`
+has none, so the release is JavaScript and the `mariadb` connector.
+
+This also means a release can be built on your laptop and shipped as a tarball,
+which is the answer if the VPS is too small to build comfortably. Ship the
+release directory, the `shared/.env`, and nothing else.
 
 ### 1. Provision and harden
 
-Create the VPS with Ubuntu 24.04 LTS, then from the hPanel browser terminal or
-over SSH as root:
+Create the VPS with **Ubuntu 24.04 LTS**, then over SSH as root:
 
 ```bash
 adduser deploy && usermod -aG sudo deploy
 rsync --archive --chown=deploy:deploy ~/.ssh /home/deploy   # keep key access
 
-ufw allow OpenSSH && ufw allow 80 && ufw allow 443 && ufw enable
+ufw allow OpenSSH && ufw allow 'Nginx Full' && ufw enable
 ```
 
-Only 22, 80 and 443 are ever exposed. MySQL stays on localhost and the Node
-process is never reached directly — nginx is the only thing in front of it.
+Only 22, 80 and 443 are ever exposed. MySQL stays on localhost, and the Node
+process binds `127.0.0.1:3000` — nginx is the only thing that can reach it.
 
 ### 2. Install the runtime
 
 ```bash
 curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
-sudo apt-get install -y nodejs mysql-server nginx git
+sudo apt-get install -y nodejs mysql-server nginx git curl certbot python3-certbot-nginx
 sudo mysql_secure_installation
 ```
 
 `mysql-server` brings `mysqldump` and `mysql`, which the backup and restore
-scripts shell out to.
+scripts shell out to. `hostinger-setup.sh` refuses to continue without them —
+a deployment that has no backups should fail loudly on day one, not be
+discovered on the day it matters.
 
-### 3. Create the database
+### 3. Check out and run setup
 
-The collation is not optional. The schema uses `utf8mb4_unicode_ci`, and the
-search filters rely on it being case-insensitive — create the database with the
-wrong one and `q=` searches silently stop matching on case.
+```bash
+sudo mkdir -p /srv/travel-crm && sudo chown deploy:deploy /srv/travel-crm
+git clone <your-repo> /srv/travel-crm/repo
+cd /srv/travel-crm/repo
+scripts/hostinger-setup.sh crm.example.com
+```
+
+It creates the layout, copies the env template to `shared/.env` with mode 600,
+installs the systemd unit and the nginx site with your domain substituted in,
+and grants `deploy` permission to restart that one service and nothing else.
+It is idempotent: an existing file is reported and left alone, never
+overwritten.
+
+It deliberately does not install packages, create the database, write secrets
+or request a certificate — it prints those as numbered steps instead. Follow
+them.
+
+### 4. Create the database
+
+The collation is not optional. The schema uses `utf8mb4_unicode_ci` and the
+search filters rely on it being case-insensitive — create it with the wrong one
+and `q=` searches silently stop matching on case.
 
 ```sql
 CREATE DATABASE travel_crm CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
@@ -270,115 +340,39 @@ GRANT ALL PRIVILEGES ON travel_crm.* TO 'travel_crm'@'localhost';
 FLUSH PRIVILEGES;
 ```
 
-### 4. Check out and configure
+### 5. Fill in the environment
+
+Edit `/srv/travel-crm/shared/.env`. Three values have no default and no
+sensible guess:
 
 ```bash
-sudo mkdir -p /srv/travel-crm /srv/travel-crm-storage
-sudo chown -R deploy:deploy /srv/travel-crm /srv/travel-crm-storage
-git clone <your-repo> /srv/travel-crm && cd /srv/travel-crm
-```
-
-`/srv/travel-crm-storage` is deliberately outside the checkout: the env schema
-rejects a `STORAGE_LOCAL_ROOT` under `public/`, because anything there would be
-served as a static file and bypass the permission check in
-`/api/admin/documents/[id]/view`.
-
-Write `/srv/travel-crm/.env` (`chmod 600`):
-
-```bash
-NODE_ENV="production"
 DATABASE_URL="mysql://travel_crm:<password>@127.0.0.1:3306/travel_crm"
 AUTH_SECRET="<openssl rand -base64 32 — a new one, never the local value>"
 AUTH_URL="https://crm.example.com"
-STORAGE_DRIVER="local"
-STORAGE_LOCAL_ROOT="/srv/travel-crm-storage"
-LOG_LEVEL="info"
-BUSINESS_TIMEZONE="Asia/Kolkata"
-
-INITIAL_ADMIN_EMAIL="you@example.com"
-INITIAL_ADMIN_NAME="Your Name"
-INITIAL_ADMIN_USERNAME="admin"
-# INITIAL_ADMIN_PASSWORD deliberately unset — the seed generates and prints one.
 ```
 
-Leave `DIRECT_URL` unset. It exists for serverless hosts whose pooler cannot
-hold the session state DDL requires; here the one connection string is direct.
+Leave `DIRECT_URL` unset: it exists for serverless hosts whose pooler cannot
+hold the session state DDL requires, and here the one string is already direct.
+`STORAGE_DRIVER="local"` is correct — `blob` exists for Vercel, where a
+writable filesystem does not.
 
-### 5. Build, migrate, seed
+**`AUTH_URL` is read at build time as well as at runtime.** `next.config.ts`
+puts its host in the Server Action allow-list, and `output: "standalone"`
+freezes that into the bundle. A release built with the wrong one boots cleanly
+and then rejects every form submission, which presents as "saving does
+nothing". `hostinger-deploy.sh` refuses to build without it.
 
-```bash
-npm ci
-npm run build          # prisma generate && next build
-npm run db:deploy      # never `migrate dev` — it can reset data
-npm run db:seed        # capture the one-time password from stdout
-```
+### 6. Certificate
 
-`npm run vercel-build` is for Vercel only; on a VPS the migration step is the
-separate `db:deploy` above, so you control when schema changes land relative to
-the process restart.
-
-### 6. Run it under systemd
-
-`next start` must survive logout and reboot. `/etc/systemd/system/travel-crm.service`:
-
-```ini
-[Unit]
-Description=Travel Booking CRM
-After=network.target mysql.service
-
-[Service]
-Type=simple
-User=deploy
-WorkingDirectory=/srv/travel-crm
-EnvironmentFile=/srv/travel-crm/.env
-ExecStart=/usr/bin/npm run start
-Restart=always
-RestartSec=5
-StandardOutput=journal
-StandardError=journal
-
-[Install]
-WantedBy=multi-user.target
-```
-
-```bash
-sudo systemctl enable --now travel-crm
-journalctl -u travel-crm -f
-```
-
-Pino writes structured JSON to stdout, so journald becomes the log sink the
-Monitoring section refers to. `journalctl -u travel-crm -p err` is the
-`level=error` filter.
-
-### 7. Reverse proxy and TLS
-
-Point the domain's A record at the VPS IP, then:
-
-```nginx
-server {
-    server_name crm.example.com;
-
-    # Documents and PNR uploads exceed the 1 MB default.
-    client_max_body_size 25m;
-
-    location / {
-        proxy_pass http://127.0.0.1:3000;
-        proxy_http_version 1.1;
-        proxy_set_header Host $host;
-        proxy_set_header X-Forwarded-Proto $scheme;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header Upgrade $http_upgrade;
-        proxy_set_header Connection "upgrade";
-    }
-}
-```
+Point an A record at the VPS IP, wait for it to resolve, then:
 
 ```bash
 sudo certbot --nginx -d crm.example.com
 ```
 
-Then add HSTS to the server block — at the terminator, not in `next.config.ts`,
-so local HTTP development is unaffected:
+certbot rewrites the nginx site in place, adding the 443 block and the
+HTTP→HTTPS redirect. Add HSTS to the block it creates — at the terminator, not
+in `next.config.ts`, so local HTTP development is unaffected:
 
 ```nginx
 add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
@@ -387,58 +381,84 @@ add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" alway
 **HTTPS is not optional.** Session cookies carry `secure` whenever
 `NODE_ENV=production`, so over plain HTTP the cookie is set and never sent
 back: sign-in appears to succeed and every subsequent request is anonymous.
-`AUTH_URL` must match the real origin exactly.
+
+### 7. First deploy and seed
+
+```bash
+cd /srv/travel-crm/repo
+SKIP_BACKUP=1 scripts/hostinger-deploy.sh    # nothing to back up yet
+npm run db:seed                              # capture the printed password
+sudo systemctl enable travel-crm             # start at boot
+```
+
+The seed is where the first `SUPER_ADMIN` comes from, and it runs once. The
+database has tables but no permissions, no roles and no administrator until it
+does, so sign-in is impossible beforehand. **Capture the one-time password from
+stdout** — it is printed once, stored only as a bcrypt digest, and is not
+recoverable afterwards. The account is flagged to change it at first sign-in.
 
 ### 8. Verify
 
 ```bash
-BASE_URL=https://crm.example.com \
-DATABASE_URL="mysql://travel_crm:<password>@127.0.0.1:3306/travel_crm" \
-npm run smoke
+BASE_URL=https://crm.example.com npm run smoke
 ```
 
-31 checks, non-zero exit on any failure. This is the acceptance gate.
+31 checks, non-zero exit on any failure. This is the acceptance gate — until it
+has passed against the real URL, the application is deployable rather than
+deployed.
 
 ### 9. Backups
 
-Nothing schedules them for you. As the `deploy` user:
+Nothing schedules them for you. As `deploy`:
 
 ```cron
-20 2 * * * cd /srv/travel-crm && scripts/backup.sh /var/backups/travel-crm >> /var/log/travel-crm-backup.log 2>&1
+20 2 * * * cd /srv/travel-crm/repo && scripts/backup.sh /var/backups/travel-crm >> /var/log/travel-crm-backup.log 2>&1
 ```
 
-Then copy the archives off the host — Hostinger's own VPS snapshots are a
-separate thing and restore the whole machine, not one database. A backup living
+Then copy the archives off the host. Hostinger's VPS snapshots are a separate
+thing and restore the whole machine, not one database — and a backup living
 only on the machine that failed is not a backup.
 
 ### Redeploying
 
 ```bash
-cd /srv/travel-crm
-scripts/backup.sh /var/backups/travel-crm    # mandatory if the release migrates
-git pull && npm ci && npm run build
-npm run db:deploy
-sudo systemctl restart travel-crm
-BASE_URL=https://crm.example.com npm run smoke
+cd /srv/travel-crm/repo && scripts/hostinger-deploy.sh
 ```
 
-There is a brief outage during the restart. Removing it needs two ports and an
-nginx upstream switch, which is more machinery than a single-agency CRM
-warrants.
+In order: back up (and stop if that fails), `git pull --ff-only`, `npm ci`,
+build, assemble a new release, `prisma migrate deploy`, switch the symlink,
+restart, then poll `/api/health` for up to 30 seconds.
+
+If health never comes back, the symlink goes to the previous release and the
+service is restarted on it. The downtime from a release that compiles but
+cannot boot is therefore a few seconds, not an evening.
+
+**The rollback does not undo the migration.** Prisma migrations here are
+forward-only, so the previous code would then be running against a newer
+schema. That is why the backup comes first and why a failed deploy says so on
+the way out: a schema rollback is a restore.
 
 ### Hostinger-specific gotchas
 
-- **Outbound SMTP is blocked by default** on new VPS instances. Irrelevant
-  while `MAIL_DRIVER` is `none`, but customer email will fail silently-ish
-  until you ask support to unblock the port.
-- **No `output: "standalone"`** is configured, so the runtime needs the full
-  `node_modules` on the box. Building elsewhere means shipping `.next`,
-  `node_modules`, `public`, `package.json` and `prisma/` together.
+- **Outbound SMTP is blocked by default** on new VPS instances — port 25
+  always, and often 465/587 until you open a support ticket. Irrelevant while
+  `MAIL_DRIVER` is `none`. Use a provider (SES, SendGrid, Postmark, Mailgun)
+  over 587 rather than sending direct: deliverability from a fresh VPS IP is
+  poor regardless of the port.
+- **The default nginx site answers first.** `hostinger-setup.sh` removes
+  `/etc/nginx/sites-enabled/default`; if you configure nginx by hand, do the
+  same or the placeholder page wins the match for a bare IP.
 - **`prisma migrate dev` will fail** against a user without database-creation
-  rights — it needs a shadow database. `db:deploy` does not, which is the
-  command production uses anyway. Grant the right or set `SHADOW_DATABASE_URL`
-  only if you intend to author migrations on the server, which you should not.
-
+  rights — it needs a shadow database. `migrate deploy` does not, and is what
+  the deploy script uses. Grant the right only if you intend to author
+  migrations on the server, which you should not.
+- **Upload size is set in three places and they must agree**: 25 MB in
+  `document-service.ts`, `serverActions.bodySizeLimit` in `next.config.ts`, and
+  `client_max_body_size` in the nginx site. nginx's own 1 MB default rejects
+  the request a layer before the application, with a 413 the form cannot
+  explain.
+- **hPanel's browser terminal is a root shell.** Use it to create `deploy`,
+  then work over SSH as that user.
 ## Backups
 
 ```bash

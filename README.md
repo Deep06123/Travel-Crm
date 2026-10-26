@@ -222,6 +222,22 @@ drive the real UI; only preconditions are arranged directly.
 See `docs/DEPLOYMENT.md` for configuration, the deployment sequence, backups,
 rollback and the production smoke-test checklist.
 
+### Deploying to a Hostinger VPS
+
+```bash
+scripts/hostinger-setup.sh crm.example.com   # once: layout, systemd, nginx
+scripts/hostinger-deploy.sh                  # every release after that
+```
+
+A deploy backs up, builds, migrates, switches an atomic symlink, restarts and
+then polls `/api/health` — rolling back to the previous release if the new one
+does not answer. `next.config.ts` sets `output: "standalone"`, so what runs on
+the server is an 88 MB bundle rather than the 1.2 GB checkout that produced it.
+
+Only a VPS plan works. Hostinger's Web Hosting and Cloud Hosting tiers are
+PHP/LiteSpeed and cannot hold a long-lived Node process. The supporting files
+are in `deploy/`; the full walkthrough is in `docs/DEPLOYMENT.md`.
+
 ### Agent passwords
 
 The reference CRM renders every agent's password in a plaintext column. That is

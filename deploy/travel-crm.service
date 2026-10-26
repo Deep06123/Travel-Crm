@@ -1,0 +1,80 @@
+# systemd unit for the Travel Booking CRM on a Hostinger VPS.
+#
+# Install with:
+#   sudo cp deploy/travel-crm.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now travel-crm
+#
+# Logs: Pino writes structured JSON to stdout, so journald is the log sink.
+#   journalctl -u travel-crm -f          follow
+#   journalctl -u travel-crm -p err      errors only
+
+[Unit]
+Description=Travel Booking CRM
+Documentation=file:///srv/travel-crm/docs/DEPLOYMENT.md
+# `mysql.service` on an Ubuntu apt install; `mariadb.service` if you installed
+# MariaDB instead. Wants= rather than Requires= so a database restart does not
+# take the application down with it — it degrades and recovers on its own.
+After=network-online.target mysql.service
+Wants=network-online.target mysql.service
+
+[Service]
+Type=simple
+User=deploy
+Group=deploy
+WorkingDirectory=/srv/travel-crm/current
+
+# Secrets live here, chmod 600, owned by deploy. systemd strips surrounding
+# quotes, so the file can be the same shape as .env — but it is NOT a shell:
+# no `export`, no variable expansion, no command substitution.
+EnvironmentFile=/srv/travel-crm/shared/.env
+
+# The standalone server, not `npm run start`. It needs no node_modules beside
+# it and no npm in the process tree, so a stop signal reaches node directly
+# instead of killing the npm wrapper and orphaning its child.
+ExecStart=/usr/bin/node server.js
+Environment=NODE_ENV=production
+Environment=PORT=3000
+Environment=HOSTNAME=127.0.0.1
+
+# Bound to loopback above: nginx is the only thing that may reach it. Exposing
+# 3000 on the public interface would serve the application without TLS, and
+# session cookies are `secure` in production — sign-in would appear to work and
+# every following request would be anonymous.
+
+Restart=always
+RestartSec=5
+# Five failures inside a minute is a configuration fault, not a blip. Give up
+# so `systemctl status` shows it plainly instead of hiding it in a restart loop.
+StartLimitBurst=5
+StartLimitIntervalSec=60
+
+# Graceful shutdown: Next finishes in-flight requests on SIGTERM.
+KillSignal=SIGTERM
+TimeoutStopSec=30
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=travel-crm
+
+# --- Hardening -------------------------------------------------------------
+# The process reads its own release and writes uploaded documents. Nothing else
+# on the filesystem needs to be writable by it.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/srv/travel-crm/shared/storage
+# Next writes its build cache under .next/cache at runtime.
+ReadWritePaths=/srv/travel-crm/current/.next/cache
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictNamespaces=true
+LockPersonality=true
+# MySQL over loopback and SMTP outbound; no raw sockets are needed.
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+
+[Install]
+WantedBy=multi-user.target
