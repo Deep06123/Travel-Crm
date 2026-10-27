@@ -2,7 +2,9 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import {
   AdminRole,
+  BookingPriority,
   BookingStatus,
+  ChargeOutcome,
   CustomerStatus,
   PassengerType,
   TicketStatus,
@@ -37,15 +39,24 @@ const bookingIds: string[] = [];
 interface BookingOverrides {
   status?: BookingStatus;
   ticketStatus?: TicketStatus;
+  chargeOutcome?: ChargeOutcome;
+  departureDate?: Date | undefined;
   airlineConfirmation?: string | undefined;
   ticketNumber?: string | undefined;
   withPassenger?: boolean;
+}
+
+/** A date `days` from now, for exercising the derived priority thresholds. */
+function inDays(days: number): Date {
+  return new Date(Date.now() + days * 24 * 60 * 60 * 1_000);
 }
 
 async function makeBooking(overrides: BookingOverrides = {}): Promise<string> {
   const {
     status = BookingStatus.PENDING,
     ticketStatus = TicketStatus.PENDING,
+    chargeOutcome = ChargeOutcome.PENDING,
+    departureDate,
     airlineConfirmation,
     ticketNumber,
     withPassenger = true,
@@ -55,9 +66,9 @@ async function makeBooking(overrides: BookingOverrides = {}): Promise<string> {
     {
       booking: {
         customerId,
-        status,
-        priority: "NORMAL",
+        chargeOutcome,
         ticketStatus,
+        ...(departureDate === undefined ? {} : { departureDate }),
         mcoStatus: "NOT_APPLICABLE",
         currency: "USD",
         splitCharges: false,
@@ -96,6 +107,15 @@ async function makeBooking(overrides: BookingOverrides = {}): Promise<string> {
   );
 
   bookingIds.push(id);
+
+  // Creation always opens a booking as Pending now — status is no longer an
+  // input. Fixtures needing a later status set it directly, rather than going
+  // through the transition service, whose rules several of these tests are
+  // themselves exercising.
+  if (status !== BookingStatus.PENDING) {
+    await prisma.booking.update({ where: { id }, data: { status } });
+  }
+
   return id;
 }
 
@@ -182,6 +202,53 @@ describe("createFlightBooking", () => {
     ]);
 
     expect(first.bookingNumber).not.toBe(second.bookingNumber);
+  });
+
+  it("derives priority from the travelling date rather than any input", async () => {
+    // Priority is no longer submitted. A booking travelling inside a week is
+    // Urgent; one far out is Low — whatever the agent would have picked.
+    const soon = await makeBooking({ departureDate: inDays(3) });
+    const distant = await makeBooking({ departureDate: inDays(200) });
+    const undated = await makeBooking();
+
+    const [a, b, c] = await Promise.all(
+      [soon, distant, undated].map((id) =>
+        prisma.booking.findUniqueOrThrow({
+          where: { id },
+          select: { priority: true },
+        }),
+      ),
+    );
+
+    expect(a?.priority).toBe(BookingPriority.URGENT);
+    expect(b?.priority).toBe(BookingPriority.LOW);
+    expect(c?.priority).toBe(BookingPriority.NORMAL);
+  });
+
+  it("opens every booking as Pending whatever else is submitted", async () => {
+    const id = await makeBooking();
+
+    const booking = await prisma.booking.findUniqueOrThrow({
+      where: { id },
+      select: { status: true, chargeOutcome: true },
+    });
+
+    expect(booking.status).toBe(BookingStatus.PENDING);
+    // The charge outcome is its own field and defaults to Pending.
+    expect(booking.chargeOutcome).toBe(ChargeOutcome.PENDING);
+  });
+
+  it("stores the charge outcome the agent recorded", async () => {
+    const id = await makeBooking({ chargeOutcome: ChargeOutcome.CHARGEBACK });
+
+    const booking = await prisma.booking.findUniqueOrThrow({
+      where: { id },
+      select: { status: true, chargeOutcome: true },
+    });
+
+    expect(booking.chargeOutcome).toBe(ChargeOutcome.CHARGEBACK);
+    // A chargeback does not drag the lifecycle status with it.
+    expect(booking.status).toBe(BookingStatus.PENDING);
   });
 
   it("records the opening status in history from creation", async () => {

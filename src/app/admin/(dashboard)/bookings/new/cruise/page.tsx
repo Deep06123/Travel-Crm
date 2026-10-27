@@ -71,8 +71,13 @@ export default async function NewCruiseBookingPage({
       select: { id: true, name: true },
       orderBy: { name: "asc" },
     }),
+    // Types scoped to this product, plus the unscoped ones that apply to
+    // both. A cruise-only category must not appear on the flight form.
     prisma.bookingType.findMany({
-      where: { isActive: true },
+      where: {
+        isActive: true,
+        OR: [{ product: BookingProduct.CRUISE }, { product: null }],
+      },
       select: { id: true, label: true },
       orderBy: { sortOrder: "asc" },
     }),

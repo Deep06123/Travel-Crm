@@ -1,10 +1,6 @@
 import { z } from "zod";
 
-import {
-  BookingPriority,
-  BookingStatus,
-  McoStatus,
-} from "@/generated/prisma/enums";
+import { ChargeOutcome, McoStatus } from "@/generated/prisma/enums";
 
 import { billingInformationFields } from "./schemas";
 
@@ -73,14 +69,9 @@ export const cruiseBookingSchema = z
     bookingTypeId: optionalText(40),
     language: optionalText(10),
     source: optionalText(100),
-    priority: z.enum(BookingPriority).default(BookingPriority.NORMAL),
-    status: z
-      .enum(BookingStatus)
-      .refine(
-        (value) => value === BookingStatus.DRAFT || value === BookingStatus.PENDING,
-        "A new booking starts as Draft or Pending.",
-      )
-      .default(BookingStatus.PENDING),
+    // See the flight schema: priority is derived and status always starts
+    // Pending, so neither is submitted.
+    chargeOutcome: z.enum(ChargeOutcome).default(ChargeOutcome.PENDING),
     assignedAgentId: optionalText(40),
     bookedAt: optionalDate,
     // Left blank, the template decides. See Booking.customEmailSubject.

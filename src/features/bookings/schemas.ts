@@ -4,6 +4,7 @@ import {
   BookingPriority,
   BookingStatus,
   CardType,
+  ChargeOutcome,
   McoStatus,
   PassengerType,
   TicketStatus,
@@ -196,16 +197,11 @@ export const flightBookingSchema = z
     bookingTypeId: optionalText(40),
     language: optionalText(10),
     source: optionalText(100),
-    priority: z.enum(BookingPriority).default(BookingPriority.NORMAL),
-    status: z
-      .enum(BookingStatus)
-      // A new booking may only start as a draft or pending. Reaching Confirmed
-      // or Ticketed requires evidence and goes through the transition service.
-      .refine(
-        (value) => value === BookingStatus.DRAFT || value === BookingStatus.PENDING,
-        "A new booking starts as Draft or Pending.",
-      )
-      .default(BookingStatus.PENDING),
+    // Neither priority nor status is submitted any more. Priority is derived
+    // from how close travel is, and a new booking always starts Pending —
+    // reaching Confirmed or Ticketed requires evidence and goes through the
+    // transition service. Both are set in the booking service.
+    chargeOutcome: z.enum(ChargeOutcome).default(ChargeOutcome.PENDING),
     assignedAgentId: optionalText(40),
     bookedAt: optionalDateTime,
     // Left blank, the template decides. See Booking.customEmailSubject.

@@ -68,8 +68,6 @@ async function makeBooking(
     {
       booking: {
         customerId,
-        status,
-        priority: "NORMAL",
         ticketStatus,
         mcoStatus: "NOT_APPLICABLE",
         currency: "USD",
@@ -109,6 +107,14 @@ async function makeBooking(
   );
 
   bookingIds.push(id);
+
+  // Creation always opens a booking as Pending now. A fixture that needs a
+  // later status sets it directly, rather than through the transition service
+  // whose evidence rules are not what this file is testing.
+  if (status !== BookingStatus.PENDING) {
+    await prisma.booking.update({ where: { id }, data: { status } });
+  }
+
   return id;
 }
 

@@ -4,6 +4,7 @@ import {
   AdminRole,
   BookingProduct,
   BookingStatus,
+  ChargeOutcome,
   CustomerStatus,
   TicketStatus,
 } from "@/generated/prisma/enums";
@@ -38,8 +39,7 @@ async function makeCruiseBooking(
     {
       booking: {
         customerId,
-        status: BookingStatus.PENDING,
-        priority: "NORMAL",
+        chargeOutcome: ChargeOutcome.PENDING,
         mcoStatus: "NOT_APPLICABLE",
         currency: "USD",
         splitCharges: false,

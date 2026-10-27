@@ -8,6 +8,7 @@ import {
   BookingStatus,
   CallDirection,
   CallOutcome,
+  ChargeOutcome,
   ChargebackStatus,
   CommentVisibility,
   CustomerStatus,
@@ -31,6 +32,7 @@ import {
   TicketStatus,
 } from "@/generated/prisma/enums";
 import type { Prisma, PrismaClient } from "@/generated/prisma/client";
+import { derivePriority } from "@/lib/bookings/priority";
 
 /**
  * A sample agency, for looking at the application with something in it.
@@ -805,7 +807,18 @@ async function seedBookings(
         bookingNumber: `MV${70_000 + spec.index}`,
         product: spec.product,
         status: spec.status,
-        priority: spec.priority,
+        // Derived, exactly as the booking service derives it, so the demo
+        // agrees with the rule instead of showing a hand-picked level the
+        // application would never produce.
+        priority: derivePriority(clock.days(spec.travelInDays), clock.days(0)),
+        // A little variety across the demo set: most charges went through,
+        // one in five is still pending and one in seven came back declined.
+        chargeOutcome:
+          spec.index % 7 === 0
+            ? ChargeOutcome.DECLINED
+            : spec.index % 5 === 0
+              ? ChargeOutcome.PENDING
+              : ChargeOutcome.CHARGED,
         bookingTypeId: typeFor(spec.product),
         customerId: customerId(spec.customer),
         createdById: spec.agent,

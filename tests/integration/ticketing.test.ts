@@ -60,8 +60,6 @@ async function makeFlight(
     {
       booking: {
         customerId,
-        status,
-        priority: "NORMAL",
         ticketStatus: TicketStatus.PENDING,
         mcoStatus: "NOT_APPLICABLE",
         currency: "USD",
@@ -89,6 +87,15 @@ async function makeFlight(
   );
 
   bookingIds.push(id);
+
+  // Creation always opens a booking as Pending now — status is no longer an
+  // input. Tests that need a later status set it directly, rather than going
+  // through the transition service, which would demand the evidence these
+  // fixtures exist to test.
+  if (status !== BookingStatus.PENDING) {
+    await prisma.booking.update({ where: { id }, data: { status } });
+  }
+
   return id;
 }
 

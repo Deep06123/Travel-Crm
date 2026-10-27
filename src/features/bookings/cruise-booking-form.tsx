@@ -10,12 +10,7 @@ import { Field, Input, Select, Textarea } from "@/components/ui/field";
 import { Panel } from "@/components/ui/panel";
 
 import { BillingInformation } from "./billing-information";
-import { ItinerarySource } from "./itinerary-source";
-import {
-  BookingPriority,
-  BookingStatus,
-  McoStatus,
-} from "@/generated/prisma/enums";
+import { ChargeOutcome } from "@/generated/prisma/enums";
 
 import type { BookingFormState } from "./actions";
 import type { BookingFormOptions } from "./flight-booking-form";
@@ -102,12 +97,12 @@ export function CruiseBookingForm({
           </Field>
 
 
-          {/* Per-booking email overrides. Left blank, the template decides —
+          {/* Per-booking email override. Left blank, the template decides —
               which keeps an automatic confirmation reading the same whoever
               happened to trigger it. */}
           <Field
             id="customEmailSubject"
-            label="Custom email subject"
+            label="Subject"
             hint="Leave blank to use the standard subject."
             error={error("customEmailSubject")}
           >
@@ -116,24 +111,32 @@ export function CruiseBookingForm({
                 {...props}
                 name="customEmailSubject"
                 defaultValue={value("customEmailSubject")}
-                placeholder="Custom Email Subject"
+                placeholder="Subject"
               />
             )}
           </Field>
 
+          {/* The customer lives here now; there is no separate customer panel. */}
           <Field
-            id="emailTopHeading"
-            label="Email top heading"
-            hint="Shown in the banner at the top of the email."
-            error={error("emailTopHeading")}
+            id="customerId"
+            label="Customer"
+            required
+            error={error("customerId")}
           >
             {(props) => (
-              <Input
+              <Select
                 {...props}
-                name="emailTopHeading"
-                defaultValue={value("emailTopHeading")}
-                placeholder="Email Top Heading"
-              />
+                name="customerId"
+                required
+                defaultValue={value("customerId", preselectedCustomerId ?? "")}
+              >
+                <option value="">— Select a customer —</option>
+                {options.customers.map((customer) => (
+                  <option key={customer.id} value={customer.id}>
+                    {customer.reference} — {customer.firstName} {customer.lastName}
+                  </option>
+                ))}
+              </Select>
             )}
           </Field>
 
@@ -154,32 +157,25 @@ export function CruiseBookingForm({
             )}
           </Field>
 
-          <Field id="source" label="Booking source" error={error("source")}>
-            {(props) => <Input {...props} name="source" placeholder="Phone, web, partner" defaultValue={value("source")} />}
-          </Field>
-
-          <Field id="priority" label="Priority" error={error("priority")}>
-            {(props) => (
-              <Select {...props} name="priority" defaultValue={value("priority", BookingPriority.NORMAL)}>
-                {Object.values(BookingPriority).map((level) => (
-                  <option key={level} value={level}>
-                    {humanise(level)}
-                  </option>
-                ))}
-              </Select>
-            )}
-          </Field>
-
+          {/* Priority is not here: it is derived from the departure date.
+              Nor is the lifecycle status — a new booking is always Pending. */}
           <Field
-            id="status"
-            label="Initial status"
-            hint="Confirmed is reached later, once the cruise line confirms."
-            error={error("status")}
+            id="chargeOutcome"
+            label="Charge outcome"
+            hint="What happened when the card was charged."
+            error={error("chargeOutcome")}
           >
             {(props) => (
-              <Select {...props} name="status" defaultValue={value("status", BookingStatus.PENDING)}>
-                <option value={BookingStatus.DRAFT}>Draft</option>
-                <option value={BookingStatus.PENDING}>Pending</option>
+              <Select
+                {...props}
+                name="chargeOutcome"
+                defaultValue={value("chargeOutcome", ChargeOutcome.PENDING)}
+              >
+                {Object.values(ChargeOutcome).map((outcome) => (
+                  <option key={outcome} value={outcome}>
+                    {humanise(outcome)}
+                  </option>
+                ))}
               </Select>
             )}
           </Field>
@@ -215,14 +211,6 @@ export function CruiseBookingForm({
             )}
           </Field>
 
-          <Field id="departurePort" label="Departure port" error={error("departurePort")}>
-            {(props) => <Input {...props} name="departurePort" defaultValue={value("departurePort")} />}
-          </Field>
-
-          <Field id="arrivalPort" label="Arrival port" error={error("arrivalPort")}>
-            {(props) => <Input {...props} name="arrivalPort" defaultValue={value("arrivalPort")} />}
-          </Field>
-
           <Field id="nights" label="Nights" error={error("nights")}>
             {(props) => <Input {...props} name="nights" type="number" min={0} defaultValue={value("nights")} />}
           </Field>
@@ -244,7 +232,7 @@ export function CruiseBookingForm({
             )}
           </Field>
 
-          <Field id="sailDate" label="Sail date" error={error("sailDate")}>
+          <Field id="sailDate" label="Departure date" error={error("sailDate")}>
             {(props) => <Input {...props} name="sailDate" type="date" defaultValue={value("sailDate")} />}
           </Field>
 
@@ -252,17 +240,10 @@ export function CruiseBookingForm({
             {(props) => <Input {...props} name="returnDate" type="date" defaultValue={value("returnDate")} />}
           </Field>
 
-          <Field id="supplierId" label="Supplier" error={error("supplierId")}>
-            {(props) => (
-              <Select {...props} name="supplierId" defaultValue={value("supplierId")}>
-                <option value="">— Select —</option>
-                {options.suppliers.map((supplier) => (
-                  <option key={supplier.id} value={supplier.id}>
-                    {supplier.name}
-                  </option>
-                ))}
-              </Select>
-            )}
+          {/* Moved up from the old customer panel: this is reservation
+              data, not a customer detail. */}
+          <Field id="confirmationReference" label="Cruise line confirmation" error={error("confirmationReference")}>
+            {(props) => <Input {...props} name="confirmationReference" defaultValue={value("confirmationReference")} />}
           </Field>
 
           {/* Request against the reservation itself — a name change, a cabin
@@ -290,17 +271,6 @@ export function CruiseBookingForm({
             )}
           </Field>
         </div>
-
-        <ItinerarySource
-          textName="reservationText"
-          textLabel="Reservation text"
-          textHint="Paste the cruise line's confirmation. Stored exactly as pasted, for reference only — it is never parsed."
-          textPlaceholder="Please copy and paste the reservation here…"
-          textError={error("reservationText")}
-          htmlName="itineraryHtml"
-          defaultText={value("reservationText")}
-          defaultHtml={value("itineraryHtml")}
-        />
       </Panel>
 
       <Panel title="Cabin and dining" collapsible={false}>
@@ -352,10 +322,6 @@ export function CruiseBookingForm({
                 <option value="true">Yes</option>
               </Select>
             )}
-          </Field>
-
-          <Field id="assistanceNotes" label="Special assistance" error={error("assistanceNotes")} className="sm:col-span-2 lg:col-span-3">
-            {(props) => <Textarea {...props} name="assistanceNotes" rows={2} defaultValue={value("assistanceNotes")} />}
           </Field>
         </div>
       </Panel>
@@ -443,91 +409,28 @@ export function CruiseBookingForm({
         </Repeater>
       </Panel>
 
-      <Panel title="Customer" collapsible={false}>
-        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          <Field
-            id="customerId"
-            label="Customer"
-            required
-            error={error("customerId")}
-            className="sm:col-span-2"
-          >
-            {(props) => (
-              <Select
-                {...props}
-                name="customerId"
-                required
-                defaultValue={value("customerId", preselectedCustomerId ?? "")}
-              >
-                <option value="">— Select a customer —</option>
-                {options.customers.map((customer) => (
-                  <option key={customer.id} value={customer.id}>
-                    {customer.reference} — {customer.firstName} {customer.lastName}
-                  </option>
-                ))}
-              </Select>
-            )}
-          </Field>
-
-          <Field id="confirmationReference" label="Cruise line confirmation" error={error("confirmationReference")}>
-            {(props) => <Input {...props} name="confirmationReference" defaultValue={value("confirmationReference")} />}
-          </Field>
-
-          <Field id="contactName" label="Contact name" error={error("contactName")}>
-            {(props) => <Input {...props} name="contactName" defaultValue={value("contactName")} />}
-          </Field>
-
-          <Field id="contactEmail" label="Email" error={error("contactEmail")}>
-            {(props) => <Input {...props} name="contactEmail" type="email" defaultValue={value("contactEmail")} />}
-          </Field>
-
-          <Field id="contactPhone" label="Phone" error={error("contactPhone")}>
-            {(props) => <Input {...props} name="contactPhone" type="tel" defaultValue={value("contactPhone")} />}
-          </Field>
-
-        </div>
-      </Panel>
-
       {/* Billing information. The address fields live here rather than above,
           so there is one place a billing detail is entered. */}
       <BillingInformation value={value} error={error} />
 
+      {/* Five figures, per the review sheet. Currency is no longer chosen
+          per booking: it rides along as a hidden field carrying the operator
+          default, because the service needs it to convert these decimal
+          strings to minor units. */}
       <Panel title="Accounting information" defaultOpen={false}>
-        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          <Field id="currency" label="Currency" required error={error("currency")}>
-            {(props) => (
-              <Select {...props} name="currency" defaultValue={value("currency", options.defaultCurrency)}>
-                {options.currencies.map((code) => (
-                  <option key={code} value={code}>
-                    {code}
-                  </option>
-                ))}
-              </Select>
-            )}
-          </Field>
+        <input type="hidden" name="currency" value={options.defaultCurrency} />
 
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
           <Field id="baseFare" label="Cruise fare" error={error("baseFare")}>
             {(props) => <Input {...props} name="baseFare" inputMode="decimal" placeholder="0.00" defaultValue={value("baseFare")} />}
           </Field>
 
-          <Field id="taxesFees" label="Taxes and port fees" error={error("taxesFees")}>
-            {(props) => <Input {...props} name="taxesFees" inputMode="decimal" placeholder="0.00" defaultValue={value("taxesFees")} />}
-          </Field>
-
-          <Field id="total" label="Total booking amount" error={error("total")}>
-            {(props) => <Input {...props} name="total" inputMode="decimal" placeholder="0.00" defaultValue={value("total")} />}
-          </Field>
-
-          <Field id="supplierCost" label="Supplier cost" error={error("supplierCost")}>
-            {(props) => <Input {...props} name="supplierCost" inputMode="decimal" placeholder="0.00" defaultValue={value("supplierCost")} />}
-          </Field>
-
-          <Field id="grossMco" label="Gross MCO" error={error("grossMco")}>
+          <Field id="grossMco" label="MCO" error={error("grossMco")}>
             {(props) => <Input {...props} name="grossMco" inputMode="decimal" placeholder="0.00" defaultValue={value("grossMco")} />}
           </Field>
 
-          <Field id="netMco" label="Net MCO" error={error("netMco")}>
-            {(props) => <Input {...props} name="netMco" inputMode="decimal" placeholder="0.00" defaultValue={value("netMco")} />}
+          <Field id="total" label="Total fare" error={error("total")}>
+            {(props) => <Input {...props} name="total" inputMode="decimal" placeholder="0.00" defaultValue={value("total")} />}
           </Field>
 
           <Field id="mcoSupplierId" label="MCO supplier" error={error("mcoSupplierId")}>
@@ -543,34 +446,21 @@ export function CruiseBookingForm({
             )}
           </Field>
 
-          <Field id="mcoStatus" label="MCO status" error={error("mcoStatus")}>
+          <Field id="splitCharges" label="Split charges" error={error("splitCharges")}>
             {(props) => (
-              <Select {...props} name="mcoStatus" defaultValue={value("mcoStatus", McoStatus.NOT_APPLICABLE)}>
-                {Object.values(McoStatus).map((status) => (
-                  <option key={status} value={status}>
-                    {humanise(status)}
-                  </option>
-                ))}
+              <Select {...props} name="splitCharges" defaultValue={value("splitCharges", "false")}>
+                <option value="false">No</option>
+                <option value="true">Yes</option>
               </Select>
             )}
-          </Field>
-
-          <Field id="financialNotes" label="Financial notes" error={error("financialNotes")} className="sm:col-span-2 lg:col-span-3">
-            {(props) => <Textarea {...props} name="financialNotes" rows={3} defaultValue={value("financialNotes")} />}
           </Field>
         </div>
       </Panel>
 
-      <Panel title="Comments and follow-up" defaultOpen={false}>
-        <div className="grid gap-4 sm:grid-cols-3">
-          <Field id="comment" label="Internal note" error={error("comment")} className="sm:col-span-2">
-            {(props) => <Textarea {...props} name="comment" rows={3} defaultValue={value("comment")} />}
-          </Field>
-
-          <Field id="followUpAt" label="Follow-up date" error={error("followUpAt")}>
-            {(props) => <Input {...props} name="followUpAt" type="date" defaultValue={value("followUpAt")} />}
-          </Field>
-        </div>
+      <Panel title="Notes" defaultOpen={false}>
+        <Field id="comment" label="Notes" error={error("comment")}>
+          {(props) => <Textarea {...props} name="comment" rows={3} defaultValue={value("comment")} />}
+        </Field>
       </Panel>
 
       <div className="flex items-center gap-2 pb-8">

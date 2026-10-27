@@ -24,6 +24,8 @@ export interface MysqlPoolConfig {
   connectTimeout: number;
   prepareCacheLength: number;
   ssl?: true;
+  cachingRsaPublicKey?: string;
+  allowPublicKeyRetrieval?: boolean;
 }
 
 export interface MysqlPoolOptions {
@@ -46,6 +48,22 @@ export interface MysqlPoolOptions {
  * `?ssl=true` and `?sslaccept=strict` — the spellings Prisma documents for
  * MySQL — turn on TLS; a provider needing a custom CA wants an `ssl` object
  * assembled by the caller rather than a query parameter.
+ *
+ * MySQL 8 defaults new accounts to `caching_sha2_password`. Once the server's
+ * credential cache goes cold — a restart, or an account that has never
+ * authenticated — the next handshake falls back to RSA, and a client holding
+ * neither the server's public key nor permission to ask for it cannot complete
+ * it. That surfaces as "pool failed to retrieve a connection from pool" with
+ * the real cause buried underneath, so two opt-ins are carried across:
+ *
+ *   ?cachingRsaPublicKey=/var/lib/mysql/public_key.pem   preferred
+ *   ?allowPublicKeyRetrieval=true                        loopback only
+ *
+ * The first pins the key from disk. The second asks the server for it over the
+ * unencrypted channel, which a man-in-the-middle could answer with its own key
+ * and so recover the password — acceptable when the connection never leaves
+ * the host, not otherwise. Neither is needed once TLS is on: an encrypted
+ * channel carries the password directly and RSA never enters into it.
  */
 export function mysqlPoolConfig(
   databaseUrl: string,
@@ -54,6 +72,8 @@ export function mysqlPoolConfig(
   const url = new URL(databaseUrl);
   const ssl = url.searchParams.get("ssl");
   const sslAccept = url.searchParams.get("sslaccept");
+  const rsaPublicKey = url.searchParams.get("cachingRsaPublicKey");
+  const allowKeyRetrieval = url.searchParams.get("allowPublicKeyRetrieval");
 
   return {
     host: url.hostname,
@@ -80,5 +100,7 @@ export function mysqlPoolConfig(
      */
     prepareCacheLength: 256,
     ...(ssl === "true" || sslAccept === "strict" ? { ssl: true as const } : {}),
+    ...(rsaPublicKey ? { cachingRsaPublicKey: rsaPublicKey } : {}),
+    ...(allowKeyRetrieval === "true" ? { allowPublicKeyRetrieval: true } : {}),
   };
 }

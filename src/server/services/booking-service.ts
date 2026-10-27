@@ -3,14 +3,15 @@ import "server-only";
 import {
   AuditAction,
   BookingProduct,
+  BookingStatus,
   FollowUpStatus,
   type BookingPriority,
-  type BookingStatus,
   type McoStatus,
   TicketStatus,
 } from "@/generated/prisma/enums";
 import type { Prisma } from "@/generated/prisma/client";
 import { recordAudit } from "@/lib/audit";
+import { derivePriority } from "@/lib/bookings/priority";
 import { sanitiseRichText } from "@/lib/html/sanitise";
 import { prisma } from "@/lib/db/prisma";
 import { nextBookingNumber } from "@/lib/db/references";
@@ -67,8 +68,11 @@ export async function createFlightBooking(
       data: {
         bookingNumber,
         product: BookingProduct.FLIGHT,
-        status: booking.status,
-        priority: booking.priority,
+        // Status and priority are not the agent's to choose: a new booking
+        // always starts Pending, and priority follows the travel date.
+        status: BookingStatus.PENDING,
+        priority: derivePriority(booking.departureDate, new Date()),
+        chargeOutcome: booking.chargeOutcome,
         bookingTypeId: booking.bookingTypeId ?? null,
         customerId: booking.customerId,
         createdById: actorId,
@@ -181,7 +185,7 @@ export async function createFlightBooking(
         statusHistory: {
           create: {
             fromStatus: null,
-            toStatus: booking.status,
+            toStatus: BookingStatus.PENDING,
             reason: "Booking created",
             changedById: actorId,
           },
@@ -400,6 +404,7 @@ export async function getBookingDetail(id: string) {
       product: true,
       status: true,
       priority: true,
+      chargeOutcome: true,
       source: true,
       language: true,
       contactName: true,
@@ -612,8 +617,10 @@ export async function createCruiseBooking(
       data: {
         bookingNumber,
         product: BookingProduct.CRUISE,
-        status: booking.status,
-        priority: booking.priority,
+        // As above: Pending, with priority following the sail date.
+        status: BookingStatus.PENDING,
+        priority: derivePriority(booking.sailDate, new Date()),
+        chargeOutcome: booking.chargeOutcome,
         bookingTypeId: booking.bookingTypeId ?? null,
         customerId: booking.customerId,
         createdById: actorId,
@@ -717,7 +724,7 @@ export async function createCruiseBooking(
         statusHistory: {
           create: {
             fromStatus: null,
-            toStatus: booking.status,
+            toStatus: BookingStatus.PENDING,
             reason: "Booking created",
             changedById: actorId,
           },

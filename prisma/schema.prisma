@@ -340,6 +340,17 @@ enum BookingPriority {
   URGENT
 }
 
+/// Outcome of the charge taken against the booking, recorded by the agent at
+/// booking time. Deliberately separate from `BookingStatus`, which tracks the
+/// reservation lifecycle, and from `PaymentStatus`, which belongs to an
+/// individual `Payment` row.
+enum ChargeOutcome {
+  PENDING
+  CHARGED
+  DECLINED
+  CHARGEBACK
+}
+
 /// Operator-configurable booking category: "New Booking", "Re-Booking",
 /// "Changes", "Cancelation & Refund", and so on.
 model BookingType {
@@ -363,7 +374,10 @@ model Booking {
   bookingNumber String         @unique
   product       BookingProduct
   status        BookingStatus  @default(DRAFT)
+  /// Derived from how close travel is, never chosen by an agent. See
+  /// `derivePriority` in the booking service.
   priority      BookingPriority @default(NORMAL)
+  chargeOutcome ChargeOutcome   @default(PENDING)
 
   bookingTypeId String?
   bookingType   BookingType? @relation(fields: [bookingTypeId], references: [id], onDelete: Restrict)

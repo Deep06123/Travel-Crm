@@ -7,7 +7,11 @@ import bcrypt from "bcryptjs";
 
 import { PrismaClient } from "../src/generated/prisma/client";
 import { mysqlPoolConfig } from "../src/lib/db/mysql-url";
-import { AdminRole, SupplierType } from "../src/generated/prisma/enums";
+import {
+  AdminRole,
+  BookingProduct,
+  SupplierType,
+} from "../src/generated/prisma/enums";
 import {
   DEFAULT_ROLE_PERMISSIONS,
   PERMISSION_DEFINITIONS,
@@ -85,7 +89,12 @@ async function seedRolePermissions(): Promise<void> {
 
 async function seedBookingTypes(): Promise<void> {
   // Categories taken from the reference CRM's booking list.
-  const types = [
+  const types: {
+    code: string;
+    label: string;
+    sortOrder: number;
+    product?: BookingProduct;
+  }[] = [
     { code: "NEW_BOOKING", label: "New Booking", sortOrder: 10 },
     { code: "RE_BOOKING", label: "Re-Booking", sortOrder: 20 },
     { code: "CHANGES", label: "Changes", sortOrder: 30 },
@@ -95,13 +104,37 @@ async function seedBookingTypes(): Promise<void> {
       label: "Cancelation & Future Credit",
       sortOrder: 50,
     },
+    // Cruise-only categories. `product` scopes them so they do not appear on
+    // the flight form, which lists the unscoped types above.
+    {
+      code: "GRATUITIES",
+      label: "Gratuities",
+      sortOrder: 60,
+      product: BookingProduct.CRUISE,
+    },
+    {
+      code: "GUEST_ADD_REMOVE",
+      label: "Add or Remove Guest",
+      sortOrder: 70,
+      product: BookingProduct.CRUISE,
+    },
+    {
+      code: "NAME_CHANGE",
+      label: "Name change",
+      sortOrder: 80,
+      product: BookingProduct.CRUISE,
+    },
   ];
 
   for (const type of types) {
     await prisma.bookingType.upsert({
       where: { code: type.code },
       create: type,
-      update: { label: type.label, sortOrder: type.sortOrder },
+      update: {
+        label: type.label,
+        sortOrder: type.sortOrder,
+        product: type.product ?? null,
+      },
     });
   }
 

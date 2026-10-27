@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 
 import { PageHeader } from "@/components/layout/admin-shell";
+import { BookingProduct } from "@/generated/prisma/enums";
 import { createFlightBookingAction } from "@/features/bookings/actions";
 import { FlightBookingForm } from "@/features/bookings/flight-booking-form";
 import { requirePermission } from "@/lib/auth/dal";
@@ -61,8 +62,13 @@ export default async function NewFlightBookingPage({
       select: { id: true, name: true },
       orderBy: { name: "asc" },
     }),
+    // Types scoped to this product, plus the unscoped ones that apply to
+    // both. A cruise-only category must not appear on the flight form.
     prisma.bookingType.findMany({
-      where: { isActive: true },
+      where: {
+        isActive: true,
+        OR: [{ product: BookingProduct.FLIGHT }, { product: null }],
+      },
       select: { id: true, label: true },
       orderBy: { sortOrder: "asc" },
     }),

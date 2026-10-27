@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import {
   AdminRole,
-  BookingStatus,
+  ChargeOutcome,
   CustomerStatus,
   PassengerType,
   TicketStatus,
@@ -30,8 +30,7 @@ async function make(itineraryHtml: string): Promise<string> {
     {
       booking: {
         customerId,
-        status: BookingStatus.PENDING,
-        priority: "NORMAL",
+        chargeOutcome: ChargeOutcome.PENDING,
         ticketStatus: TicketStatus.PENDING,
         mcoStatus: "NOT_APPLICABLE",
         currency: "USD",
