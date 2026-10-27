@@ -102,7 +102,13 @@ step "Installing dependencies"
 # tested. Dev dependencies are needed — the build runs tsc, Tailwind and the
 # Prisma CLI — but none of them are traced into the standalone output, so the
 # weight stays in the repo directory and off the live release.
-npm ci
+#
+# `--include=dev` is not redundant: the environment file sourced above exports
+# NODE_ENV=production, and npm reads that as an instruction to omit exactly the
+# packages this build cannot run without. The first casualty is the postinstall
+# `prisma generate`, which fails to resolve dotenv from prisma7.config.ts and
+# aborts the deploy before anything is built.
+npm ci --include=dev
 
 # ---------------------------------------------------------------------------
 # 3. Build.

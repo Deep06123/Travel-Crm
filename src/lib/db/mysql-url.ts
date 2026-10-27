@@ -64,6 +64,15 @@ export interface MysqlPoolOptions {
  * and so recover the password — acceptable when the connection never leaves
  * the host, not otherwise. Neither is needed once TLS is on: an encrypted
  * channel carries the password directly and RSA never enters into it.
+ *
+ * On a loopback host with TLS off, retrieval is therefore the default rather
+ * than something to remember: there is no network segment to intercept, so the
+ * only attacker who could answer with a substitute key is one already running
+ * code on this machine — who can read the credentials out of the environment
+ * file directly and has no need of the handshake. Defaulting it off bought no
+ * security and cost an outage, because the failure it produces names a pool
+ * timeout rather than the missing key. An explicit `?allowPublicKeyRetrieval=`
+ * in the URL always wins, including to turn it off.
  */
 export function mysqlPoolConfig(
   databaseUrl: string,
@@ -74,6 +83,21 @@ export function mysqlPoolConfig(
   const sslAccept = url.searchParams.get("sslaccept");
   const rsaPublicKey = url.searchParams.get("cachingRsaPublicKey");
   const allowKeyRetrieval = url.searchParams.get("allowPublicKeyRetrieval");
+  const tlsOn = ssl === "true" || sslAccept === "strict";
+
+  // Hostname, not the resolved address: a name that happens to point at this
+  // machine today can point elsewhere tomorrow, and the guarantee being relied
+  // on is that the bytes never reach a network interface.
+  const isLoopback =
+    url.hostname === "127.0.0.1" ||
+    url.hostname === "localhost" ||
+    url.hostname === "[::1]" ||
+    url.hostname === "::1";
+
+  const allowRetrieval =
+    allowKeyRetrieval === null
+      ? isLoopback && !tlsOn && !rsaPublicKey
+      : allowKeyRetrieval === "true";
 
   return {
     host: url.hostname,
@@ -99,8 +123,8 @@ export function mysqlPoolConfig(
      * shapes, so they all stay cached after the first use of each.
      */
     prepareCacheLength: 256,
-    ...(ssl === "true" || sslAccept === "strict" ? { ssl: true as const } : {}),
+    ...(tlsOn ? { ssl: true as const } : {}),
     ...(rsaPublicKey ? { cachingRsaPublicKey: rsaPublicKey } : {}),
-    ...(allowKeyRetrieval === "true" ? { allowPublicKeyRetrieval: true } : {}),
+    ...(allowRetrieval ? { allowPublicKeyRetrieval: true } : {}),
   };
 }
