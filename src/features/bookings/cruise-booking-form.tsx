@@ -227,6 +227,23 @@ export function CruiseBookingForm({
             {(props) => <Input {...props} name="nights" type="number" min={0} defaultValue={value("nights")} />}
           </Field>
 
+          <Field
+            id="sailingName"
+            label="Sailing name"
+            hint="As the cruise line prints it."
+            error={error("sailingName")}
+            className="sm:col-span-2"
+          >
+            {(props) => (
+              <Input
+                {...props}
+                name="sailingName"
+                placeholder="10 Night Western Caribbean from Galveston Cruise"
+                defaultValue={value("sailingName")}
+              />
+            )}
+          </Field>
+
           <Field id="sailDate" label="Sail date" error={error("sailDate")}>
             {(props) => <Input {...props} name="sailDate" type="date" defaultValue={value("sailDate")} />}
           </Field>
@@ -245,6 +262,25 @@ export function CruiseBookingForm({
                   </option>
                 ))}
               </Select>
+            )}
+          </Field>
+
+          {/* Request against the reservation itself — a name change, a cabin
+              move. Special assistance is a separate field, under the cabin
+              panel, because it describes the guest rather than the booking. */}
+          <Field
+            id="specialRequest"
+            label="Special request"
+            hint="Name change, cabin move, and the like."
+            error={error("specialRequest")}
+          >
+            {(props) => (
+              <Input
+                {...props}
+                name="specialRequest"
+                placeholder="Name change"
+                defaultValue={value("specialRequest")}
+              />
             )}
           </Field>
 
@@ -269,6 +305,10 @@ export function CruiseBookingForm({
 
       <Panel title="Cabin and dining" collapsible={false}>
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+          <Field id="deckNumber" label="Deck" error={error("deckNumber")}>
+            {(props) => <Input {...props} name="deckNumber" placeholder="Deck 08" defaultValue={value("deckNumber")} />}
+          </Field>
+
           <Field id="cabinNumber" label="Cabin / room no." error={error("cabinNumber")}>
             {(props) => <Input {...props} name="cabinNumber" defaultValue={value("cabinNumber")} />}
           </Field>
@@ -338,6 +378,17 @@ export function CruiseBookingForm({
               <Field id={field("lastName")} label="Last name" required error={error(`guests.${index}.lastName`)}>
                 {(props) => <Input {...props} name={field("lastName")} defaultValue={value(field("lastName"))} />}
               </Field>
+              <Field id={field("gender")} label="Gender" error={error(`guests.${index}.gender`)}>
+                {(props) => (
+                  <Select {...props} name={field("gender")} defaultValue={value(field("gender"))}>
+                    <option value="">— Select —</option>
+                    <option value="Female">Female</option>
+                    <option value="Male">Male</option>
+                    <option value="X">X</option>
+                    <option value="Undisclosed">Prefer not to say</option>
+                  </Select>
+                )}
+              </Field>
               <Field id={field("type")} label="Guest type" error={error(`guests.${index}.type`)}>
                 {(props) => (
                   <Select {...props} name={field("type")} defaultValue={value(field("type"), "ADULT")}>
@@ -356,6 +407,28 @@ export function CruiseBookingForm({
               </Field>
               <Field id={field("passportCountry")} label="Passport country" error={error(`guests.${index}.passportCountry`)}>
                 {(props) => <Input {...props} name={field("passportCountry")} defaultValue={value(field("passportCountry"))} />}
+              </Field>
+              {/* Only filled in on a name change, so the authorisation can
+                  show the old name beside the new one. */}
+              <Field
+                id={field("previousFirstName")}
+                label="Previous first name"
+                hint="Name changes only."
+                error={error(`guests.${index}.previousFirstName`)}
+              >
+                {(props) => (
+                  <Input {...props} name={field("previousFirstName")} defaultValue={value(field("previousFirstName"))} />
+                )}
+              </Field>
+              <Field
+                id={field("previousLastName")}
+                label="Previous last name"
+                hint="Name changes only."
+                error={error(`guests.${index}.previousLastName`)}
+              >
+                {(props) => (
+                  <Input {...props} name={field("previousLastName")} defaultValue={value(field("previousLastName"))} />
+                )}
               </Field>
               <Field
                 id={field("cabinNumber")}

@@ -384,6 +384,14 @@ export default async function BookingDetailPage({
                   value={booking.cruiseDetail.nights?.toString()}
                 />
                 <DetailRow
+                  label="Sailing"
+                  value={booking.cruiseDetail.sailingName}
+                />
+                <DetailRow
+                  label="Special request"
+                  value={booking.cruiseDetail.specialRequest}
+                />
+                <DetailRow
                   label="Departs from"
                   value={booking.cruiseDetail.departurePort}
                 />
@@ -396,6 +404,7 @@ export default async function BookingDetailPage({
                   label="Return date"
                   value={formatDate(booking.cruiseDetail.returnDate)}
                 />
+                <DetailRow label="Deck" value={booking.cruiseDetail.deckNumber} />
                 <DetailRow label="Cabin" value={booking.cruiseDetail.cabinNumber} />
                 <DetailRow
                   label="Cabin category"
@@ -465,7 +474,19 @@ export default async function BookingDetailPage({
                   passengers.map((passenger) => (
                     <Tr key={passenger.id}>
                       <Td numeric>{passenger.sequence}</Td>
-                      <Td>{fullName(passenger)}</Td>
+                      <Td>
+                        {fullName(passenger)}
+                        {/* Shown only on a name change, so an ordinary
+                            booking reads exactly as it did before. */}
+                        {passenger.previousFirstName ?? passenger.previousLastName ? (
+                          <span className="block text-xs text-ink-muted">
+                            Was{" "}
+                            {[passenger.previousFirstName, passenger.previousLastName]
+                              .filter(Boolean)
+                              .join(" ")}
+                          </span>
+                        ) : null}
+                      </Td>
                       <Td className="text-ink-muted">{humanise(passenger.type)}</Td>
                       {canViewSensitive ? (
                         <Td className="text-ink-muted">

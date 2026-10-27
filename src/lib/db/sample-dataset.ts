@@ -931,6 +931,12 @@ async function seedBookings(
     skipDuplicates: true,
   });
 
+  // Cruises carrying a name-change request. Held as booking ids so the
+  // travellers created below can show the matching previous name.
+  const nameChangeBookings = new Set(
+    cruises.filter((_, i) => i % 3 === 0).map((spec) => spec.index),
+  );
+
   await client.cruiseDetail.createMany({
     data: cruises.map((spec, i) => {
       const trip = CRUISE_ITINERARIES[i % CRUISE_ITINERARIES.length]!;
@@ -946,6 +952,13 @@ async function seedBookings(
         sailDate: clock.days(spec.travelInDays),
         returnDate: clock.days(spec.travelInDays + trip.nights),
         nights: trip.nights,
+        // The region, not the full ports list — the cruise line prints the
+        // sailing as "10 Night Western Caribbean from Galveston Cruise".
+        sailingName: `${trip.nights} Night ${trip.itinerary.split(" — ")[0]} from ${trip.from} Cruise`,
+        // Every third sailing carries a request, so the field is visible in the
+        // demo without implying one is always present.
+        specialRequest: i % 3 === 0 ? "Name change" : null,
+        deckNumber: `Deck ${String(8 + (i % 4)).padStart(2, "0")}`,
         cabinNumber: `${8 + i}${String(100 + spec.index).slice(-2)}`,
         cabinCategory: i % 2 === 0 ? "Balcony" : "Ocean view",
         diningPreference: i % 2 === 0 ? "Early seating" : "Open dining",
@@ -977,6 +990,12 @@ async function seedBookings(
           type: seat === 1 ? PassengerType.CHILD : PassengerType.ADULT,
           gender: seat % 2 === 0 ? "M" : "F",
           dateOfBirth: clock.days(seat === 1 ? -3_650 : -12_800),
+          // A surname change on the lead guest, for the cruises whose
+          // reservation carries that request.
+          previousFirstName:
+            seat === 0 && nameChangeBookings.has(spec.index) ? person[1] : null,
+          previousLastName:
+            seat === 0 && nameChangeBookings.has(spec.index) ? "Marsden" : null,
           passportNumber: `X${String(10_000_000 + spec.index * 97 + seat)}`,
           passportCountry: "US",
           passportExpiry: clock.days(900 + spec.index * 5),

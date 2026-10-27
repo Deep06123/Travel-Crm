@@ -54,6 +54,9 @@ export const cruiseGuestSchema = z.object({
   type: z.enum(["ADULT", "CHILD", "INFANT", "SENIOR"]).default("ADULT"),
   gender: optionalText(20),
   dateOfBirth: optionalDate,
+  /** Prior name, filled in only when the booking carries a name change. */
+  previousFirstName: optionalText(100),
+  previousLastName: optionalText(100),
   passportNumber: optionalText(50),
   passportCountry: optionalText(100),
   passportExpiry: optionalDate,
@@ -100,7 +103,12 @@ export const cruiseBookingSchema = z
     sailDate: optionalDate,
     returnDate: optionalDate,
     nights: z.coerce.number().int().min(0).max(400).optional(),
+    // The sailing as the cruise line names it. `nights` stays the number so
+    // sorting and the Nights column keep working.
+    sailingName: optionalText(200),
+    specialRequest: optionalText(500),
 
+    deckNumber: optionalText(40),
     cabinNumber: optionalText(20),
     cabinCategory: optionalText(60),
     cabinCount: z.coerce.number().int().min(1).max(50).default(1),

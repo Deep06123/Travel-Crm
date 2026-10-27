@@ -32,6 +32,7 @@ const bookingIds: string[] = [];
 async function makeCruiseBooking(
   overrides: Partial<Parameters<typeof createCruiseBooking>[0]["booking"]> = {},
   guestCount = 2,
+  guestOverrides: Record<string, unknown> = {},
 ): Promise<string> {
   const { id } = await createCruiseBooking(
     {
@@ -48,6 +49,9 @@ async function makeCruiseBooking(
         departurePort: "Miami",
         arrivalPort: "Miami",
         nights: 7,
+        sailingName: "7 Night Eastern Caribbean from Miami Cruise",
+        specialRequest: "Name change",
+        deckNumber: "Deck 10",
         cabinNumber: "10234",
         cabinCategory: "Balcony",
         cabinCount: 1,
@@ -69,6 +73,7 @@ async function makeCruiseBooking(
         firstName: `Guest${index + 1}`,
         lastName: "Traveller",
         type: "ADULT",
+        ...guestOverrides,
       })) as never,
     },
     actorId,
@@ -131,6 +136,53 @@ describe("createCruiseBooking", () => {
     expect(booking.cruiseDetail?.nights).toBe(7);
     expect(booking.cruiseDetail?.cabinCategory).toBe("Balcony");
     expect(booking.cruiseDetail?.gratuitiesIncluded).toBe(true);
+  });
+
+  it("persists the sailing name, deck and special request", async () => {
+    const id = await makeCruiseBooking();
+
+    const booking = await prisma.booking.findUniqueOrThrow({
+      where: { id },
+      include: { cruiseDetail: true },
+    });
+
+    // The authorisation document prints the sailing title alongside the
+    // numeric night count, so both must survive the round trip.
+    expect(booking.cruiseDetail?.sailingName).toBe(
+      "7 Night Eastern Caribbean from Miami Cruise",
+    );
+    expect(booking.cruiseDetail?.nights).toBe(7);
+    expect(booking.cruiseDetail?.deckNumber).toBe("Deck 10");
+    expect(booking.cruiseDetail?.specialRequest).toBe("Name change");
+  });
+
+  it("records a guest's gender and previous name", async () => {
+    const id = await makeCruiseBooking({}, 1, {
+      gender: "Female",
+      previousFirstName: "Kimberly",
+      previousLastName: "Harlow",
+    });
+
+    const [guest] = await prisma.passenger.findMany({
+      where: { bookingId: id },
+      orderBy: { sequence: "asc" },
+    });
+
+    expect(guest?.gender).toBe("Female");
+    expect(guest?.previousFirstName).toBe("Kimberly");
+    expect(guest?.previousLastName).toBe("Harlow");
+  });
+
+  it("leaves the previous name null when no name change is recorded", async () => {
+    const id = await makeCruiseBooking({}, 1);
+
+    const [guest] = await prisma.passenger.findMany({
+      where: { bookingId: id },
+      orderBy: { sequence: "asc" },
+    });
+
+    expect(guest?.previousFirstName).toBeNull();
+    expect(guest?.previousLastName).toBeNull();
   });
 
   it("writes no flight detail", async () => {

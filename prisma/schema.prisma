@@ -573,6 +573,16 @@ model CruiseDetail {
   returnDate        DateTime?
   nights            Int?
 
+  /// Sailing title as the cruise line prints it, e.g. "10 Night Western
+  /// Caribbean from Galveston Cruise". `nights` stays the sortable number.
+  sailingName       String?
+
+  /// Request attached to the reservation itself — a name change, a cabin move.
+  /// Distinct from `assistanceNotes`, which covers accessibility needs.
+  specialRequest    String? @db.Text
+
+  /// Deck the cabin sits on, e.g. "Deck 08".
+  deckNumber    String?
   cabinNumber   String?
   cabinCategory String?
   diningPreference String?
@@ -612,6 +622,12 @@ model Passenger {
   type       PassengerType @default(ADULT)
   gender     String?
   dateOfBirth DateTime?
+
+  /// Name this traveller held before a name-change request, kept so the
+  /// authorisation document can show the old name beside the new one. Null on
+  /// an ordinary booking.
+  previousFirstName String?
+  previousLastName  String?
 
   passportNumber     String?
   passportCountry    String?
