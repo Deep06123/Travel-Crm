@@ -16,11 +16,11 @@ export interface TicketablePassenger {
   ticketNumber: string | null;
 }
 
-function SubmitButton() {
+function SubmitButton({ blocked }: { blocked: boolean }) {
   const { pending } = useFormStatus();
 
   return (
-    <Button type="submit" disabled={pending}>
+    <Button type="submit" disabled={pending || blocked}>
       {pending ? <Loader2 className="animate-spin" /> : null}
       {pending ? "Issuing…" : "Issue ticket"}
     </Button>
@@ -35,18 +35,24 @@ function SubmitButton() {
  *
  * Every rule this form appears to enforce is enforced again in
  * `issueTicket` — the confirmation reference, the product being a flight, the
- * booking not being cancelled, and the numbers belonging to this booking's own
- * passengers. What is rendered here is a convenience for the operator, never
- * the check itself.
+ * booking not being cancelled, the balance being settled, and the numbers
+ * belonging to this booking's own passengers. What is rendered here is a
+ * convenience for the operator, never the check itself.
  */
 export function TicketingControl({
   bookingId,
   passengers,
-  ticketingReference,
+  outstandingLabel,
 }: {
   bookingId: string;
   passengers: readonly TicketablePassenger[];
-  ticketingReference: string | null;
+  /**
+   * Formatted amount still owed, or null when the booking is settled.
+   *
+   * Only a prompt: `issueTicket` recomputes the balance and refuses on its own
+   * reading, so a stale render cannot let an unpaid ticket through.
+   */
+  outstandingLabel: string | null;
 }) {
   const [state, formAction] = useActionState<TicketingState, FormData>(
     issueTicketAction,
@@ -79,6 +85,16 @@ export function TicketingControl({
         Issue ticket
       </p>
 
+      {outstandingLabel ? (
+        <p
+          role="status"
+          className="mb-3 rounded-md bg-status-warning-bg px-3 py-2 text-sm text-status-warning"
+        >
+          {outstandingLabel} is still outstanding on this booking. Record the
+          payment in the Payments panel before a ticket can be issued.
+        </p>
+      ) : null}
+
       <div className="grid gap-3 sm:grid-cols-2">
         {passengers.map((passenger) => (
           <Field
@@ -99,25 +115,19 @@ export function TicketingControl({
         ))}
       </div>
 
-      <div className="mt-3 grid gap-3 sm:grid-cols-2">
-        <Field id="ticketingReference" label="Supplier reference">
-          {(controlProps) => (
-            <Input
-              {...controlProps}
-              name="ticketingReference"
-              defaultValue={ticketingReference ?? ""}
-              autoComplete="off"
-            />
-          )}
-        </Field>
-
+      {/* No supplier reference here. It is captured by the references form
+          above, which can be saved on its own — this one only reached the
+          booking on a *successful* issue, so the two side by side invited
+          typing it into the field that would not keep it. The action still
+          accepts the value, so a caller that sends one is unaffected. */}
+      <div className="mt-3">
         <Field id="ticketingNotes" label="Ticketing notes">
           {(controlProps) => <Textarea {...controlProps} name="notes" rows={2} />}
         </Field>
       </div>
 
       <div className="mt-3 flex items-center gap-3">
-        <SubmitButton />
+        <SubmitButton blocked={outstandingLabel !== null} />
         <p className="text-xs text-ink-subtle">
           Marks the ticket issued and stamps the time. The booking can then be
           moved to Ticketed.

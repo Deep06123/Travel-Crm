@@ -5,7 +5,8 @@ import { useActionState } from "react";
 import { useFormStatus } from "react-dom";
 
 import { Button } from "@/components/ui/button";
-import { Field, Input, Select, Textarea } from "@/components/ui/field";
+import { Field, Input, Textarea } from "@/components/ui/field";
+import { StickySelect } from "@/components/ui/sticky-select";
 
 import { saveMessageGroupAction, type MessageFormState } from "./actions";
 
@@ -77,10 +78,10 @@ export function MessageGroupForm({
 
       <Field id="grp-active" label="Active">
         {(props) => (
-          <Select {...props} name="isActive" defaultValue="true">
+          <StickySelect {...props} name="isActive" defaultValue="true">
             <option value="true">Yes</option>
             <option value="false">No</option>
-          </Select>
+          </StickySelect>
         )}
       </Field>
 

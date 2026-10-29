@@ -5,7 +5,8 @@ import { useActionState, useState } from "react";
 import { useFormStatus } from "react-dom";
 
 import { Button } from "@/components/ui/button";
-import { Field, Input, Select, Textarea } from "@/components/ui/field";
+import { Field, Input, Textarea } from "@/components/ui/field";
+import { StickySelect } from "@/components/ui/sticky-select";
 import { AdminRole, AdminUserStatus } from "@/generated/prisma/enums";
 
 import {
@@ -115,13 +116,13 @@ export function CreateAgentForm() {
 
         <Field id="agent-role" label="Role" required error={error("role")}>
           {(props) => (
-            <Select {...props} name="role" defaultValue={value("role") || AdminRole.OPERATIONS}>
+            <StickySelect {...props} name="role" defaultValue={value("role") || AdminRole.OPERATIONS}>
               {Object.values(AdminRole).map((role) => (
                 <option key={role} value={role}>
                   {humanise(role)}
                 </option>
               ))}
-            </Select>
+            </StickySelect>
           )}
         </Field>
 
@@ -186,13 +187,13 @@ export function EditAgentForm({
 
         <Field id="edit-role" label="Role" required error={error("role")}>
           {(props) => (
-            <Select {...props} name="role" defaultValue={defaults.role}>
+            <StickySelect {...props} name="role" defaultValue={defaults.role}>
               {Object.values(AdminRole).map((role) => (
                 <option key={role} value={role}>
                   {humanise(role)}
                 </option>
               ))}
-            </Select>
+            </StickySelect>
           )}
         </Field>
 
@@ -208,10 +209,10 @@ export function EditAgentForm({
           error={error("status")}
         >
           {(props) => (
-            <Select
+            <StickySelect
               {...props}
               name="status"
-              value={status}
+              defaultValue={status}
               onChange={(event) => setStatus(event.target.value)}
             >
               {Object.values(AdminUserStatus).map((value) => (
@@ -219,7 +220,7 @@ export function EditAgentForm({
                   {humanise(value)}
                 </option>
               ))}
-            </Select>
+            </StickySelect>
           )}
         </Field>
 
@@ -233,10 +234,10 @@ export function EditAgentForm({
 
         <Field id="edit-active" label="Rostered" error={error("isActive")}>
           {(props) => (
-            <Select {...props} name="isActive" defaultValue={String(defaults.isActive)}>
+            <StickySelect {...props} name="isActive" defaultValue={String(defaults.isActive)}>
               <option value="true">Yes</option>
               <option value="false">No</option>
-            </Select>
+            </StickySelect>
           )}
         </Field>
       </div>

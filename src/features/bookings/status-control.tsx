@@ -5,7 +5,8 @@ import { useActionState, useState } from "react";
 import { useFormStatus } from "react-dom";
 
 import { Button } from "@/components/ui/button";
-import { Field, Select, Textarea } from "@/components/ui/field";
+import { Field, Textarea } from "@/components/ui/field";
+import { StickySelect } from "@/components/ui/sticky-select";
 import type { BookingStatus } from "@/generated/prisma/enums";
 
 import { changeBookingStatusAction, type StatusChangeState } from "./actions";
@@ -101,10 +102,10 @@ export function StatusControl({
 
       <Field id="toStatus" label="Move to">
         {(props) => (
-          <Select
+          <StickySelect
             {...props}
             name="toStatus"
-            value={selected}
+            defaultValue={selected}
             onChange={(event) => setSelected(event.target.value)}
           >
             <option value="">— Select a status —</option>
@@ -113,7 +114,7 @@ export function StatusControl({
                 {humanise(status)}
               </option>
             ))}
-          </Select>
+          </StickySelect>
         )}
       </Field>
 

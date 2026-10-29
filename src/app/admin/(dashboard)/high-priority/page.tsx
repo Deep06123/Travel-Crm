@@ -23,7 +23,11 @@ import { BookingPriority } from "@/generated/prisma/enums";
 import { requirePermission } from "@/lib/auth/dal";
 import { prisma } from "@/lib/db/prisma";
 import { formatMoney } from "@/lib/financial/money";
-import { formatDate, formatRelativeDays, isOverdue } from "@/lib/format";
+import {
+  formatCalendarDate,
+  formatRelativeDays,
+  isOverdue,
+} from "@/lib/format";
 import { paginationSchema } from "@/lib/pagination";
 import { PERMISSIONS } from "@/lib/permissions";
 import { listHighPriorityBookings } from "@/server/services/operations-service";
@@ -237,7 +241,7 @@ export default async function HighPriorityPage({
                     </Td>
                     <Td className="whitespace-nowrap text-ink-muted">
                       {booking.travelStartDate
-                        ? formatDate(booking.travelStartDate)
+                        ? formatCalendarDate(booking.travelStartDate)
                         : "—"}
                     </Td>
                   </Tr>

@@ -5,7 +5,8 @@ import { useActionState, useId, useState } from "react";
 import { useFormStatus } from "react-dom";
 
 import { Button } from "@/components/ui/button";
-import { Field, Input, Select, Textarea } from "@/components/ui/field";
+import { Field, Input, Textarea } from "@/components/ui/field";
+import { StickySelect } from "@/components/ui/sticky-select";
 import {
   PaymentMethod,
   PaymentStatus,
@@ -95,13 +96,13 @@ export function RecordPaymentForm({
 
         <Field id="pay-method" label="Method" required>
           {(props) => (
-            <Select {...props} name="method" defaultValue={PaymentMethod.CREDIT_CARD}>
+            <StickySelect {...props} name="method" defaultValue={PaymentMethod.CREDIT_CARD}>
               {Object.values(PaymentMethod).map((value) => (
                 <option key={value} value={value}>
                   {humanise(value)}
                 </option>
               ))}
-            </Select>
+            </StickySelect>
           )}
         </Field>
 
@@ -112,13 +113,13 @@ export function RecordPaymentForm({
           hint="Only Captured counts as money collected."
         >
           {(props) => (
-            <Select {...props} name="status" defaultValue={PaymentStatus.CAPTURED}>
+            <StickySelect {...props} name="status" defaultValue={PaymentStatus.CAPTURED}>
               {Object.values(PaymentStatus).map((value) => (
                 <option key={value} value={value}>
                   {humanise(value)}
                 </option>
               ))}
-            </Select>
+            </StickySelect>
           )}
         </Field>
 
@@ -214,15 +215,15 @@ export function RequestRefundForm({
           }
         >
           {(props) => (
-            <Select
+            <StickySelect
               {...props}
               name="kind"
-              value={kind}
+              defaultValue={kind}
               onChange={(event) => setKind(event.target.value)}
             >
               <option value={RefundKind.REFUND}>Refund</option>
               <option value={RefundKind.VOID}>Void</option>
-            </Select>
+            </StickySelect>
           )}
         </Field>
 
@@ -245,7 +246,7 @@ export function RequestRefundForm({
 
         <Field id="rfd-payment" label="Against payment" className="sm:col-span-2">
           {(props) => (
-            <Select {...props} name="paymentId" defaultValue="">
+            <StickySelect {...props} name="paymentId" defaultValue="">
               <option value="">— Not tied to one payment —</option>
               {payments.map((payment) => (
                 <option key={payment.id} value={payment.id}>
@@ -253,7 +254,7 @@ export function RequestRefundForm({
                   {minorToDecimalString(payment.amountMinor, currency)} {currency}
                 </option>
               ))}
-            </Select>
+            </StickySelect>
           )}
         </Field>
 

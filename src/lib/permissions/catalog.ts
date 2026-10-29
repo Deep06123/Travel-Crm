@@ -40,6 +40,9 @@ export const PERMISSIONS = {
   BOOKING_CHANGE_STATUS: "booking.changeStatus",
   BOOKING_MCO_UPDATE: "booking.mcoUpdate",
   BOOKING_CANCEL: "booking.cancel",
+  /// Erasing the record outright, as opposed to cancelling it. Only for a
+  /// booking that should never have existed.
+  BOOKING_DELETE: "booking.delete",
   BOOKING_ASSIGN: "booking.assign",
   BOOKING_SET_PRIORITY: "booking.setPriority",
   BOOKING_EXPORT: "booking.export",
@@ -130,6 +133,7 @@ export const PERMISSION_DEFINITIONS: readonly PermissionDefinition[] = [
   { key: PERMISSIONS.BOOKING_CHANGE_STATUS, description: "Move a booking through its lifecycle", category: BOOKINGS },
   { key: PERMISSIONS.BOOKING_MCO_UPDATE, description: "Move a booking's MCO through its settlement cycle", category: BOOKINGS },
   { key: PERMISSIONS.BOOKING_CANCEL, description: "Cancel a booking", category: BOOKINGS },
+  { key: PERMISSIONS.BOOKING_DELETE, description: "Permanently delete a booking created in error", category: BOOKINGS },
   { key: PERMISSIONS.BOOKING_ASSIGN, description: "Assign a booking to an agent", category: BOOKINGS },
   { key: PERMISSIONS.BOOKING_SET_PRIORITY, description: "Change booking priority and escalation", category: BOOKINGS },
   { key: PERMISSIONS.BOOKING_EXPORT, description: "Export booking records to CSV", category: BOOKINGS },

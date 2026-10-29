@@ -2,6 +2,7 @@ import Link from "next/link";
 import { Eye, FileText, Mail, Ticket } from "lucide-react";
 
 import { Badge } from "@/components/ui/status-badge";
+import { DeleteBookingButton } from "@/features/bookings/delete-booking-button";
 import { isOverdue } from "@/lib/format";
 
 /**
@@ -45,24 +46,35 @@ export function FollowUpState({
 /**
  * Row-level shortcuts into the booking.
  *
- * Every one is a link to a page that performs its own permission check — none
- * of them mutates anything. That is deliberate: an icon that changes a booking
- * straight from a list, with no confirmation and no reason captured, is how an
- * audit trail ends up recording changes nobody can explain. Actions that write
- * live on the booking itself, where the context to make them sensibly is.
+ * All but one are links to a page that performs its own permission check, and
+ * none of those mutates anything. That is deliberate: an icon that changes a
+ * booking straight from a list, with no confirmation and no reason captured,
+ * is how an audit trail ends up recording changes nobody can explain. Actions
+ * that write live on the booking itself, where the context to make them
+ * sensibly is.
+ *
+ * Delete is the exception, and it keeps the condition that rule was protecting
+ * rather than waiving it: it opens a dialog that demands a written reason and
+ * the booking number typed back, so nothing is destroyed by a misplaced click.
  *
  * `canViewDocuments` only hides a link the documents page would refuse anyway;
  * hiding it saves the operator a pointless click, it is not the control.
+ * `canDelete` is the same — the action re-checks the permission.
  */
 export function RowActions({
   bookingId,
+  bookingNumber,
   canViewDocuments,
   canSeeETicket,
+  canDelete,
 }: {
   bookingId: string;
+  /** Shown in the delete dialog and typed back to confirm. */
+  bookingNumber: string;
   canViewDocuments: boolean;
   /** A cruise is confirmed by the cruise line; there is no air ticket. */
   canSeeETicket: boolean;
+  canDelete: boolean;
 }) {
   const iconClass =
     "flex size-7 items-center justify-center rounded text-ink-muted hover:bg-surface-sunken hover:text-navy-500 [&_svg]:size-4";
@@ -118,6 +130,17 @@ export function RowActions({
         <Mail />
         <span className="sr-only">Customer email</span>
       </Link>
+
+      {/* Last, and visually separated from the four read-only icons, so the
+          destructive one is not the neighbour of the one beside it. */}
+      {canDelete ? (
+        <span className="ml-1 border-l border-line pl-1">
+          <DeleteBookingButton
+            bookingId={bookingId}
+            bookingNumber={bookingNumber}
+          />
+        </span>
+      ) : null}
     </div>
   );
 }

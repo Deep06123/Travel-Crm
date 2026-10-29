@@ -5,7 +5,8 @@ import { useActionState, useState } from "react";
 import { useFormStatus } from "react-dom";
 
 import { Button } from "@/components/ui/button";
-import { Field, Select, Textarea } from "@/components/ui/field";
+import { Field, Textarea } from "@/components/ui/field";
+import { StickySelect } from "@/components/ui/sticky-select";
 import { McoStatusBadge } from "@/components/ui/status-badge";
 import type { McoStatus } from "@/generated/prisma/enums";
 
@@ -124,10 +125,10 @@ export function McoControl({
         }
       >
         {(props) => (
-          <Select
+          <StickySelect
             {...props}
             name="mcoSupplierId"
-            value={supplierId}
+            defaultValue={supplierId}
             disabled={supplierLocked}
             onChange={(event) => setSupplierId(event.target.value)}
           >
@@ -142,7 +143,7 @@ export function McoControl({
                 {supplier.name}
               </option>
             ))}
-          </Select>
+          </StickySelect>
         )}
       </Field>
 
@@ -164,10 +165,10 @@ export function McoControl({
       ) : (
         <Field id="mcoToStatus" label="Move to">
           {(props) => (
-            <Select
+            <StickySelect
               {...props}
               name="toStatus"
-              value={selectedStatus}
+              defaultValue={selectedStatus}
               onChange={(event) => setSelectedStatus(event.target.value)}
             >
               <option value="">— Leave unchanged —</option>
@@ -176,7 +177,7 @@ export function McoControl({
                   {LABELS[status]}
                 </option>
               ))}
-            </Select>
+            </StickySelect>
           )}
         </Field>
       )}

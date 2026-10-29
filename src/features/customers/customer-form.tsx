@@ -6,7 +6,8 @@ import { useActionState } from "react";
 import { useFormStatus } from "react-dom";
 
 import { Button, buttonVariants } from "@/components/ui/button";
-import { Field, Input, Select, Textarea } from "@/components/ui/field";
+import { Field, Input, Textarea } from "@/components/ui/field";
+import { StickySelect } from "@/components/ui/sticky-select";
 import { Panel } from "@/components/ui/panel";
 import { CustomerStatus } from "@/generated/prisma/enums";
 
@@ -153,17 +154,17 @@ export function CustomerForm({
 
           <Field id="status" label="Status" error={error("status")}>
             {(props) => (
-              <Select {...props} name="status" defaultValue={value("status") || CustomerStatus.ACTIVE}>
+              <StickySelect {...props} name="status" defaultValue={value("status") || CustomerStatus.ACTIVE}>
                 <option value={CustomerStatus.ACTIVE}>Active</option>
                 <option value={CustomerStatus.INACTIVE}>Inactive</option>
                 <option value={CustomerStatus.BLOCKED}>Blocked</option>
-              </Select>
+              </StickySelect>
             )}
           </Field>
 
           <Field id="preferredLanguage" label="Preferred language" error={error("preferredLanguage")}>
             {(props) => (
-              <Select
+              <StickySelect
                 {...props}
                 name="preferredLanguage"
                 defaultValue={value("preferredLanguage") || "en"}
@@ -171,7 +172,7 @@ export function CustomerForm({
                 <option value="en">English</option>
                 <option value="es">Spanish</option>
                 <option value="fr">French</option>
-              </Select>
+              </StickySelect>
             )}
           </Field>
         </div>

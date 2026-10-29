@@ -2,14 +2,17 @@
 
 import { Loader2 } from "lucide-react";
 import Link from "next/link";
-import { useActionState } from "react";
+import { useActionState, type FormEvent } from "react";
 import { useFormStatus } from "react-dom";
 
 import { Button, buttonVariants } from "@/components/ui/button";
-import { Field, Input, Select, Textarea } from "@/components/ui/field";
+import { Field, Input, Textarea } from "@/components/ui/field";
+import { FormGuide } from "@/components/ui/form-guide";
+import { StickySelect } from "@/components/ui/sticky-select";
 import { Panel } from "@/components/ui/panel";
 
-import { BillingInformation } from "./billing-information";
+import { BillingInformation, useCardEntry } from "./billing-information";
+import { ItinerarySource } from "./itinerary-source";
 import { ChargeOutcome } from "@/generated/prisma/enums";
 
 import type { BookingFormState } from "./actions";
@@ -54,14 +57,28 @@ export function CruiseBookingForm({
 }) {
   const [state, formAction] = useActionState<BookingFormState, FormData>(action, {});
 
+  // As in the flight form: the card is checked here, because the number and
+  // CVV are never submitted and so can only be checked before submission.
+  const card = useCardEntry();
+
   const value = (field: string, fallback = ""): string =>
     state.values?.[field] ?? fallback;
   const error = (field: string) => state.fieldErrors?.[field];
   const sectionHasError = (prefix: string): boolean =>
     Object.keys(state.fieldErrors ?? {}).some((key) => key.startsWith(prefix));
 
+  /** Blocks the action outright while the card is wrong. */
+  const guard = (event: FormEvent<HTMLFormElement>) => {
+    if (!card.validate()) event.preventDefault();
+  };
+
   return (
-    <form action={formAction} className="flex flex-col gap-4">
+    <form
+      action={formAction}
+      onSubmit={guard}
+      noValidate
+      className="flex flex-col gap-4"
+    >
       {state.error ? (
         <p
           role="alert"
@@ -70,29 +87,30 @@ export function CruiseBookingForm({
           {state.error}
         </p>
       ) : null}
+      <FormGuide fieldErrors={state.fieldErrors} />
 
       <Panel title="Booking details" collapsible={false}>
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
           <Field id="bookingTypeId" label="Booking type" error={error("bookingTypeId")}>
             {(props) => (
-              <Select {...props} name="bookingTypeId" defaultValue={value("bookingTypeId")}>
+              <StickySelect {...props} name="bookingTypeId" defaultValue={value("bookingTypeId")}>
                 <option value="">— Select —</option>
                 {options.bookingTypes.map((type) => (
                   <option key={type.id} value={type.id}>
                     {type.label}
                   </option>
                 ))}
-              </Select>
+              </StickySelect>
             )}
           </Field>
 
           <Field id="language" label="Language" error={error("language")}>
             {(props) => (
-              <Select {...props} name="language" defaultValue={value("language", "en")}>
+              <StickySelect {...props} name="language" defaultValue={value("language", "en")}>
                 <option value="en">English</option>
                 <option value="es">Spanish</option>
                 <option value="fr">French</option>
-              </Select>
+              </StickySelect>
             )}
           </Field>
 
@@ -121,10 +139,11 @@ export function CruiseBookingForm({
             id="customerId"
             label="Customer"
             required
+            hint="Required. Create the customer first if they are not listed."
             error={error("customerId")}
           >
             {(props) => (
-              <Select
+              <StickySelect
                 {...props}
                 name="customerId"
                 required
@@ -136,7 +155,7 @@ export function CruiseBookingForm({
                     {customer.reference} — {customer.firstName} {customer.lastName}
                   </option>
                 ))}
-              </Select>
+              </StickySelect>
             )}
           </Field>
 
@@ -146,14 +165,14 @@ export function CruiseBookingForm({
 
           <Field id="assignedAgentId" label="Assigned agent" error={error("assignedAgentId")}>
             {(props) => (
-              <Select {...props} name="assignedAgentId" defaultValue={value("assignedAgentId")}>
+              <StickySelect {...props} name="assignedAgentId" defaultValue={value("assignedAgentId")}>
                 <option value="">— Unassigned —</option>
                 {options.agents.map((agent) => (
                   <option key={agent.id} value={agent.id}>
                     {agent.name}
                   </option>
                 ))}
-              </Select>
+              </StickySelect>
             )}
           </Field>
 
@@ -166,7 +185,7 @@ export function CruiseBookingForm({
             error={error("chargeOutcome")}
           >
             {(props) => (
-              <Select
+              <StickySelect
                 {...props}
                 name="chargeOutcome"
                 defaultValue={value("chargeOutcome", ChargeOutcome.PENDING)}
@@ -176,7 +195,7 @@ export function CruiseBookingForm({
                     {humanise(outcome)}
                   </option>
                 ))}
-              </Select>
+              </StickySelect>
             )}
           </Field>
         </div>
@@ -191,7 +210,7 @@ export function CruiseBookingForm({
           </Field>
 
           <Field id="ship" label="Ship" error={error("ship")}>
-            {(props) => <Input {...props} name="ship" defaultValue={value("ship")} />}
+            {(props) => <Input {...props} name="ship" placeholder="Wonder of the Seas" defaultValue={value("ship")} />}
           </Field>
 
           <Field id="reservationNumber" label="Reservation no." error={error("reservationNumber")}>
@@ -200,19 +219,19 @@ export function CruiseBookingForm({
 
           <Field id="tfnId" label="TFN" error={error("tfnId")}>
             {(props) => (
-              <Select {...props} name="tfnId" defaultValue={value("tfnId")}>
+              <StickySelect {...props} name="tfnId" defaultValue={value("tfnId")}>
                 <option value="">— Select —</option>
                 {options.tfns.map((tfn) => (
                   <option key={tfn.id} value={tfn.id}>
                     {tfn.label} ({tfn.number})
                   </option>
                 ))}
-              </Select>
+              </StickySelect>
             )}
           </Field>
 
           <Field id="nights" label="Nights" error={error("nights")}>
-            {(props) => <Input {...props} name="nights" type="number" min={0} defaultValue={value("nights")} />}
+            {(props) => <Input {...props} name="nights" type="number" min={0} placeholder="7" defaultValue={value("nights")} />}
           </Field>
 
           <Field
@@ -232,11 +251,11 @@ export function CruiseBookingForm({
             )}
           </Field>
 
-          <Field id="sailDate" label="Departure date" error={error("sailDate")}>
+          <Field id="sailDate" label="Departure date" hint="The sailing date." error={error("sailDate")}>
             {(props) => <Input {...props} name="sailDate" type="date" defaultValue={value("sailDate")} />}
           </Field>
 
-          <Field id="returnDate" label="Return date" error={error("returnDate")}>
+          <Field id="returnDate" label="Return date" hint="Must not be before the sailing date." error={error("returnDate")}>
             {(props) => <Input {...props} name="returnDate" type="date" defaultValue={value("returnDate")} />}
           </Field>
 
@@ -265,12 +284,36 @@ export function CruiseBookingForm({
             )}
           </Field>
 
-          <Field id="itinerary" label="Itinerary" error={error("itinerary")} className="sm:col-span-2 lg:col-span-3">
+          {/* The one-line summary, kept separate from the itinerary proper:
+              it is what the Sailing panel prints back on the detail page. */}
+          <Field
+            id="itinerary"
+            label="Ports of call"
+            hint="A one-line summary, in order."
+            error={error("itinerary")}
+            className="sm:col-span-2 lg:col-span-3"
+          >
             {(props) => (
               <Textarea {...props} name="itinerary" rows={2} placeholder="Ports of call, in order" defaultValue={value("itinerary")} />
             )}
           </Field>
         </div>
+
+        {/* The same pair the flight form offers: paste the cruise line's own
+            confirmation, or compose the itinerary by hand. Both are kept —
+            they are different evidence, and neither is parsed. */}
+        <ItinerarySource
+          textName="reservationText"
+          textLabel="Reservation text"
+          textHint="Stored exactly as pasted, for reference only — it is never parsed."
+          textPlaceholder="Please copy and paste the cruise confirmation here…"
+          textError={error("reservationText")}
+          htmlName="itineraryHtml"
+          defaultText={value("reservationText")}
+          defaultHtml={value("itineraryHtml")}
+          actionLabel="Decode reservation using API"
+          actionNotice="No cruise-line integration is configured. What you pasted has been kept exactly as typed — fill in the sailing details above by hand."
+        />
       </Panel>
 
       <Panel title="Cabin and dining" collapsible={false}>
@@ -308,19 +351,19 @@ export function CruiseBookingForm({
 
           <Field id="gratuitiesIncluded" label="Gratuities included" error={error("gratuitiesIncluded")}>
             {(props) => (
-              <Select {...props} name="gratuitiesIncluded" defaultValue={value("gratuitiesIncluded", "false")}>
+              <StickySelect {...props} name="gratuitiesIncluded" defaultValue={value("gratuitiesIncluded", "false")}>
                 <option value="false">No</option>
                 <option value="true">Yes</option>
-              </Select>
+              </StickySelect>
             )}
           </Field>
 
           <Field id="insuranceIncluded" label="Insurance included" error={error("insuranceIncluded")}>
             {(props) => (
-              <Select {...props} name="insuranceIncluded" defaultValue={value("insuranceIncluded", "false")}>
+              <StickySelect {...props} name="insuranceIncluded" defaultValue={value("insuranceIncluded", "false")}>
                 <option value="false">No</option>
                 <option value="true">Yes</option>
-              </Select>
+              </StickySelect>
             )}
           </Field>
         </div>
@@ -338,31 +381,43 @@ export function CruiseBookingForm({
         <Repeater name="guests" legend="Guest" addLabel="Add guest" minRows={1}>
           {({ index, field }) => (
             <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-              <Field id={field("firstName")} label="First name" required error={error(`guests.${index}.firstName`)}>
+              <Field
+                id={field("firstName")}
+                label="First name"
+                required
+                hint={index === 0 ? "Exactly as printed in the passport." : undefined}
+                error={error(`guests.${index}.firstName`)}
+              >
                 {(props) => <Input {...props} name={field("firstName")} defaultValue={value(field("firstName"))} />}
               </Field>
-              <Field id={field("lastName")} label="Last name" required error={error(`guests.${index}.lastName`)}>
+              <Field
+                id={field("lastName")}
+                label="Last name"
+                required
+                hint={index === 0 ? "Exactly as printed in the passport." : undefined}
+                error={error(`guests.${index}.lastName`)}
+              >
                 {(props) => <Input {...props} name={field("lastName")} defaultValue={value(field("lastName"))} />}
               </Field>
               <Field id={field("gender")} label="Gender" error={error(`guests.${index}.gender`)}>
                 {(props) => (
-                  <Select {...props} name={field("gender")} defaultValue={value(field("gender"))}>
+                  <StickySelect {...props} name={field("gender")} defaultValue={value(field("gender"))}>
                     <option value="">— Select —</option>
                     <option value="Female">Female</option>
                     <option value="Male">Male</option>
                     <option value="X">X</option>
                     <option value="Undisclosed">Prefer not to say</option>
-                  </Select>
+                  </StickySelect>
                 )}
               </Field>
               <Field id={field("type")} label="Guest type" error={error(`guests.${index}.type`)}>
                 {(props) => (
-                  <Select {...props} name={field("type")} defaultValue={value(field("type"), "ADULT")}>
+                  <StickySelect {...props} name={field("type")} defaultValue={value(field("type"), "ADULT")}>
                     <option value="ADULT">Adult</option>
                     <option value="CHILD">Child</option>
                     <option value="INFANT">Infant</option>
                     <option value="SENIOR">Senior</option>
-                  </Select>
+                  </StickySelect>
                 )}
               </Field>
               <Field id={field("dateOfBirth")} label="Date of birth" error={error(`guests.${index}.dateOfBirth`)}>
@@ -411,7 +466,7 @@ export function CruiseBookingForm({
 
       {/* Billing information. The address fields live here rather than above,
           so there is one place a billing detail is entered. */}
-      <BillingInformation value={value} error={error} />
+      <BillingInformation value={value} error={error} card={card} />
 
       {/* Five figures, per the review sheet. Currency is no longer chosen
           per booking: it rides along as a hidden field carrying the operator
@@ -421,37 +476,37 @@ export function CruiseBookingForm({
         <input type="hidden" name="currency" value={options.defaultCurrency} />
 
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          <Field id="baseFare" label="Cruise fare" error={error("baseFare")}>
-            {(props) => <Input {...props} name="baseFare" inputMode="decimal" placeholder="0.00" defaultValue={value("baseFare")} />}
+          <Field id="baseFare" label="Cruise fare" hint="Digits and a decimal point." error={error("baseFare")}>
+            {(props) => <Input {...props} name="baseFare" inputMode="decimal" placeholder="1800.00" defaultValue={value("baseFare")} />}
           </Field>
 
-          <Field id="grossMco" label="MCO" error={error("grossMco")}>
-            {(props) => <Input {...props} name="grossMco" inputMode="decimal" placeholder="0.00" defaultValue={value("grossMco")} />}
+          <Field id="grossMco" label="MCO" hint="Digits and a decimal point." error={error("grossMco")}>
+            {(props) => <Input {...props} name="grossMco" inputMode="decimal" placeholder="1800.00" defaultValue={value("grossMco")} />}
           </Field>
 
-          <Field id="total" label="Total fare" error={error("total")}>
-            {(props) => <Input {...props} name="total" inputMode="decimal" placeholder="0.00" defaultValue={value("total")} />}
+          <Field id="total" label="Total fare" hint="Digits and a decimal point." error={error("total")}>
+            {(props) => <Input {...props} name="total" inputMode="decimal" placeholder="1800.00" defaultValue={value("total")} />}
           </Field>
 
           <Field id="mcoSupplierId" label="MCO supplier" error={error("mcoSupplierId")}>
             {(props) => (
-              <Select {...props} name="mcoSupplierId" defaultValue={value("mcoSupplierId")}>
+              <StickySelect {...props} name="mcoSupplierId" defaultValue={value("mcoSupplierId")}>
                 <option value="">— Select —</option>
                 {options.mcoSuppliers.map((supplier) => (
                   <option key={supplier.id} value={supplier.id}>
                     {supplier.name}
                   </option>
                 ))}
-              </Select>
+              </StickySelect>
             )}
           </Field>
 
           <Field id="splitCharges" label="Split charges" error={error("splitCharges")}>
             {(props) => (
-              <Select {...props} name="splitCharges" defaultValue={value("splitCharges", "false")}>
+              <StickySelect {...props} name="splitCharges" defaultValue={value("splitCharges", "false")}>
                 <option value="false">No</option>
                 <option value="true">Yes</option>
-              </Select>
+              </StickySelect>
             )}
           </Field>
         </div>

@@ -49,13 +49,19 @@ export default async function BookingsPage({
   searchParams,
 }: PageProps<"/admin/bookings">) {
   await requirePermission(PERMISSIONS.BOOKING_VIEW);
-  const [canCreate, canViewMoney, canExport, canViewDocuments] =
-    await Promise.all([
-      currentUserCan(PERMISSIONS.BOOKING_CREATE),
-      currentUserCan(PERMISSIONS.PAYMENT_VIEW),
-      currentUserCan(PERMISSIONS.BOOKING_EXPORT),
-      currentUserCan(PERMISSIONS.DOCUMENT_VIEW),
-    ]);
+  const [
+    canCreate,
+    canViewMoney,
+    canExport,
+    canViewDocuments,
+    canDeleteBooking,
+  ] = await Promise.all([
+    currentUserCan(PERMISSIONS.BOOKING_CREATE),
+    currentUserCan(PERMISSIONS.PAYMENT_VIEW),
+    currentUserCan(PERMISSIONS.BOOKING_EXPORT),
+    currentUserCan(PERMISSIONS.DOCUMENT_VIEW),
+    currentUserCan(PERMISSIONS.BOOKING_DELETE),
+  ]);
 
   const params = await searchParams;
 
@@ -463,8 +469,10 @@ export default async function BookingsPage({
                   <Td>
                     <RowActions
                       bookingId={row.id}
+                      bookingNumber={row.bookingNumber}
                       canViewDocuments={canViewDocuments}
                       canSeeETicket={row.product === "FLIGHT"}
+                      canDelete={canDeleteBooking}
                     />
                   </Td>
                 </Tr>

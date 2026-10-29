@@ -8,7 +8,7 @@ import {
   csvResponse,
 } from "@/lib/export/csv";
 import { minorToDecimalString } from "@/lib/financial/money";
-import { formatDate, formatDateTime } from "@/lib/format";
+import { formatCalendarDate, formatDateTime } from "@/lib/format";
 import { loggerFor } from "@/lib/logging/logger";
 import {
   ForbiddenError,
@@ -101,7 +101,7 @@ export async function GET(request: Request): Promise<Response> {
     { header: "Agent", value: (r: (typeof rows)[number]) => r.assignedAgent?.name ?? "" },
     { header: "Supplier", value: (r: (typeof rows)[number]) => r.supplier?.name ?? "" },
     { header: "Booked", value: (r: (typeof rows)[number]) => formatDateTime(r.bookedAt) },
-    { header: "Travel date", value: (r: (typeof rows)[number]) => (r.travelStartDate ? formatDate(r.travelStartDate) : "") },
+    { header: "Travel date", value: (r: (typeof rows)[number]) => (r.travelStartDate ? formatCalendarDate(r.travelStartDate) : "") },
   ];
 
   if (canSeeMoney) {

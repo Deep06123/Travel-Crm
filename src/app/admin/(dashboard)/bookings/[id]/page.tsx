@@ -32,9 +32,12 @@ import {
 } from "@/features/finance/booking-finance-forms";
 import { DocumentUploadForm } from "@/features/documents/upload-form";
 import { CustomerEmailPanel } from "@/features/bookings/customer-email-panel";
+import { DeleteBookingControl } from "@/features/bookings/delete-booking-control";
 import { McoControl } from "@/features/bookings/mco-control";
 import { StatusControl } from "@/features/bookings/status-control";
 import { TicketingControl } from "@/features/bookings/ticketing-control";
+import { TicketingReferencesForm } from "@/features/bookings/ticketing-references-form";
+import { BookingFinancialsForm } from "@/features/bookings/booking-financials-form";
 import { currentUserCan, requirePermission } from "@/lib/auth/dal";
 import {
   allowedMcoTransitionsFrom,
@@ -42,8 +45,14 @@ import {
 } from "@/lib/bookings/mco";
 import { allowedTransitionsFrom } from "@/lib/bookings/status";
 import { prisma } from "@/lib/db/prisma";
-import { formatMoney } from "@/lib/financial/money";
-import { formatDate, formatDateTime, fullName, isOverdue } from "@/lib/format";
+import { formatMoney, minorToDecimalString } from "@/lib/financial/money";
+import {
+  formatCalendarDate,
+  formatDate,
+  formatDateTime,
+  fullName,
+  isOverdue,
+} from "@/lib/format";
 import { PERMISSIONS } from "@/lib/permissions";
 import {
   getBookingDetail,
@@ -94,6 +103,7 @@ export default async function BookingDetailPage({
     canResendEmail,
     canUpdateBooking,
     canUpdateMco,
+    canDeleteBooking,
   ] = await Promise.all([
     currentUserCan(PERMISSIONS.BOOKING_CHANGE_STATUS),
     currentUserCan(PERMISSIONS.PASSENGER_VIEW_SENSITIVE),
@@ -108,6 +118,7 @@ export default async function BookingDetailPage({
     currentUserCan(PERMISSIONS.MESSAGE_SEND),
     currentUserCan(PERMISSIONS.BOOKING_UPDATE),
     currentUserCan(PERMISSIONS.BOOKING_MCO_UPDATE),
+    currentUserCan(PERMISSIONS.BOOKING_DELETE),
   ]);
 
   const { id } = await params;
@@ -171,7 +182,18 @@ export default async function BookingDetailPage({
 
   // Derived from the stored payment, refund, chargeback and adjustment rows —
   // never cached, so it cannot drift from what it summarises.
-  const position = canViewPayments ? await getBookingPosition(booking.id) : null;
+  //
+  // Loaded regardless of `canViewPayments`: the ticketing panel needs the
+  // balance to say why issuing is blocked, and an operator who may ticket but
+  // may not read the payment ledger still has to be told. Only the formatted
+  // shortfall reaches that panel; the rest of the position stays behind the
+  // permission gate below.
+  const position = await getBookingPosition(booking.id);
+
+  const outstandingLabel =
+    position && !position.isFullyPaid
+      ? formatMoney(position.outstandingBalanceMinor, position.currency)
+      : null;
 
   // Refunds already raised still lay claim to this money, so the ceiling shown
   // to the operator accounts for them.
@@ -302,13 +324,13 @@ export default async function BookingDetailPage({
                 />
                 <DetailRow
                   label="Departure"
-                  value={formatDate(booking.flightDetail.departureDate)}
+                  value={formatCalendarDate(booking.flightDetail.departureDate)}
                 />
                 <DetailRow
                   label="Return"
                   value={
                     booking.flightDetail.isRoundTrip
-                      ? formatDate(booking.flightDetail.returnDate)
+                      ? formatCalendarDate(booking.flightDetail.returnDate)
                       : "One way"
                   }
                 />
@@ -399,11 +421,11 @@ export default async function BookingDetailPage({
                 <DetailRow label="Arrives at" value={booking.cruiseDetail.arrivalPort} />
                 <DetailRow
                   label="Sail date"
-                  value={formatDate(booking.cruiseDetail.sailDate)}
+                  value={formatCalendarDate(booking.cruiseDetail.sailDate)}
                 />
                 <DetailRow
                   label="Return date"
-                  value={formatDate(booking.cruiseDetail.returnDate)}
+                  value={formatCalendarDate(booking.cruiseDetail.returnDate)}
                 />
                 <DetailRow label="Deck" value={booking.cruiseDetail.deckNumber} />
                 <DetailRow label="Cabin" value={booking.cruiseDetail.cabinNumber} />
@@ -491,7 +513,7 @@ export default async function BookingDetailPage({
                       <Td className="text-ink-muted">{humanise(passenger.type)}</Td>
                       {canViewSensitive ? (
                         <Td className="text-ink-muted">
-                          {formatDate(passenger.dateOfBirth)}
+                          {formatCalendarDate(passenger.dateOfBirth)}
                         </Td>
                       ) : null}
                       {canViewSensitive ? (
@@ -526,13 +548,27 @@ export default async function BookingDetailPage({
               </p>
             ) : null}
 
+            {/* Before the issue form, because it is the thing that unblocks
+                it: the gate reads `airlineConfirmation`, which until now could
+                only be set when the booking was created — before the airline
+                had sent one back. Hidden once issued, for the same reason the
+                issue form is: the confirmation is the evidence the ticket was
+                issued against, not something to revise afterwards. */}
+            {canUpdateBooking && booking.ticketStatus !== "ISSUED" ? (
+              <TicketingReferencesForm
+                bookingId={booking.id}
+                airlineConfirmation={booking.airlineConfirmation}
+                ticketingReference={booking.ticketingReference}
+              />
+            ) : null}
+
             {/* Hidden once issued: re-issuing is a void-and-reissue, which is a
                 different operation with its own consequences, not this form
                 submitted twice. The service refuses it either way. */}
             {canUpdateBooking && booking.ticketStatus !== "ISSUED" ? (
               <TicketingControl
                 bookingId={booking.id}
-                ticketingReference={booking.ticketingReference}
+                outstandingLabel={outstandingLabel}
                 passengers={booking.passengers.map((passenger) => ({
                   id: passenger.id,
                   fullName: fullName(passenger),
@@ -639,6 +675,39 @@ export default async function BookingDetailPage({
                 what has actually been captured. The two are tracked separately
                 and routinely differ.
               </p>
+
+              {canUpdateBooking ? (
+                <BookingFinancialsForm
+                  bookingId={booking.id}
+                  currency={booking.currency}
+                  amounts={{
+                    baseFare: minorToDecimalString(
+                      booking.baseFareMinor,
+                      booking.currency,
+                    ),
+                    taxesFees: minorToDecimalString(
+                      booking.taxesFeesMinor,
+                      booking.currency,
+                    ),
+                    total: minorToDecimalString(
+                      booking.totalMinor,
+                      booking.currency,
+                    ),
+                    supplierCost: minorToDecimalString(
+                      booking.supplierCostMinor,
+                      booking.currency,
+                    ),
+                    grossMco: minorToDecimalString(
+                      booking.grossMcoMinor,
+                      booking.currency,
+                    ),
+                    netMco: minorToDecimalString(
+                      booking.netMcoMinor,
+                      booking.currency,
+                    ),
+                  }}
+                />
+              ) : null}
 
               {booking.financialNotes ? (
                 <p className="mt-3 rounded-md bg-surface-muted p-3 text-sm whitespace-pre-wrap text-ink">
@@ -826,6 +895,18 @@ export default async function BookingDetailPage({
               </div>
             ) : null}
           </Panel>
+
+          {/* Last on the page, and only for the role that holds
+              booking.delete: erasing a record is not an everyday action and
+              should not sit beside the ones that are. */}
+          {canDeleteBooking ? (
+            <Panel title="Danger zone" collapsible={false}>
+              <DeleteBookingControl
+                bookingId={booking.id}
+                bookingNumber={booking.bookingNumber}
+              />
+            </Panel>
+          ) : null}
         </div>
 
         {/* Right column — actions and activity */}
@@ -889,7 +970,7 @@ export default async function BookingDetailPage({
                             : "text-xs text-ink-muted"
                         }
                       >
-                        Due {formatDate(followUp.dueAt)}
+                        Due {formatCalendarDate(followUp.dueAt)}
                         {followUp.assignee ? ` · ${followUp.assignee.name}` : ""}
                       </p>
                     </li>

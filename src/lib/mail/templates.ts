@@ -1,6 +1,6 @@
 import "server-only";
 
-import { formatDate } from "@/lib/format";
+import { formatCalendarDate, formatDate } from "@/lib/format";
 import { formatMoney } from "@/lib/financial/money";
 
 import { renderETicket } from "./eticket";
@@ -101,8 +101,8 @@ function itineraryLines(data: BookingEmailData): string[] {
     if (sailDate) {
       lines.push(
         returnDate
-          ? `${formatDate(sailDate)} to ${formatDate(returnDate)}`
-          : `Sailing ${formatDate(sailDate)}`,
+          ? `${formatCalendarDate(sailDate)} to ${formatCalendarDate(returnDate)}`
+          : `Sailing ${formatCalendarDate(sailDate)}`,
       );
     }
     if (nights) lines.push(`${nights} ${nights === 1 ? "night" : "nights"}`);

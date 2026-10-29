@@ -5,7 +5,8 @@ import { useActionState } from "react";
 import { useFormStatus } from "react-dom";
 
 import { Button } from "@/components/ui/button";
-import { Field, Input, Select, Textarea } from "@/components/ui/field";
+import { Field, Input, Textarea } from "@/components/ui/field";
+import { StickySelect } from "@/components/ui/sticky-select";
 import { BookingPriority, CommentVisibility } from "@/generated/prisma/enums";
 
 import {
@@ -74,10 +75,10 @@ export function CommentForm({ bookingId }: { bookingId: string }) {
           hint="Internal notes are never shown to the customer."
         >
           {(props) => (
-            <Select {...props} name="visibility" defaultValue={CommentVisibility.INTERNAL}>
+            <StickySelect {...props} name="visibility" defaultValue={CommentVisibility.INTERNAL}>
               <option value={CommentVisibility.INTERNAL}>Internal note</option>
               <option value={CommentVisibility.CUSTOMER_FACING}>Customer-facing</option>
-            </Select>
+            </StickySelect>
           )}
         </Field>
 
@@ -127,26 +128,26 @@ export function FollowUpForm({
 
         <Field id="followup-priority" label="Priority">
           {(props) => (
-            <Select {...props} name="priority" defaultValue={BookingPriority.NORMAL}>
+            <StickySelect {...props} name="priority" defaultValue={BookingPriority.NORMAL}>
               {Object.values(BookingPriority).map((level) => (
                 <option key={level} value={level}>
                   {humanise(level)}
                 </option>
               ))}
-            </Select>
+            </StickySelect>
           )}
         </Field>
 
         <Field id="followup-assigneeId" label="Assign to">
           {(props) => (
-            <Select {...props} name="assigneeId" defaultValue="">
+            <StickySelect {...props} name="assigneeId" defaultValue="">
               <option value="">— Unassigned —</option>
               {agents.map((agent) => (
                 <option key={agent.id} value={agent.id}>
                   {agent.name}
                 </option>
               ))}
-            </Select>
+            </StickySelect>
           )}
         </Field>
       </div>

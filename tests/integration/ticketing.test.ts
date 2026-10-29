@@ -6,6 +6,9 @@ import {
   BookingStatus,
   CustomerStatus,
   PassengerType,
+  PaymentMethod,
+  PaymentStatus,
+  RefundStatus,
   TicketStatus,
 } from "@/generated/prisma/enums";
 import { hashPassword } from "@/lib/auth/password";
@@ -43,17 +46,51 @@ const AMOUNTS = {
   netMcoMinor: 92_697,
 };
 
+let paymentSeq = 0;
+
+/**
+ * Records a captured payment against a booking.
+ *
+ * Written straight to the table rather than through `recordPayment`: these
+ * tests are about ticketing reading the balance, not about how the money got
+ * there, and the service would drag its own rules into every fixture.
+ */
+async function pay(
+  bookingId: string,
+  amountMinor: number,
+  status: PaymentStatus = PaymentStatus.CAPTURED,
+): Promise<string> {
+  paymentSeq += 1;
+
+  const payment = await prisma.payment.create({
+    data: {
+      reference: `PAY-TKT-${SUFFIX}-${paymentSeq}`,
+      bookingId,
+      amountMinor,
+      currency: "USD",
+      method: PaymentMethod.CREDIT_CARD,
+      status,
+    },
+    select: { id: true },
+  });
+
+  return payment.id;
+}
+
 async function makeFlight(
   options: {
     status?: BookingStatus;
     airlineConfirmation?: string | undefined;
     passengers?: number;
+    /** Settle the booking in full. Off for the cases testing the balance rule. */
+    paid?: boolean;
   } = {},
 ): Promise<string> {
   const {
     status = BookingStatus.CONFIRMED,
     airlineConfirmation = "ABC123",
     passengers = 1,
+    paid = true,
   } = options;
 
   const { id } = await createFlightBooking(
@@ -94,6 +131,12 @@ async function makeFlight(
   // fixtures exist to test.
   if (status !== BookingStatus.PENDING) {
     await prisma.booking.update({ where: { id }, data: { status } });
+  }
+
+  // A ticket cannot be issued against an unpaid booking, so the default
+  // fixture is settled. The cases that exercise that rule opt out.
+  if (paid) {
+    await pay(id, AMOUNTS.totalMinor);
   }
 
   return id;
@@ -139,6 +182,10 @@ afterAll(async () => {
   await prisma.notification.deleteMany({
     where: { bookingId: { in: bookingIds } },
   });
+  // Payments and refunds hold the booking with `onDelete: Restrict`, so they
+  // go first or the booking cleanup fails.
+  await prisma.refund.deleteMany({ where: { bookingId: { in: bookingIds } } });
+  await prisma.payment.deleteMany({ where: { bookingId: { in: bookingIds } } });
   await prisma.booking.deleteMany({ where: { id: { in: bookingIds } } });
   await prisma.customer.deleteMany({ where: { id: customerId } });
   await prisma.adminUser.deleteMany({ where: { id: actorId } });
@@ -229,6 +276,124 @@ describe("issueTicket", () => {
     // Neither the issue time nor the number is overwritten by a resubmission.
     expect(after.ticketedAt?.getTime()).toBe(first.ticketedAt?.getTime());
     expect(after.passengers[0]?.ticketNumber).toBe("176-1111111111");
+  });
+
+  it("refuses a booking with nothing collected against it", async () => {
+    const bookingId = await makeFlight({ paid: false });
+    const [passengerId] = await passengerIds(bookingId);
+
+    await expect(
+      issueTicket({
+        bookingId,
+        actorId,
+        ticketNumbers: { [passengerId!]: "176-8111111111" },
+      }),
+    ).rejects.toThrow(TicketNotIssuableError);
+
+    const after = await prisma.booking.findUniqueOrThrow({
+      where: { id: bookingId },
+      select: {
+        ticketStatus: true,
+        ticketedAt: true,
+        passengers: { select: { ticketNumber: true } },
+      },
+    });
+
+    // The refusal leaves nothing behind: no half-issued state, and no number
+    // written onto a traveller for a ticket that was never issued.
+    expect(after.ticketStatus).toBe(TicketStatus.PENDING);
+    expect(after.ticketedAt).toBeNull();
+    expect(after.passengers[0]?.ticketNumber).toBeNull();
+  });
+
+  it("refuses a part-paid booking", async () => {
+    const bookingId = await makeFlight({ paid: false });
+    const [passengerId] = await passengerIds(bookingId);
+
+    await pay(bookingId, AMOUNTS.totalMinor - 1);
+
+    await expect(
+      issueTicket({
+        bookingId,
+        actorId,
+        ticketNumbers: { [passengerId!]: "176-8222222222" },
+      }),
+    ).rejects.toThrow(TicketNotIssuableError);
+  });
+
+  it("does not count an authorized payment as collected", async () => {
+    const bookingId = await makeFlight({ paid: false });
+    const [passengerId] = await passengerIds(bookingId);
+
+    // Money held is not money taken. The balance only moves on capture.
+    await pay(bookingId, AMOUNTS.totalMinor, PaymentStatus.AUTHORIZED);
+
+    await expect(
+      issueTicket({
+        bookingId,
+        actorId,
+        ticketNumbers: { [passengerId!]: "176-8333333333" },
+      }),
+    ).rejects.toThrow(TicketNotIssuableError);
+  });
+
+  it("refuses once a completed refund reopens the balance", async () => {
+    const bookingId = await makeFlight();
+    const [passengerId] = await passengerIds(bookingId);
+
+    await prisma.refund.create({
+      data: {
+        reference: `REF-TKT-${SUFFIX}`,
+        bookingId,
+        requestedAmountMinor: AMOUNTS.totalMinor,
+        approvedAmountMinor: AMOUNTS.totalMinor,
+        currency: "USD",
+        reason: "Customer changed their mind",
+        status: RefundStatus.COMPLETED,
+      },
+    });
+
+    await expect(
+      issueTicket({
+        bookingId,
+        actorId,
+        ticketNumbers: { [passengerId!]: "176-8444444444" },
+      }),
+    ).rejects.toThrow(TicketNotIssuableError);
+  });
+
+  it("stays a no-op on an already-issued ticket whose money went back", async () => {
+    const bookingId = await makeFlight();
+    const [passengerId] = await passengerIds(bookingId);
+
+    await issueTicket({
+      bookingId,
+      actorId,
+      ticketNumbers: { [passengerId!]: "176-8555555555" },
+    });
+
+    // The ticket is out. A later refund does not make the issue retroactively
+    // invalid, so a resubmission must still be a quiet no-op rather than an
+    // error about the balance.
+    await prisma.refund.create({
+      data: {
+        reference: `REF-TKT-${SUFFIX}-2`,
+        bookingId,
+        requestedAmountMinor: AMOUNTS.totalMinor,
+        approvedAmountMinor: AMOUNTS.totalMinor,
+        currency: "USD",
+        reason: "Refunded after issue",
+        status: RefundStatus.COMPLETED,
+      },
+    });
+
+    const again = await issueTicket({
+      bookingId,
+      actorId,
+      ticketNumbers: { [passengerId!]: "176-8666666666" },
+    });
+
+    expect(again.changed).toBe(false);
   });
 
   it("refuses a booking with no airline confirmation", async () => {

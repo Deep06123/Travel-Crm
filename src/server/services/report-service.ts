@@ -8,6 +8,7 @@ import {
 } from "@/generated/prisma/enums";
 import type { Prisma } from "@/generated/prisma/client";
 import { prisma } from "@/lib/db/prisma";
+import { toDateInputValue } from "@/lib/format";
 
 /**
  * Reports.
@@ -66,16 +67,13 @@ export async function getBookingReport(range: ReportRange): Promise<BookingRepor
       prisma.booking.groupBy({ by: ["bookingTypeId"], where, _count: true }),
       prisma.booking.groupBy({ by: ["assignedAgentId"], where, _count: true }),
       prisma.booking.groupBy({ by: ["supplierId"], where, _count: true }),
-      // DATE_FORMAT rather than a DATE column: the string is what this is
-      // rendered as, and it avoids reading a local-midnight Date back out in
-      // UTC, which can report the previous day.
-      prisma.$queryRaw<{ day: string; count: bigint }[]>`
-        SELECT DATE_FORMAT(\`bookedAt\`, '%Y-%m-%d') AS day, COUNT(*) AS count
-        FROM \`Booking\`
-        WHERE \`bookedAt\` >= ${range.from} AND \`bookedAt\` <= ${range.to}
-        GROUP BY day
-        ORDER BY day ASC
-      `,
+      // Bucketed in the application, not with SQL's DATE_FORMAT. The column
+      // holds UTC instants, so grouping on it in the database buckets by UTC
+      // day: a booking taken at 23:30 in New York plotted on the following
+      // day, outside the very range that had selected it. `CONVERT_TZ` would
+      // do it in the database, but it needs the named-timezone tables loaded
+      // and a stock MariaDB has them empty.
+      prisma.booking.findMany({ where, select: { bookedAt: true } }),
     ]);
 
   // Resolve the display names for the grouped foreign keys in one round trip
@@ -129,11 +127,26 @@ export async function getBookingReport(range: ReportRange): Promise<BookingRepor
         : "Not set",
       count: row._count,
     })),
-    trend: trendRows.map((row) => ({
-      date: row.day,
-      count: Number(row.count),
-    })),
+    trend: bucketByBusinessDay(trendRows.map((row) => row.bookedAt)),
   };
+}
+
+/** Counts instants per calendar day in the business timezone, oldest first. */
+function bucketByBusinessDay(
+  instants: Date[],
+): { date: string; count: number }[] {
+  const counts = new Map<string, number>();
+
+  for (const instant of instants) {
+    const day = toDateInputValue(instant);
+    if (day === "") continue;
+    counts.set(day, (counts.get(day) ?? 0) + 1);
+  }
+
+  // The keys are `YYYY-MM-DD`, which sorts chronologically as text.
+  return [...counts.entries()]
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([date, count]) => ({ date, count }));
 }
 
 // --- Financial report -------------------------------------------------------

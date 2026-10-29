@@ -2,11 +2,14 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import {
   AdminRole,
+  AuditAction,
   BookingPriority,
   BookingStatus,
   ChargeOutcome,
   CustomerStatus,
   PassengerType,
+  PaymentMethod,
+  PaymentStatus,
   TicketStatus,
 } from "@/generated/prisma/enums";
 import { hashPassword } from "@/lib/auth/password";
@@ -17,7 +20,9 @@ import {
 } from "@/lib/bookings/status";
 import { prisma } from "@/lib/db/prisma";
 import {
+  BookingNotDeletableError,
   createFlightBooking,
+  deleteBooking,
   listBookings,
 } from "@/server/services/booking-service";
 import { transitionBooking } from "@/server/services/booking-status-service";
@@ -535,5 +540,120 @@ describe("listBookings", () => {
 
     expect(result.rows.length).toBeLessThanOrEqual(2);
     expect(result.pageCount).toBeGreaterThanOrEqual(1);
+  });
+});
+
+describe("deleteBooking", () => {
+  /** The booking number, which the delete demands typed back verbatim. */
+  async function numberOf(id: string): Promise<string> {
+    const row = await prisma.booking.findUniqueOrThrow({
+      where: { id },
+      select: { bookingNumber: true },
+    });
+    return row.bookingNumber;
+  }
+
+  it("removes the booking and everything that only describes it", async () => {
+    const id = await makeBooking();
+    const bookingNumber = await numberOf(id);
+
+    const result = await deleteBooking({
+      bookingId: id,
+      actorId,
+      reason: "Duplicate of an earlier booking.",
+      confirmation: bookingNumber,
+    });
+
+    expect(result.bookingNumber).toBe(bookingNumber);
+
+    expect(await prisma.booking.findUnique({ where: { id } })).toBeNull();
+
+    // Cascaded relations go with it rather than lingering as orphans.
+    expect(await prisma.passenger.count({ where: { bookingId: id } })).toBe(0);
+    expect(await prisma.flightSegment.count({ where: { bookingId: id } })).toBe(0);
+    expect(
+      await prisma.bookingStatusHistory.count({ where: { bookingId: id } }),
+    ).toBe(0);
+  });
+
+  it("leaves an audit entry behind as the only trace", async () => {
+    const id = await makeBooking();
+    const bookingNumber = await numberOf(id);
+
+    await deleteBooking({
+      bookingId: id,
+      actorId,
+      reason: "Created against the wrong customer.",
+      confirmation: bookingNumber,
+    });
+
+    const entries = await prisma.auditLog.findMany({
+      where: { entityId: id, action: AuditAction.DELETE },
+      select: { summary: true },
+    });
+
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.summary).toContain(bookingNumber);
+    expect(entries[0]?.summary).toContain("wrong customer");
+  });
+
+  it("refuses when the typed confirmation does not match", async () => {
+    const id = await makeBooking();
+
+    await expect(
+      deleteBooking({
+        bookingId: id,
+        actorId,
+        reason: "Mistake.",
+        confirmation: "MV00000",
+      }),
+    ).rejects.toThrow(BookingNotDeletableError);
+
+    expect(await prisma.booking.findUnique({ where: { id } })).not.toBeNull();
+  });
+
+  it("refuses a booking that has money recorded against it", async () => {
+    const id = await makeBooking();
+    const bookingNumber = await numberOf(id);
+
+    await prisma.payment.create({
+      data: {
+        reference: `PAY-DEL-${SUFFIX}`,
+        bookingId: id,
+        amountMinor: 102_997,
+        currency: "USD",
+        method: PaymentMethod.CREDIT_CARD,
+        status: PaymentStatus.CAPTURED,
+      },
+    });
+
+    await expect(
+      deleteBooking({
+        bookingId: id,
+        actorId,
+        reason: "Wrong booking.",
+        confirmation: bookingNumber,
+      }),
+    ).rejects.toThrow(BookingNotDeletableError);
+
+    expect(await prisma.booking.findUnique({ where: { id } })).not.toBeNull();
+
+    // Restrict would have refused this at the database anyway; the point is
+    // that the operator gets a sentence instead of a foreign-key error.
+    await prisma.payment.deleteMany({ where: { bookingId: id } });
+  });
+
+  it("refuses once a ticket has been issued", async () => {
+    const id = await makeBooking({ ticketStatus: TicketStatus.ISSUED });
+    const bookingNumber = await numberOf(id);
+
+    await expect(
+      deleteBooking({
+        bookingId: id,
+        actorId,
+        reason: "Wrong booking.",
+        confirmation: bookingNumber,
+      }),
+    ).rejects.toThrow(BookingNotDeletableError);
   });
 });

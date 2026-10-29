@@ -5,6 +5,7 @@ import { redirect } from "next/navigation";
 import { z } from "zod";
 
 import { requirePermission } from "@/lib/auth/dal";
+import { retainedFormValues } from "@/lib/forms";
 import { loggerFor } from "@/lib/logging/logger";
 import { PERMISSIONS } from "@/lib/permissions";
 import {
@@ -32,11 +33,7 @@ const composeSchema = z.object({
 });
 
 function formValues(formData: FormData): Record<string, string> {
-  const values: Record<string, string> = {};
-  for (const [key, value] of formData.entries()) {
-    if (typeof value === "string") values[key] = value;
-  }
-  return values;
+  return retainedFormValues(formData);
 }
 
 export async function composeMessageAction(

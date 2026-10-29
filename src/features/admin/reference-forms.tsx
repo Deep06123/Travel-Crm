@@ -5,7 +5,8 @@ import { useActionState } from "react";
 import { useFormStatus } from "react-dom";
 
 import { Button } from "@/components/ui/button";
-import { Field, Input, Select, Textarea } from "@/components/ui/field";
+import { Field, Input, Textarea } from "@/components/ui/field";
+import { StickySelect } from "@/components/ui/sticky-select";
 import { SupplierType } from "@/generated/prisma/enums";
 
 import {
@@ -68,13 +69,13 @@ export function SupplierForm() {
 
       <Field id="sup-type" label="Type" required error={error("type")}>
         {(props) => (
-          <Select {...props} name="type" defaultValue={SupplierType.AIRLINE}>
+          <StickySelect {...props} name="type" defaultValue={SupplierType.AIRLINE}>
             {Object.values(SupplierType).map((type) => (
               <option key={type} value={type}>
                 {humanise(type)}
               </option>
             ))}
-          </Select>
+          </StickySelect>
         )}
       </Field>
 
@@ -99,10 +100,10 @@ export function SupplierForm() {
         </Field>
         <Field id="sup-active" label="Active" error={error("isActive")}>
           {(props) => (
-            <Select {...props} name="isActive" defaultValue="true">
+            <StickySelect {...props} name="isActive" defaultValue="true">
               <option value="true">Yes</option>
               <option value="false">No</option>
-            </Select>
+            </StickySelect>
           )}
         </Field>
       </div>
@@ -174,10 +175,10 @@ export function McoSupplierForm() {
 
       <Field id="mco-active" label="Active" error={error("isActive")}>
         {(props) => (
-          <Select {...props} name="isActive" defaultValue="true">
+          <StickySelect {...props} name="isActive" defaultValue="true">
             <option value="true">Yes</option>
             <option value="false">No</option>
-          </Select>
+          </StickySelect>
         )}
       </Field>
 
@@ -217,10 +218,10 @@ export function TfnForm() {
         </Field>
         <Field id="tfn-active" label="Active" error={error("isActive")}>
           {(props) => (
-            <Select {...props} name="isActive" defaultValue="true">
+            <StickySelect {...props} name="isActive" defaultValue="true">
               <option value="true">Yes</option>
               <option value="false">No</option>
-            </Select>
+            </StickySelect>
           )}
         </Field>
       </div>

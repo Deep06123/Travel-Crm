@@ -8,7 +8,9 @@ import {
 } from "@/generated/prisma/enums";
 import { recordAudit } from "@/lib/audit";
 import { prisma } from "@/lib/db/prisma";
+import { formatMoney } from "@/lib/financial/money";
 import { loggerFor } from "@/lib/logging/logger";
+import { getBookingPosition } from "@/server/services/payment-service";
 
 const log = loggerFor("ticketing");
 
@@ -112,6 +114,26 @@ export async function issueTicket({
       // error, and must not restamp `ticketedAt` to a later time than the one
       // the ticket was actually issued at.
       return { bookingId, changed: false, numbered: 0 };
+    }
+
+    // Nothing is ticketed until it is paid for. A ticket is a commitment to
+    // the airline that the money behind it has been collected, so the balance
+    // is checked here rather than left to whoever remembers to look at the
+    // Payments panel.
+    //
+    // Read inside the transaction, and deliberately after the already-ISSUED
+    // return above: a ticket that is already out must stay a no-op on a double
+    // submit, even if the balance has since moved — a later refund does not
+    // retroactively make the issue invalid.
+    const position = await getBookingPosition(bookingId, tx);
+
+    if (position && !position.isFullyPaid) {
+      throw new TicketNotIssuableError(
+        `This booking still has an outstanding balance of ${formatMoney(
+          position.outstandingBalanceMinor,
+          position.currency,
+        )}. Record the payment before issuing a ticket.`,
+      );
     }
 
     // Only numbers belonging to this booking's passengers are accepted. The

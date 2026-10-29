@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 
 import { requirePermission } from "@/lib/auth/dal";
+import { retainedFormValues } from "@/lib/forms";
 import { loggerFor } from "@/lib/logging/logger";
 import { PERMISSIONS } from "@/lib/permissions";
 import {
@@ -41,17 +42,15 @@ function collectFieldErrors(
   return fieldErrors;
 }
 
-/** Retains what the operator typed so a rejected form is not emptied. */
+/**
+ * Retains what the operator typed so a rejected form is not emptied.
+ *
+ * `confirmedDuplicate` is deliberately dropped: the override applies to the
+ * submission that carried it, and remembering it would silently wave through
+ * a duplicate the operator never looked at twice.
+ */
 function formValues(formData: FormData): Record<string, string> {
-  const values: Record<string, string> = {};
-
-  for (const [key, value] of formData.entries()) {
-    if (typeof value === "string" && key !== "confirmedDuplicate") {
-      values[key] = value;
-    }
-  }
-
-  return values;
+  return retainedFormValues(formData, { omit: ["confirmedDuplicate"] });
 }
 
 function toObject(formData: FormData): Record<string, unknown> {

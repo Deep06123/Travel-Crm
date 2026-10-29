@@ -5,7 +5,8 @@ import { useActionState, useState } from "react";
 import { useFormStatus } from "react-dom";
 
 import { Button } from "@/components/ui/button";
-import { Field, Input, Select, Textarea } from "@/components/ui/field";
+import { Field, Input, Textarea } from "@/components/ui/field";
+import { StickySelect } from "@/components/ui/sticky-select";
 
 import { composeMessageAction, type MessageFormState } from "./actions";
 
@@ -78,10 +79,10 @@ export function ComposeForm({
         hint="A group expands to its members, so each person gets their own copy."
       >
         {(props) => (
-          <Select
+          <StickySelect
             {...props}
             name="groupId"
-            value={groupId}
+            defaultValue={groupId}
             onChange={(event) => setGroupId(event.target.value)}
           >
             <option value="">— No group —</option>
@@ -91,7 +92,7 @@ export function ComposeForm({
                 {group.memberCount === 1 ? "" : "s"})
               </option>
             ))}
-          </Select>
+          </StickySelect>
         )}
       </Field>
 

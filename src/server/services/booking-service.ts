@@ -12,6 +12,7 @@ import {
 import type { Prisma } from "@/generated/prisma/client";
 import { recordAudit } from "@/lib/audit";
 import { derivePriority } from "@/lib/bookings/priority";
+import { businessDayBounds } from "@/lib/format";
 import { sanitiseRichText } from "@/lib/html/sanitise";
 import { prisma } from "@/lib/db/prisma";
 import { nextBookingNumber } from "@/lib/db/references";
@@ -269,12 +270,14 @@ export function buildBookingWhere(
   if (filters.currency) where.currency = filters.currency.toUpperCase();
 
   if (filters.from || filters.to) {
+    // Both bounds are the operator's calendar days in the business timezone,
+    // inclusive. `bookedAt` is an instant, and the filter value is a date-only
+    // string parsed as midnight UTC, so the two have to be reconciled: adding
+    // 24 hours to midnight UTC closed the day at 19:59 in New York, and a
+    // booking taken that evening was missing from a filter for its own day.
     where.bookedAt = {
-      ...(filters.from ? { gte: filters.from } : {}),
-      // The "to" bound is inclusive of the whole day the operator picked.
-      ...(filters.to
-        ? { lte: new Date(filters.to.getTime() + 86_400_000 - 1) }
-        : {}),
+      ...(filters.from ? { gte: businessDayBounds(filters.from).start } : {}),
+      ...(filters.to ? { lte: businessDayBounds(filters.to).end } : {}),
     };
   }
 
@@ -757,5 +760,363 @@ export async function createCruiseBooking(
     );
 
     return created;
+  });
+}
+
+/**
+ * Raised when the booking is in no condition to be deleted.
+ *
+ * Separate from a fault: these are the rules refusing, and the message is
+ * written to be shown to the operator as-is.
+ */
+export class BookingNotDeletableError extends Error {
+  constructor(reason: string) {
+    super(reason);
+    this.name = "BookingNotDeletableError";
+  }
+}
+
+/**
+ * Raised when an edit names a booking that is not there.
+ *
+ * Carries the id rather than a sentence: the id is for the log, and the action
+ * that catches this is what phrases it for the operator.
+ */
+export class BookingNotFoundError extends Error {
+  constructor(public readonly bookingId: string) {
+    super(`Booking ${bookingId} does not exist.`);
+    this.name = "BookingNotFoundError";
+  }
+}
+
+export interface DeleteBookingInput {
+  bookingId: string;
+  actorId: string;
+  /** Why the booking should never have existed. Recorded in the audit log. */
+  reason: string;
+  /**
+   * The booking number as the operator typed it back.
+   *
+   * Checked here and not only in the form: the deliberate-act guard is worth
+   * nothing if a mis-aimed request can skip it.
+   */
+  confirmation: string;
+}
+
+export interface DeleteBookingResult {
+  bookingId: string;
+  bookingNumber: string;
+}
+
+/**
+ * Erases a booking that was created in error.
+ *
+ * Deletion is not cancellation. A booking that happened and then fell through
+ * is CANCELLED and keeps its history; this is for the record that should never
+ * have been written at all — the wrong customer, a duplicate, a test.
+ *
+ * Which is why it refuses the moment the booking has acquired anything real:
+ * money, paperwork, a case, or an issued ticket. Those rows are the business's
+ * own account of itself and several are `onDelete: Restrict` in the schema
+ * besides — the checks below exist so the operator gets a sentence explaining
+ * what is holding the record in place rather than a foreign-key error.
+ *
+ * What goes with it are the parts that only describe the booking: its flight
+ * or cruise detail, segments, passengers, comments, follow-ups and status
+ * history, all `onDelete: Cascade`. Call records, messages and notifications
+ * survive with a null booking, because they record something that genuinely
+ * happened to a person.
+ */
+export async function deleteBooking({
+  bookingId,
+  actorId,
+  reason,
+  confirmation,
+}: DeleteBookingInput): Promise<DeleteBookingResult> {
+  return prisma.$transaction(async (tx) => {
+    // Read inside the transaction so a payment recorded a moment ago cannot
+    // slip between the checks and the delete.
+    const booking = await tx.booking.findUnique({
+      where: { id: bookingId },
+      select: {
+        id: true,
+        bookingNumber: true,
+        product: true,
+        status: true,
+        ticketStatus: true,
+        customerId: true,
+        currency: true,
+        totalMinor: true,
+        _count: {
+          select: {
+            payments: true,
+            refunds: true,
+            chargebacks: true,
+            adjustments: true,
+            serviceCases: true,
+            documents: true,
+          },
+        },
+      },
+    });
+
+    if (!booking) {
+      throw new Error(`Booking ${bookingId} does not exist.`);
+    }
+
+    if (
+      confirmation.trim().toUpperCase() !== booking.bookingNumber.toUpperCase()
+    ) {
+      throw new BookingNotDeletableError(
+        `Type ${booking.bookingNumber} exactly to confirm the deletion.`,
+      );
+    }
+
+    if (booking.ticketStatus === TicketStatus.ISSUED) {
+      throw new BookingNotDeletableError(
+        "A ticket has been issued against this booking. Void the ticket with the airline and cancel the booking instead of deleting it.",
+      );
+    }
+
+    const financial: [string, number][] = [
+      ["payment", booking._count.payments],
+      ["refund", booking._count.refunds],
+      ["chargeback", booking._count.chargebacks],
+      ["financial adjustment", booking._count.adjustments],
+      ["service case", booking._count.serviceCases],
+    ];
+
+    const blocking = financial.filter(([, count]) => count > 0);
+
+    if (blocking.length > 0) {
+      const named = blocking
+        .map(([label, count]) => `${count} ${label}${count === 1 ? "" : "s"}`)
+        .join(", ");
+
+      throw new BookingNotDeletableError(
+        `This booking has ${named} recorded against it, which must be kept. Cancel the booking instead of deleting it.`,
+      );
+    }
+
+    if (booking._count.documents > 0) {
+      throw new BookingNotDeletableError(
+        `This booking has ${booking._count.documents} document(s) attached. Remove them first, then delete the booking.`,
+      );
+    }
+
+    // Written before the delete, and with `tx`, so the entry and the deletion
+    // stand or fall together. `AuditLog.entityId` is a plain string with no
+    // foreign key, so this outlives the row it describes — which is the point:
+    // the log is the only remaining trace that the booking ever existed.
+    await recordAudit(
+      {
+        action: AuditAction.DELETE,
+        entityType: "Booking",
+        entityId: booking.id,
+        adminUserId: actorId,
+        summary: `Deleted booking ${booking.bookingNumber}: ${reason}`,
+        changes: {
+          bookingNumber: { before: booking.bookingNumber, after: null },
+          status: { before: booking.status, after: null },
+          product: { before: booking.product, after: null },
+          customerId: { before: booking.customerId, after: null },
+          total: {
+            before: `${booking.totalMinor} ${booking.currency}`,
+            after: null,
+          },
+        },
+      },
+      tx,
+    );
+
+    await tx.booking.delete({ where: { id: booking.id } });
+
+    return { bookingId: booking.id, bookingNumber: booking.bookingNumber };
+  });
+}
+
+// --- Editing an existing booking -------------------------------------------
+
+/**
+ * The currency a booking is denominated in, or null if it is gone.
+ *
+ * Money arrives from a form as text and cannot be parsed without it: the
+ * number of minor units in a major one is 2 in USD, 0 in JPY and 3 in KWD.
+ */
+export async function getBookingCurrency(
+  bookingId: string,
+): Promise<{ currency: string } | null> {
+  return prisma.booking.findUnique({
+    where: { id: bookingId },
+    select: { currency: true },
+  });
+}
+
+/**
+ * Corrects a booking's money fields after it was created.
+ *
+ * These are set on the create form and were unreachable afterwards, which left
+ * two dead ends an operator could not get out of: an MCO that cannot be
+ * submitted because the booking carries no gross MCO amount, and a figure
+ * typed wrongly that could only be corrected by deleting the booking and
+ * entering it again.
+ *
+ * Every change is audited with its before and after. Raising the total after a
+ * ticket has been issued is deliberately *allowed* — a supplier re-invoicing a
+ * booking is ordinary, and refusing it would send people back to deleting and
+ * recreating, which loses the history. What matters is that the change is
+ * attributable, which the audit entry makes it.
+ */
+export async function updateBookingFinancials(input: {
+  bookingId: string;
+  actorId: string;
+  amounts: {
+    baseFareMinor: number;
+    taxesFeesMinor: number;
+    totalMinor: number;
+    supplierCostMinor: number;
+    grossMcoMinor: number;
+    netMcoMinor: number;
+  };
+}): Promise<{ bookingId: string; bookingNumber: string }> {
+  const { bookingId, actorId, amounts } = input;
+
+  return prisma.$transaction(async (tx) => {
+    const booking = await tx.booking.findUnique({
+      where: { id: bookingId },
+      select: {
+        id: true,
+        bookingNumber: true,
+        currency: true,
+        baseFareMinor: true,
+        taxesFeesMinor: true,
+        totalMinor: true,
+        supplierCostMinor: true,
+        grossMcoMinor: true,
+        netMcoMinor: true,
+      },
+    });
+
+    if (!booking) throw new BookingNotFoundError(bookingId);
+
+    const fields = [
+      ["baseFare", booking.baseFareMinor, amounts.baseFareMinor],
+      ["taxesFees", booking.taxesFeesMinor, amounts.taxesFeesMinor],
+      ["total", booking.totalMinor, amounts.totalMinor],
+      ["supplierCost", booking.supplierCostMinor, amounts.supplierCostMinor],
+      ["grossMco", booking.grossMcoMinor, amounts.grossMcoMinor],
+      ["netMco", booking.netMcoMinor, amounts.netMcoMinor],
+    ] as const;
+
+    const changes: Record<string, { before: string; after: string }> = {};
+    for (const [name, before, after] of fields) {
+      if (before === after) continue;
+      changes[name] = {
+        before: `${before} ${booking.currency}`,
+        after: `${after} ${booking.currency}`,
+      };
+    }
+
+    // Nothing moved: no write, and no audit entry claiming one happened.
+    if (Object.keys(changes).length === 0) {
+      return { bookingId: booking.id, bookingNumber: booking.bookingNumber };
+    }
+
+    await tx.booking.update({
+      where: { id: booking.id },
+      data: {
+        baseFareMinor: amounts.baseFareMinor,
+        taxesFeesMinor: amounts.taxesFeesMinor,
+        totalMinor: amounts.totalMinor,
+        supplierCostMinor: amounts.supplierCostMinor,
+        grossMcoMinor: amounts.grossMcoMinor,
+        netMcoMinor: amounts.netMcoMinor,
+      },
+    });
+
+    await recordAudit(
+      {
+        action: AuditAction.UPDATE,
+        entityType: "Booking",
+        entityId: booking.id,
+        adminUserId: actorId,
+        summary: `Updated financials on booking ${booking.bookingNumber}`,
+        changes,
+      },
+      tx,
+    );
+
+    return { bookingId: booking.id, bookingNumber: booking.bookingNumber };
+  });
+}
+
+/**
+ * Records the airline confirmation and supplier reference after creation.
+ *
+ * The airline confirmation is what the ticketing gate checks, and it could
+ * only be set on the create form. An operator who did not have it to hand at
+ * the time — the usual case, since it comes back from the airline afterwards —
+ * was left with a panel insisting they "record the airline or supplier
+ * confirmation reference" and nowhere to record it.
+ */
+export async function updateTicketingDetails(input: {
+  bookingId: string;
+  actorId: string;
+  airlineConfirmation: string | null;
+  ticketingReference: string | null;
+}): Promise<{ bookingId: string; bookingNumber: string }> {
+  const { bookingId, actorId, airlineConfirmation, ticketingReference } = input;
+
+  return prisma.$transaction(async (tx) => {
+    const booking = await tx.booking.findUnique({
+      where: { id: bookingId },
+      select: {
+        id: true,
+        bookingNumber: true,
+        airlineConfirmation: true,
+        ticketingReference: true,
+      },
+    });
+
+    if (!booking) throw new BookingNotFoundError(bookingId);
+
+    const changes: Record<string, { before: string | null; after: string | null }> = {};
+    if (booking.airlineConfirmation !== airlineConfirmation) {
+      changes["airlineConfirmation"] = {
+        before: booking.airlineConfirmation,
+        after: airlineConfirmation,
+      };
+    }
+    if (booking.ticketingReference !== ticketingReference) {
+      changes["supplierReference"] = {
+        before: booking.ticketingReference,
+        after: ticketingReference,
+      };
+    }
+
+    if (Object.keys(changes).length === 0) {
+      return { bookingId: booking.id, bookingNumber: booking.bookingNumber };
+    }
+
+    await tx.booking.update({
+      where: { id: booking.id },
+      data: { airlineConfirmation, ticketingReference },
+    });
+
+    await recordAudit(
+      {
+        action: AuditAction.UPDATE,
+        entityType: "Booking",
+        entityId: booking.id,
+        adminUserId: actorId,
+        // The confirmation is the evidence a ticket is issued against, so a
+        // change to it is worth reading in the log without opening the entry.
+        summary: `Updated ticketing references on booking ${booking.bookingNumber}`,
+        changes,
+      },
+      tx,
+    );
+
+    return { bookingId: booking.id, bookingNumber: booking.bookingNumber };
   });
 }

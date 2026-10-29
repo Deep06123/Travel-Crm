@@ -9,7 +9,11 @@ import { Input, Select } from "@/components/ui/field";
 import { Badge, BookingStatusBadge } from "@/components/ui/status-badge";
 import { CommentVisibility } from "@/generated/prisma/enums";
 import { requirePermission } from "@/lib/auth/dal";
-import { formatDate, formatDateTime, isOverdue } from "@/lib/format";
+import {
+  formatCalendarDate,
+  formatDateTime,
+  isOverdue,
+} from "@/lib/format";
 import { paginationSchema } from "@/lib/pagination";
 import { PERMISSIONS } from "@/lib/permissions";
 import {
@@ -166,7 +170,7 @@ export default async function CommentsPage({
                           : undefined
                       }
                     >
-                      Follow-up {formatDate(comment.followUpAt)}
+                      Follow-up {formatCalendarDate(comment.followUpAt)}
                     </span>
                   ) : null}
                 </div>

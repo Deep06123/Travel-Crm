@@ -18,6 +18,11 @@ import { RichTextEditor } from "@/components/ui/rich-text-editor";
  * Neither is parsed. The raw text is stored exactly as pasted, which is what
  * makes it worth keeping as a record of what the carrier actually said.
  */
+/** What the decode button says, and what it admits when pressed. */
+const DEFAULT_ACTION_LABEL = "Decode PNR using API";
+const DEFAULT_ACTION_NOTICE =
+  "No PNR decoding integration is configured. What you pasted has been kept exactly as typed — fill in the segments below by hand.";
+
 export function ItinerarySource({
   textName,
   textLabel,
@@ -27,6 +32,8 @@ export function ItinerarySource({
   htmlName,
   defaultText,
   defaultHtml,
+  actionLabel = DEFAULT_ACTION_LABEL,
+  actionNotice = DEFAULT_ACTION_NOTICE,
 }: {
   textName: string;
   textLabel: string;
@@ -36,6 +43,9 @@ export function ItinerarySource({
   htmlName: string;
   defaultText?: string | undefined;
   defaultHtml?: string | undefined;
+  /** A cruise has no PNR, so both the button and its answer are overridable. */
+  actionLabel?: string;
+  actionNotice?: string;
 }) {
   const [notice, setNotice] = useState<string | null>(null);
 
@@ -67,17 +77,13 @@ export function ItinerarySource({
             type="button"
             variant="primary"
             className="bg-status-success hover:brightness-110"
-            onClick={() =>
-              // There is no decoder. Saying so on demand is the honest
-              // behaviour: the alternative is a control that looks like it
-              // did something and an agent who believes the segments below
-              // were filled in for them.
-              setNotice(
-                "No PNR decoding integration is configured. What you pasted has been kept exactly as typed — fill in the segments below by hand.",
-              )
-            }
+            // There is no decoder. Saying so on demand is the honest
+            // behaviour: the alternative is a control that looks like it did
+            // something and an agent who believes the fields below were
+            // filled in for them.
+            onClick={() => setNotice(actionNotice)}
           >
-            Decode PNR using API
+            {actionLabel}
           </Button>
         </div>
       </div>

@@ -378,3 +378,51 @@ export async function signIn(page: Page, user: TestUser): Promise<void> {
   await page.getByRole("button", { name: "Sign in" }).click();
   await page.waitForURL(/\/admin(?!\/login)/);
 }
+
+export interface CardDetails {
+  holder: string;
+  type: string;
+  number: string;
+  expiry: string;
+  cvv: string;
+}
+
+/**
+ * A card the billing panel accepts.
+ *
+ * The standard Visa test number: Luhn-valid, sixteen digits, and not a card
+ * that exists. The expiry is computed rather than written down so the suite
+ * does not start failing on a date in the future.
+ */
+export function validTestCard(): CardDetails {
+  const now = new Date();
+  const month = String(now.getMonth() + 1).padStart(2, "0");
+  const year = String((now.getFullYear() + 3) % 100).padStart(2, "0");
+
+  return {
+    holder: "E2E Cardholder",
+    type: "VISA",
+    number: "4111111111111111",
+    expiry: `${month}${year}`,
+    cvv: "123",
+  };
+}
+
+/**
+ * Fills the billing panel's card fields.
+ *
+ * Every booking needs one: the form will not submit while the card is wrong,
+ * so a spec that is about something else still has to supply a good one.
+ */
+export async function fillCardDetails(
+  page: Page,
+  overrides: Partial<CardDetails> = {},
+): Promise<void> {
+  const card = { ...validTestCard(), ...overrides };
+
+  await page.locator('input[name="cardHolderName"]').fill(card.holder);
+  await page.locator('select[name="cardType"]').selectOption(card.type);
+  await page.locator("#cardNumber").fill(card.number);
+  await page.locator('input[name="cardExpiry"]').fill(card.expiry);
+  await page.locator("#cvv").fill(card.cvv);
+}

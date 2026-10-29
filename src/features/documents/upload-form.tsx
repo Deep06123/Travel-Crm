@@ -5,7 +5,8 @@ import { useActionState } from "react";
 import { useFormStatus } from "react-dom";
 
 import { Button } from "@/components/ui/button";
-import { Field, Input, Select } from "@/components/ui/field";
+import { Field, Input } from "@/components/ui/field";
+import { StickySelect } from "@/components/ui/sticky-select";
 import { DocumentCategory, DocumentOrigin } from "@/generated/prisma/enums";
 
 import { uploadDocumentAction, type DocumentFormState } from "./actions";
@@ -79,13 +80,13 @@ export function DocumentUploadForm({
       <div className="grid gap-3 sm:grid-cols-2">
         <Field id="doc-category" label="Category" required>
           {(props) => (
-            <Select {...props} name="category" defaultValue={defaultCategory}>
+            <StickySelect {...props} name="category" defaultValue={defaultCategory}>
               {Object.values(DocumentCategory).map((category) => (
                 <option key={category} value={category}>
                   {humanise(category)}
                 </option>
               ))}
-            </Select>
+            </StickySelect>
           )}
         </Field>
 
@@ -96,13 +97,13 @@ export function DocumentUploadForm({
           hint="Only mark provider-issued if the airline or cruise line produced this file."
         >
           {(props) => (
-            <Select {...props} name="origin" defaultValue={DocumentOrigin.PROVIDER_ISSUED}>
+            <StickySelect {...props} name="origin" defaultValue={DocumentOrigin.PROVIDER_ISSUED}>
               <option value={DocumentOrigin.PROVIDER_ISSUED}>Provider issued</option>
               <option value={DocumentOrigin.CUSTOMER_SUPPLIED}>Customer supplied</option>
               <option value={DocumentOrigin.INTERNALLY_GENERATED}>
                 Internally generated
               </option>
-            </Select>
+            </StickySelect>
           )}
         </Field>
       </div>

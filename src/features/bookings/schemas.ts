@@ -37,26 +37,37 @@ const requiredText = (max: number, message: string) =>
  * There is no `cardNumber` or `cvv` here, and there must never be one. The
  * form does not submit them (see `billing-information.tsx`), so a field added
  * here would be the thing that starts accepting them.
+ *
+ * The card is mandatory: a booking is not created without one. What can be
+ * enforced here is what arrives — a holder, a brand, four digits and an
+ * expiry that has not passed. The Luhn check, the brand-to-number match and
+ * the CVV length need the number itself, which the server is not allowed to
+ * see, so those run in the browser and block the submit (`card-validation.ts`).
  */
 export const billingInformationFields = {
-  cardHolderName: optionalText(200),
-  cardType: z
-    .union([z.enum(CardType), z.literal("")])
-    .transform((value) => (value === "" ? undefined : value))
-    .optional(),
+  cardHolderName: requiredText(200, "Enter the card holder name."),
+  cardType: z.enum(CardType, { message: "Select the card type." }),
   /** Derived in the browser from a number the server never receives. */
   cardLast4: z
     .string()
     .trim()
-    .regex(/^(\d{4})?$/, "Enter the last four digits.")
-    .transform((value) => (value === "" ? undefined : value))
-    .optional(),
+    .regex(/^\d{4}$/, "Enter the card number."),
   cardExpiry: z
     .string()
     .trim()
-    .regex(/^((0[1-9]|1[0-2])\d{2})?$/, "Enter the expiry as MMYY, e.g. 0428.")
-    .transform((value) => (value === "" ? undefined : value))
-    .optional(),
+    .regex(/^(0[1-9]|1[0-2])\d{2}$/, "Enter the expiry as MMYY, e.g. 0428.")
+    // A card is good through the last day of its expiry month, so the current
+    // month still passes. Mirrors `expiryHasPassed` in `card-validation.ts`.
+    .refine((value) => {
+      const now = new Date();
+      const month = Number(value.slice(0, 2));
+      const year = 2000 + Number(value.slice(2));
+
+      return (
+        year > now.getFullYear() ||
+        (year === now.getFullYear() && month >= now.getMonth() + 1)
+      );
+    }, "That card has expired."),
   inboundPhone: optionalText(40),
   billingPhone: optionalText(40),
   billingEmails: z
@@ -324,4 +335,49 @@ export const statusChangeSchema = z.object({
   bookingId: requiredText(40, "Missing booking."),
   toStatus: z.enum(BookingStatus),
   reason: optionalText(1_000),
+});
+
+// --- Delete -----------------------------------------------------------------
+
+/**
+ * Deleting a booking outright.
+ *
+ * The reason is required rather than optional, unlike a status change: the
+ * record is about to stop existing, and the audit entry is the only thing left
+ * to explain why. `confirmation` carries the booking number the operator typed
+ * back; the action compares it to the real one.
+ */
+/**
+ * Correcting a booking's money after it was created.
+ *
+ * The amounts stay as typed text here and are converted against the booking's
+ * own currency in the action, exactly as the create forms do — minor-unit
+ * precision differs by currency, so a bare number cannot be parsed safely
+ * without knowing which one applies.
+ */
+export const bookingFinancialsSchema = z.object({
+  bookingId: requiredText(40, "Missing booking."),
+  baseFare: optionalText(30),
+  taxesFees: optionalText(30),
+  total: optionalText(30),
+  supplierCost: optionalText(30),
+  grossMco: optionalText(30),
+  netMco: optionalText(30),
+});
+
+/** Recording the references a ticket is issued against. */
+export const ticketingDetailsSchema = z.object({
+  bookingId: requiredText(40, "Missing booking."),
+  airlineConfirmation: optionalText(100),
+  ticketingReference: optionalText(100),
+});
+
+export const bookingDeleteSchema = z.object({
+  bookingId: requiredText(40, "Missing booking."),
+  reason: z
+    .string()
+    .trim()
+    .min(5, "Say why this booking is being deleted.")
+    .max(500),
+  confirmation: requiredText(40, "Type the booking number to confirm."),
 });
