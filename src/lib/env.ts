@@ -150,6 +150,21 @@ const serverEnvSchema = z.object({
   MAIL_FROM: z.string().optional(),
   /** Where customer replies should land, if different from MAIL_FROM. */
   MAIL_REPLY_TO: z.email().optional(),
+
+  /**
+   * Approximate location for a signing customer's IP address.
+   *
+   * `none` is the default and is a complete configuration, not a broken one:
+   * the signature still records the IP itself, which is the part that matters
+   * as evidence. The city and country are a convenience for whoever reads the
+   * booking later, so an absent provider leaves those columns null rather than
+   * failing a signature.
+   *
+   * `ipapi` is ipapi.co, which answers without a key at a low rate limit and
+   * lifts it when `GEOIP_API_KEY` is set.
+   */
+  GEOIP_PROVIDER: z.enum(["none", "ipapi"]).default("none"),
+  GEOIP_API_KEY: z.string().optional(),
 })
   // Checked here rather than at send time: a misconfigured mail setup should
   // fail at startup with a readable message, not hours later when a customer

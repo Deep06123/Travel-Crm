@@ -10,9 +10,11 @@ import { Field, Input, Textarea } from "@/components/ui/field";
 import { FormGuide } from "@/components/ui/form-guide";
 import { StickySelect } from "@/components/ui/sticky-select";
 import { Panel } from "@/components/ui/panel";
+import { RichTextEditor } from "@/components/ui/rich-text-editor";
 
+import { BookingDocuments } from "./booking-documents";
 import { BillingInformation, useCardEntry } from "./billing-information";
-import { ItinerarySource } from "./itinerary-source";
+import { ChargeSplits } from "./charge-splits";
 import { ChargeOutcome } from "@/generated/prisma/enums";
 
 import type { BookingFormState } from "./actions";
@@ -117,10 +119,12 @@ export function CruiseBookingForm({
 
           {/* Per-booking email override. Left blank, the template decides —
               which keeps an automatic confirmation reading the same whoever
-              happened to trigger it. */}
+              happened to trigger it. Given a line of its own because a subject
+              is long enough that a third of a row reads badly. */}
           <Field
             id="customEmailSubject"
             label="Subject"
+            className="sm:col-span-2 lg:col-span-3"
             hint="Leave blank to use the standard subject."
             error={error("customEmailSubject")}
           >
@@ -134,34 +138,12 @@ export function CruiseBookingForm({
             )}
           </Field>
 
-          {/* The customer lives here now; there is no separate customer panel. */}
-          <Field
-            id="customerId"
-            label="Customer"
-            required
-            hint="Required. Create the customer first if they are not listed."
-            error={error("customerId")}
-          >
-            {(props) => (
-              <StickySelect
-                {...props}
-                name="customerId"
-                required
-                defaultValue={value("customerId", preselectedCustomerId ?? "")}
-              >
-                <option value="">— Select a customer —</option>
-                {options.customers.map((customer) => (
-                  <option key={customer.id} value={customer.id}>
-                    {customer.reference} — {customer.firstName} {customer.lastName}
-                  </option>
-                ))}
-              </StickySelect>
-            )}
-          </Field>
-
-          <Field id="bookedAt" label="Booking date" hint="Defaults to now." error={error("bookedAt")}>
-            {(props) => <Input {...props} name="bookedAt" type="date" defaultValue={value("bookedAt")} />}
-          </Field>
+          {/* No customer picker: the customer is taken from the first guest
+              below, or carried over when the booking was started from a
+              customer record. The booking date is always now. */}
+          {preselectedCustomerId ? (
+            <input type="hidden" name="customerId" value={preselectedCustomerId} />
+          ) : null}
 
           <Field id="assignedAgentId" label="Assigned agent" error={error("assignedAgentId")}>
             {(props) => (
@@ -283,37 +265,26 @@ export function CruiseBookingForm({
               />
             )}
           </Field>
+        </div>
 
-          {/* The one-line summary, kept separate from the itinerary proper:
-              it is what the Sailing panel prints back on the detail page. */}
+        {/* Unlike the flight form, there is no paste area here: a cruise
+            confirmation is not decoded, so the itinerary is only ever
+            composed by hand. */}
+        <div className="mt-4">
           <Field
-            id="itinerary"
-            label="Ports of call"
-            hint="A one-line summary, in order."
-            error={error("itinerary")}
-            className="sm:col-span-2 lg:col-span-3"
+            id="itineraryHtml"
+            label="Itinerary"
+            hint="Screenshots can be pasted, dropped or added with the image button. Formatting is kept; scripts, embedded frames and images from other sites are removed when saved."
           >
-            {(props) => (
-              <Textarea {...props} name="itinerary" rows={2} placeholder="Ports of call, in order" defaultValue={value("itinerary")} />
+            {() => (
+              <RichTextEditor
+                name="itineraryHtml"
+                defaultValue={value("itineraryHtml")}
+                placeholder="Type or paste the itinerary…"
+              />
             )}
           </Field>
         </div>
-
-        {/* The same pair the flight form offers: paste the cruise line's own
-            confirmation, or compose the itinerary by hand. Both are kept —
-            they are different evidence, and neither is parsed. */}
-        <ItinerarySource
-          textName="reservationText"
-          textLabel="Reservation text"
-          textHint="Stored exactly as pasted, for reference only — it is never parsed."
-          textPlaceholder="Please copy and paste the cruise confirmation here…"
-          textError={error("reservationText")}
-          htmlName="itineraryHtml"
-          defaultText={value("reservationText")}
-          defaultHtml={value("itineraryHtml")}
-          actionLabel="Decode reservation using API"
-          actionNotice="No cruise-line integration is configured. What you pasted has been kept exactly as typed — fill in the sailing details above by hand."
-        />
       </Panel>
 
       <Panel title="Cabin and dining" collapsible={false}>
@@ -429,28 +400,6 @@ export function CruiseBookingForm({
               <Field id={field("passportCountry")} label="Passport country" error={error(`guests.${index}.passportCountry`)}>
                 {(props) => <Input {...props} name={field("passportCountry")} defaultValue={value(field("passportCountry"))} />}
               </Field>
-              {/* Only filled in on a name change, so the authorisation can
-                  show the old name beside the new one. */}
-              <Field
-                id={field("previousFirstName")}
-                label="Previous first name"
-                hint="Name changes only."
-                error={error(`guests.${index}.previousFirstName`)}
-              >
-                {(props) => (
-                  <Input {...props} name={field("previousFirstName")} defaultValue={value(field("previousFirstName"))} />
-                )}
-              </Field>
-              <Field
-                id={field("previousLastName")}
-                label="Previous last name"
-                hint="Name changes only."
-                error={error(`guests.${index}.previousLastName`)}
-              >
-                {(props) => (
-                  <Input {...props} name={field("previousLastName")} defaultValue={value(field("previousLastName"))} />
-                )}
-              </Field>
               <Field
                 id={field("cabinNumber")}
                 label="Cabin"
@@ -501,16 +450,17 @@ export function CruiseBookingForm({
             )}
           </Field>
 
-          <Field id="splitCharges" label="Split charges" error={error("splitCharges")}>
-            {(props) => (
-              <StickySelect {...props} name="splitCharges" defaultValue={value("splitCharges", "false")}>
-                <option value="false">No</option>
-                <option value="true">Yes</option>
-              </StickySelect>
-            )}
-          </Field>
+          {/* Both the flag and, when it is Yes, the charges it stands for. */}
+          <ChargeSplits
+            value={value}
+            error={error}
+            sectionHasError={sectionHasError}
+            currency={options.defaultCurrency}
+          />
         </div>
       </Panel>
+
+      <BookingDocuments error={error} />
 
       <Panel title="Notes" defaultOpen={false}>
         <Field id="comment" label="Notes" error={error("comment")}>

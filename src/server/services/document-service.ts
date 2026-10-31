@@ -112,6 +112,29 @@ export interface UploadDocumentInput {
   documentId?: string | undefined;
 }
 
+/**
+ * Why a file would be rejected, or `null` if it looks uploadable.
+ *
+ * Judged from what the browser declared, so it is a pre-flight check and not a
+ * substitute for `uploadDocument`, which still sniffs the bytes and re-checks
+ * the size against them. It exists for callers that attach documents as part of
+ * a larger write — creating a booking, say — and need to fail the whole form
+ * *before* the booking row exists rather than after, when there is no longer
+ * anything to return the operator to.
+ */
+export async function describeUploadProblem(file: File): Promise<string | null> {
+  if (!ALLOWED_CONTENT_TYPES[file.type]) {
+    return new UnsupportedFileTypeError(file.type).message;
+  }
+
+  const limit = await maxUploadBytes();
+  if (file.size > limit) {
+    return new FileTooLargeError(file.size, limit).message;
+  }
+
+  return null;
+}
+
 export async function uploadDocument(
   input: UploadDocumentInput,
   actorId: string,

@@ -11,6 +11,7 @@ import {
 } from "@/lib/bookings/status";
 import { loggerFor } from "@/lib/logging/logger";
 import { retainedFormValues } from "@/lib/forms";
+import { formatMoney } from "@/lib/financial/money";
 import { PERMISSIONS } from "@/lib/permissions";
 import { isDatabaseUnavailable, DATABASE_UNAVAILABLE_MESSAGE } from "@/lib/db/errors";
 import {
@@ -26,6 +27,16 @@ import {
 import { transitionBooking } from "@/server/services/booking-status-service";
 
 import {
+  attachBookingDocuments,
+  selectedDocuments,
+  validateBookingDocuments,
+} from "./document-attachments";
+import {
+  BOOKING_DOCUMENTS_FIELD,
+  DOCUMENTS_FAILED_PARAM,
+} from "./document-attachments.constants";
+
+import {
   cruiseBookingSchema,
   cruiseGuestSchema,
   type CruiseGuestInput,
@@ -33,6 +44,7 @@ import {
 import {
   bookingDeleteSchema,
   bookingFinancialsSchema,
+  chargeSplitSchema,
   ticketingDetailsSchema,
   flightBookingSchema,
   flightSegmentSchema,
@@ -98,6 +110,101 @@ function extractGroup(
   return [...byIndex.entries()]
     .sort(([a], [b]) => a - b)
     .map(([index, data]) => ({ index, data }));
+}
+
+/** A split, with its amount already converted against the booking currency. */
+export interface ChargeSplitDraft {
+  title: string;
+  amountMinor: number;
+}
+
+/**
+ * Reads the split-charge rows, and checks they account for the whole total.
+ *
+ * Splits that do not add up are the mistake this is here to catch: a total
+ * divided across two cards with one figure mistyped looks right on the form
+ * and wrong in the ledger a week later. The division is therefore checked
+ * where it is entered, in minor units so a cent cannot hide in a rounding.
+ *
+ * Returns the splits, and writes any problem into `fieldErrors` for the
+ * caller to return with the rest.
+ */
+function parseChargeSplits(
+  formData: FormData,
+  options: {
+    currency: string;
+    splitCharges: boolean;
+    totalMinor: number;
+    hasTotal: boolean;
+  },
+  fieldErrors: Record<string, string>,
+): ChargeSplitDraft[] {
+  // Not split: whatever the rows hold is ignored rather than stored against a
+  // booking that does not claim to be split.
+  if (!options.splitCharges) return [];
+
+  const splits: ChargeSplitDraft[] = [];
+
+  for (const group of extractGroup(formData, "splits")) {
+    const hasContent = Object.values(group.data).some(
+      (value) => value.trim() !== "",
+    );
+    if (!hasContent) continue;
+
+    const result = chargeSplitSchema.safeParse(group.data);
+
+    if (!result.success) {
+      Object.assign(
+        fieldErrors,
+        collectFieldErrors(result.error.issues, `splits.${group.index}.`),
+      );
+      continue;
+    }
+
+    const amount = moneyFieldToMinor(
+      result.data.amount,
+      options.currency,
+      `splits.${group.index}.amount`,
+    );
+
+    if (!amount.ok) {
+      fieldErrors[amount.field] = amount.message;
+      continue;
+    }
+
+    if (amount.minor <= 0) {
+      fieldErrors[`splits.${group.index}.amount`] =
+        "A split must be more than nothing.";
+      continue;
+    }
+
+    splits.push({ title: result.data.title, amountMinor: amount.minor });
+  }
+
+  // A later check would be comparing a sum that is already known to be wrong.
+  if (Object.keys(fieldErrors).some((key) => key.startsWith("splits."))) {
+    return splits;
+  }
+
+  if (splits.length < 2) {
+    fieldErrors["splits"] =
+      "A split total needs at least two charges. Set split charges to No if there is only one.";
+    return splits;
+  }
+
+  if (!options.hasTotal) {
+    fieldErrors["total"] = "Enter the total fare before splitting it.";
+    return splits;
+  }
+
+  const summed = splits.reduce((sum, split) => sum + split.amountMinor, 0);
+
+  if (summed !== options.totalMinor) {
+    fieldErrors["splits"] =
+      `The splits add up to ${formatMoney(summed, options.currency)}, but the total fare is ${formatMoney(options.totalMinor, options.currency)}.`;
+  }
+
+  return splits;
 }
 
 export async function createFlightBookingAction(
@@ -199,6 +306,15 @@ export async function createFlightBookingAction(
     amounts[field] = result.minor;
   }
 
+  // Checked before the booking is written: once it exists there is no form to
+  // send the operator back to, so a rejectable file has to be caught here.
+  const documents = selectedDocuments(formData);
+  const documentProblem = await validateBookingDocuments(documents);
+
+  if (documentProblem) {
+    fieldErrors[BOOKING_DOCUMENTS_FIELD] = documentProblem;
+  }
+
   if (Object.keys(fieldErrors).length > 0) {
     return { fieldErrors, values: formValues(formData) };
   }
@@ -230,8 +346,22 @@ export async function createFlightBookingAction(
     };
   }
 
+  // After the booking, because a document has to hang off one. A file that
+  // fails here cannot un-create the booking, so the count travels to the
+  // booking page rather than being swallowed.
+  const failed = await attachBookingDocuments(
+    formData,
+    documents,
+    created.id,
+    user.id,
+  );
+
   revalidatePath("/admin/bookings");
-  redirect(`/admin/bookings/${created.id}`);
+  redirect(
+    failed > 0
+      ? `/admin/bookings/${created.id}?${DOCUMENTS_FAILED_PARAM}=${failed}`
+      : `/admin/bookings/${created.id}`,
+  );
 }
 
 export interface StatusChangeState {
@@ -356,6 +486,27 @@ export async function createCruiseBookingAction(
     amounts[field] = result.minor;
   }
 
+  // Needs the amounts, so it runs after them and before the error gate below.
+  const splits = parseChargeSplits(
+    formData,
+    {
+      currency: booking.currency,
+      splitCharges: booking.splitCharges,
+      totalMinor: amounts["total"] ?? 0,
+      hasTotal: (booking.total ?? "").trim() !== "",
+    },
+    fieldErrors,
+  );
+
+  // Checked before the booking is written: once it exists there is no form to
+  // send the operator back to, so a rejectable file has to be caught here.
+  const documents = selectedDocuments(formData);
+  const documentProblem = await validateBookingDocuments(documents);
+
+  if (documentProblem) {
+    fieldErrors[BOOKING_DOCUMENTS_FIELD] = documentProblem;
+  }
+
   if (Object.keys(fieldErrors).length > 0) {
     return { fieldErrors, values: formValues(formData) };
   }
@@ -366,6 +517,7 @@ export async function createCruiseBookingAction(
     created = await createCruiseBooking(
       {
         booking,
+        splits,
         amounts: {
           baseFareMinor: amounts["baseFare"] ?? 0,
           taxesFeesMinor: amounts["taxesFees"] ?? 0,
@@ -386,8 +538,22 @@ export async function createCruiseBookingAction(
     };
   }
 
+  // After the booking, because a document has to hang off one. A file that
+  // fails here cannot un-create the booking, so the count travels to the
+  // booking page rather than being swallowed.
+  const failed = await attachBookingDocuments(
+    formData,
+    documents,
+    created.id,
+    user.id,
+  );
+
   revalidatePath("/admin/bookings");
-  redirect(`/admin/bookings/${created.id}`);
+  redirect(
+    failed > 0
+      ? `/admin/bookings/${created.id}?${DOCUMENTS_FAILED_PARAM}=${failed}`
+      : `/admin/bookings/${created.id}`,
+  );
 }
 
 export interface BookingDeleteState {
@@ -452,6 +618,8 @@ export interface BookingFinancialsState {
   error?: string;
   fieldErrors?: Record<string, string>;
   success?: string;
+  /** What was submitted, so a rejected edit comes back as it was typed. */
+  values?: Record<string, string>;
 }
 
 /**
@@ -501,7 +669,20 @@ export async function updateBookingFinancialsAction(
     amounts[field] = result.minor;
   }
 
-  if (Object.keys(fieldErrors).length > 0) return { fieldErrors };
+  const splits = parseChargeSplits(
+    formData,
+    {
+      currency: booking.currency,
+      splitCharges: parsed.data.splitCharges,
+      totalMinor: amounts["total"] ?? 0,
+      hasTotal: (parsed.data.total ?? "").trim() !== "",
+    },
+    fieldErrors,
+  );
+
+  if (Object.keys(fieldErrors).length > 0) {
+    return { fieldErrors, values: formValues(formData) };
+  }
 
   try {
     await updateBookingFinancials({
@@ -515,6 +696,8 @@ export async function updateBookingFinancialsAction(
         grossMcoMinor: amounts["grossMco"] ?? 0,
         netMcoMinor: amounts["netMco"] ?? 0,
       },
+      splitCharges: parsed.data.splitCharges,
+      splits,
     });
   } catch (error) {
     if (error instanceof BookingNotFoundError) {

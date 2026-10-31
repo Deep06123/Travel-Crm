@@ -944,12 +944,6 @@ async function seedBookings(
     skipDuplicates: true,
   });
 
-  // Cruises carrying a name-change request. Held as booking ids so the
-  // travellers created below can show the matching previous name.
-  const nameChangeBookings = new Set(
-    cruises.filter((_, i) => i % 3 === 0).map((spec) => spec.index),
-  );
-
   await client.cruiseDetail.createMany({
     data: cruises.map((spec, i) => {
       const trip = CRUISE_ITINERARIES[i % CRUISE_ITINERARIES.length]!;
@@ -1003,12 +997,6 @@ async function seedBookings(
           type: seat === 1 ? PassengerType.CHILD : PassengerType.ADULT,
           gender: seat % 2 === 0 ? "M" : "F",
           dateOfBirth: clock.days(seat === 1 ? -3_650 : -12_800),
-          // A surname change on the lead guest, for the cruises whose
-          // reservation carries that request.
-          previousFirstName:
-            seat === 0 && nameChangeBookings.has(spec.index) ? person[1] : null,
-          previousLastName:
-            seat === 0 && nameChangeBookings.has(spec.index) ? "Marsden" : null,
           passportNumber: `X${String(10_000_000 + spec.index * 97 + seat)}`,
           passportCountry: "US",
           passportExpiry: clock.days(900 + spec.index * 5),

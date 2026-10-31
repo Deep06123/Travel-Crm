@@ -7,6 +7,11 @@ import { Field, Input, Textarea } from "@/components/ui/field";
 import { StickySelect } from "@/components/ui/sticky-select";
 import { Panel } from "@/components/ui/panel";
 import { CardType } from "@/generated/prisma/enums";
+import {
+  COUNTRIES,
+  PRIORITY_COUNTRY_CODES,
+  subdivisionsForCountry,
+} from "@/lib/geo/countries";
 
 import {
   type CardEntry,
@@ -168,6 +173,162 @@ export function useCardEntry(
   return { entry, set, touch, visibleErrors, errors, last4, validate };
 }
 
+/**
+ * Country and State, which are one control split in two: the states offered
+ * depend on the country chosen, so the pair shares a single piece of state
+ * even though City is laid out between them.
+ *
+ * Both are stored as names, so a booking written before these were pickers
+ * still has a value the select can show — `extraOption` keeps whatever is on
+ * the record selectable rather than silently dropping it on the next save.
+ */
+type RegionControl = {
+  country: string;
+  setCountry: (next: string) => void;
+  state: string;
+  setState: (next: string) => void;
+  /** Subdivisions for the chosen country; empty means the country has none. */
+  subdivisions: string[];
+};
+
+function useBillingRegion(
+  value: (field: string, fallback?: string) => string,
+): RegionControl {
+  const remembered = value("billingCountry");
+  const rememberedState = value("billingState");
+
+  const [country, setCountry] = useState(remembered);
+  const [state, setState] = useState(rememberedState);
+
+  // Re-seed when the server hands back different remembered values after a
+  // rejected submit, the same way `StickySelect` does.
+  const [seed, setSeed] = useState([remembered, rememberedState]);
+  if (seed[0] !== remembered || seed[1] !== rememberedState) {
+    setSeed([remembered, rememberedState]);
+    setCountry(remembered);
+    setState(rememberedState);
+  }
+
+  const subdivisions = useMemo(
+    () => subdivisionsForCountry(country),
+    [country],
+  );
+
+  return {
+    country,
+    setCountry: (next) => {
+      setCountry(next);
+      // A province of the old country is wrong for the new one, and leaving it
+      // in place would submit a state the picker no longer offers.
+      setState("");
+    },
+    state,
+    setState,
+    subdivisions,
+  };
+}
+
+/** An option for a stored value the list does not contain, so it stays visible. */
+function extraOption(current: string, known: readonly string[]) {
+  return current && !known.includes(current) ? (
+    <option value={current}>{current}</option>
+  ) : null;
+}
+
+function CountryField({
+  control,
+  error,
+}: {
+  control: RegionControl;
+  error: (field: string) => string | undefined;
+}) {
+  const priority = PRIORITY_COUNTRY_CODES.map((code) =>
+    COUNTRIES.find((country) => country.code === code),
+  ).filter((country) => country !== undefined);
+  const rest = COUNTRIES.filter(
+    (country) => !PRIORITY_COUNTRY_CODES.includes(country.code),
+  );
+
+  return (
+    <Field id="billingCountry" label="Country" error={error("billingCountry")}>
+      {(props) => (
+        <StickySelect
+          {...props}
+          name="billingCountry"
+          defaultValue={control.country}
+          onChange={(event) => control.setCountry(event.target.value)}
+        >
+          <option value="">— Select —</option>
+          {extraOption(
+            control.country,
+            COUNTRIES.map((country) => country.name),
+          )}
+          {priority.map((country) => (
+            <option key={country.code} value={country.name}>
+              {country.name}
+            </option>
+          ))}
+          <option disabled>──────────</option>
+          {rest.map((country) => (
+            <option key={country.code} value={country.name}>
+              {country.name}
+            </option>
+          ))}
+        </StickySelect>
+      )}
+    </Field>
+  );
+}
+
+function StateField({
+  control,
+  error,
+}: {
+  control: RegionControl;
+  error: (field: string) => string | undefined;
+}) {
+  const { subdivisions } = control;
+
+  return (
+    <Field
+      id="billingState"
+      label="State"
+      hint={
+        control.country && subdivisions.length === 0
+          ? "No states listed for this country — type the region if there is one."
+          : undefined
+      }
+      error={error("billingState")}
+    >
+      {(props) =>
+        subdivisions.length > 0 ? (
+          <StickySelect
+            {...props}
+            name="billingState"
+            defaultValue={control.state}
+            onChange={(event) => control.setState(event.target.value)}
+          >
+            <option value="">— Select —</option>
+            {extraOption(control.state, subdivisions)}
+            {subdivisions.map((subdivision) => (
+              <option key={subdivision} value={subdivision}>
+                {subdivision}
+              </option>
+            ))}
+          </StickySelect>
+        ) : (
+          <Input
+            {...props}
+            name="billingState"
+            value={control.state}
+            onChange={(event) => control.setState(event.target.value)}
+          />
+        )
+      }
+    </Field>
+  );
+}
+
 export function BillingInformation({
   value,
   error,
@@ -178,6 +339,7 @@ export function BillingInformation({
   card: CardEntryControl;
 }) {
   const { entry, set, touch, visibleErrors, last4 } = card;
+  const region = useBillingRegion(value);
 
   // A server-side error on one of the four fields that do travel still has to
   // show; the client message wins when both are present, because it is about
@@ -398,19 +560,7 @@ export function BillingInformation({
               )}
             </Field>
 
-            <Field
-              id="billingCountry"
-              label="Country"
-              error={error("billingCountry")}
-            >
-              {(props) => (
-                <Input
-                  {...props}
-                  name="billingCountry"
-                  defaultValue={value("billingCountry")}
-                />
-              )}
-            </Field>
+            <CountryField control={region} error={error} />
 
             <Field id="billingCity" label="City" error={error("billingCity")}>
               {(props) => (
@@ -422,15 +572,7 @@ export function BillingInformation({
               )}
             </Field>
 
-            <Field id="billingState" label="State" error={error("billingState")}>
-              {(props) => (
-                <Input
-                  {...props}
-                  name="billingState"
-                  defaultValue={value("billingState")}
-                />
-              )}
-            </Field>
+            <StateField control={region} error={error} />
           </div>
         </div>
       </div>

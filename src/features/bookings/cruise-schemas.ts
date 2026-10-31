@@ -2,7 +2,7 @@ import { z } from "zod";
 
 import { ChargeOutcome, McoStatus } from "@/generated/prisma/enums";
 
-import { billingInformationFields } from "./schemas";
+import { billingInformationFields, yesNo } from "./schemas";
 
 /**
  * Cruise booking validation.
@@ -50,9 +50,6 @@ export const cruiseGuestSchema = z.object({
   type: z.enum(["ADULT", "CHILD", "INFANT", "SENIOR"]).default("ADULT"),
   gender: optionalText(20),
   dateOfBirth: optionalDate,
-  /** Prior name, filled in only when the booking carries a name change. */
-  previousFirstName: optionalText(100),
-  previousLastName: optionalText(100),
   passportNumber: optionalText(50),
   passportCountry: optionalText(100),
   passportExpiry: optionalDate,
@@ -104,14 +101,16 @@ export const cruiseBookingSchema = z
     cabinCategory: optionalText(60),
     cabinCount: z.coerce.number().int().min(1).max(50).default(1),
     diningPreference: optionalText(60),
-    gratuitiesIncluded: z.coerce.boolean().default(false),
-    insuranceIncluded: z.coerce.boolean().default(false),
+    gratuitiesIncluded: yesNo,
+    insuranceIncluded: yesNo,
     assistanceNotes: optionalText(2_000),
 
     supplierId: optionalText(40),
 
     // Customer and billing
-    customerId: requiredText(40, "Select a customer."),
+    // Optional: the cruise form has no customer picker. Left empty, the
+    // customer is created from the first guest when the booking is saved.
+    customerId: optionalText(40),
     contactName: optionalText(200),
     contactEmail: z
       .string()
@@ -146,7 +145,7 @@ export const cruiseBookingSchema = z
     netMco: optionalText(30),
     mcoSupplierId: optionalText(40),
     mcoStatus: z.enum(McoStatus).default(McoStatus.NOT_APPLICABLE),
-    splitCharges: z.coerce.boolean().default(false),
+    splitCharges: yesNo,
     financialNotes: optionalText(5_000),
 
     // Comments and follow-up

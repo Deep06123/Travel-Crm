@@ -107,6 +107,7 @@ model AdminUser {
   messagesReceived    MessageRecipient[]
   customerNotes       CustomerNote[]
   adjustments         FinancialAdjustment[]
+  signaturesSent      BookingSignature[]
 
   @@index([role, status])
   @@index([status])
@@ -468,7 +469,8 @@ model Booking {
   supplierCostMinor Int @default(0)
   grossMcoMinor  Int    @default(0)
   netMcoMinor    Int    @default(0)
-  /// Whether the total is collected across multiple card charges.
+  /// Whether the total is collected across multiple card charges. The charges
+  /// themselves are `chargeSplits`; this stays as the flag that says to look.
   splitCharges   Boolean @default(false)
   financialNotes String? @db.Text
   travelStartDate DateTime?
@@ -481,6 +483,7 @@ model Booking {
 
   flightDetail   FlightDetail?
   cruiseDetail   CruiseDetail?
+  chargeSplits   BookingChargeSplit[]
   segments       FlightSegment[]
   passengers     Passenger[]
   comments       BookingComment[]
@@ -495,6 +498,7 @@ model Booking {
   callRecords    CallRecord[]
   messages       Message[]
   notifications  Notification[]
+  signatures     BookingSignature[]
 
   @@index([status, bookedAt])
   @@index([customerId, bookedAt])
@@ -637,12 +641,6 @@ model Passenger {
   gender     String?
   dateOfBirth DateTime?
 
-  /// Name this traveller held before a name-change request, kept so the
-  /// authorisation document can show the old name beside the new one. Null on
-  /// an ordinary booking.
-  previousFirstName String?
-  previousLastName  String?
-
   passportNumber     String?
   passportCountry    String?
   passportExpiry     DateTime?
@@ -677,6 +675,86 @@ model BookingStatusHistory {
 
   @@index([bookingId, createdAt])
   @@index([createdAt])
+}
+
+enum BookingSignatureStatus {
+  SENT
+  VIEWED
+  SIGNED
+  EXPIRED
+  REVOKED
+}
+
+/// One authorization request sent to a customer, and the evidence captured if
+/// they signed it.
+///
+/// A booking can have several of these: each send is its own row, so who sent
+/// which link and when survives a resend. Sending revokes any earlier unsigned
+/// row and never touches a signed one, which makes "has this booking been
+/// authorized" the question "is there a row with a `signedAt`".
+///
+/// Request and capture live in one table rather than two because they are one
+/// fact — a signature with no request behind it would be unattributable, and a
+/// request is only ever interesting alongside what came back.
+model BookingSignature {
+  id        String  @id @default(cuid())
+  bookingId String
+  booking   Booking @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+
+  /// SHA-256 of the opaque signing token, as for `AdminSession`. The raw token
+  /// only ever exists in the emailed link, so a database leak does not yield
+  /// usable signing URLs.
+  tokenHash String                 @unique
+  status    BookingSignatureStatus @default(SENT)
+
+  /// Where the link was sent. Snapshotted, because the booking's contact
+  /// address can be edited after the fact and the evidence must not move.
+  recipientEmail String
+  expiresAt      DateTime
+  sentAt         DateTime   @default(now())
+  sentById       String?
+  sentBy         AdminUser? @relation(fields: [sentById], references: [id], onDelete: SetNull)
+  viewedAt       DateTime?
+  revokedAt      DateTime?
+
+  // --- Captured at signing --------------------------------------------------
+  signedAt      DateTime?
+  /// The typed name the customer authorized, rendered as their signature.
+  signatureName String?
+  /// The mobile number the customer confirmed on the signing page, which is not
+  /// necessarily any of the numbers already on the booking.
+  signedPhone   String?
+  /// The exact consent wording shown, stored verbatim: evidence is worthless if
+  /// the sentence the customer agreed to can be reworded afterwards.
+  consentText   String?   @db.Text
+
+  /// Observed by the server from the request, not claimed by the page.
+  ipAddress String?
+  userAgent String? @db.Text
+
+  /// Claimed by the browser. Useful corroboration, not proof — any of it can be
+  /// spoofed by whoever controls the client.
+  device          String?
+  operatingSystem String?
+  browser         String?
+  screenSize      String?
+  clientTimezone  String?
+
+  /// Approximate, derived from `ipAddress`. Null whenever no provider is
+  /// configured, the address is private, or the lookup failed.
+  geoCity     String?
+  geoRegion   String?
+  geoCountry  String?
+  geoProvider String?
+  /// Raw lookup response, so a disputed location can be re-read as returned
+  /// rather than as this schema chose to flatten it.
+  geoRaw      Json?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([bookingId, createdAt])
+  @@index([status, expiresAt])
 }
 
 enum CommentVisibility {
@@ -871,6 +949,38 @@ enum ReconciliationStatus {
   MATCHED
   DISPUTED
   WRITTEN_OFF
+}
+
+/// One line of a booking whose total is split across several charges.
+///
+/// Deliberately not a Payment: a Payment is money the ledger has seen, and it
+/// drives the outstanding balance, reconciliation and refunds. These rows are
+/// the agent's statement of how the total was divided when the booking was
+/// taken, written before anything is collected. The two are reconciled by
+/// recording payments against the booking as usual.
+///
+/// A split is a title and an amount. It originally carried the card and its
+/// last four digits as well, which assumed every division was across cards —
+/// a deposit and a balance, or a fare and an insurance line, are the same
+/// division and have no second card to name. The title says what the line is
+/// for, in the agent's own words; the card a charge actually went to is
+/// recorded on the Payment, which is where the ledger looks for it.
+model BookingChargeSplit {
+  id        String  @id @default(cuid())
+  bookingId String
+  booking   Booking @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+
+  /// Display order, 1-based. Splits have no natural ordering of their own.
+  sequence    Int
+  /// What this part of the total is for, e.g. "Deposit" or "Cabin 2".
+  title       String
+  /// In minor units of the booking's currency, as every amount here is.
+  amountMinor Int
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([bookingId, sequence])
 }
 
 model Payment {

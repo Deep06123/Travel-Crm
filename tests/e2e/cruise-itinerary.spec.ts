@@ -2,96 +2,74 @@ import { expect, test } from "@playwright/test";
 
 import {
   cleanupFixtures,
-  createTestCustomer,
   createTestUser,
   fillCardDetails,
   signIn,
-  type TestCustomer,
   type TestUser,
 } from "./fixtures";
 
 /**
- * The cruise form takes an itinerary the same two ways the flight form does.
+ * The cruise form takes its itinerary one way: the editor.
  *
- * The schema, the service and the `CruiseDetail` columns already carried
- * `reservationText` and `itineraryHtml`; only the form had no way to fill
- * them, leaving a two-line "Itinerary" box where the flight form offers a
- * paste area and a rich-text editor.
+ * Unlike the flight form it offers no paste area and no decode button — a
+ * cruise confirmation was never decoded, so the raw-text half of that pair
+ * only ever stood for a feature that does not exist. The one-line "Ports of
+ * call" summary is gone with it; `itineraryHtml` is the itinerary of record.
  */
 
 let operations: TestUser;
-let customer: TestCustomer;
 
 test.beforeAll(async () => {
   operations = await createTestUser("OPERATIONS", "cruise-itin-ops");
-  customer = await createTestCustomer();
 });
 
 test.afterAll(async () => {
   await cleanupFixtures();
 });
 
-test("the cruise form offers a reservation paste area and an editor", async ({
+test("the cruise form offers the editor and nothing to paste into", async ({
   page,
 }) => {
   await signIn(page, operations);
   await page.goto("/admin/bookings/new/cruise");
-
-  await expect(page.locator('textarea[name="reservationText"]')).toBeVisible();
-  await expect(page.getByText("OR", { exact: true })).toBeVisible();
 
   // The editor's own document is contenteditable rather than a control; the
   // form submits it through a hidden input of the same name.
   await expect(page.locator('[contenteditable="true"]')).toBeVisible();
   await expect(page.locator('input[name="itineraryHtml"]')).toHaveCount(1);
   await expect(page.getByRole("button", { name: "Bold" })).toBeVisible();
+
+  await expect(page.locator('textarea[name="reservationText"]')).toHaveCount(0);
+  await expect(page.locator('textarea[name="itinerary"]')).toHaveCount(0);
   await expect(
     page.getByRole("button", { name: "Decode reservation using API" }),
-  ).toBeVisible();
-
-  // The old one-line field is still there, under its own name.
-  await expect(page.locator('textarea[name="itinerary"]')).toBeVisible();
+  ).toHaveCount(0);
 });
 
-test("the decode button admits there is no cruise-line integration", async ({
-  page,
-}) => {
-  await signIn(page, operations);
-  await page.goto("/admin/bookings/new/cruise");
-
-  await page
-    .getByRole("button", { name: "Decode reservation using API" })
-    .click();
-
-  await expect(
-    page.getByText("No cruise-line integration is configured."),
-  ).toBeVisible();
-});
-
-test("a cruise booking saves both the pasted reservation and the itinerary", async ({
+test("a cruise booking saves the itinerary that was typed", async ({
   page,
 }) => {
   await signIn(page, operations);
   await page.goto("/admin/bookings/new/cruise");
 
   await fillCardDetails(page);
-  await page.locator('select[name="customerId"]').selectOption(customer.id);
+  // No customer picker on the cruise form: the first guest becomes one.
   await page.locator('input[name="cruiseLine"]').fill("Royal Caribbean");
   await page.locator('input[name="guests.0.firstName"]').fill("Perpetua");
   await page.locator('input[name="guests.0.lastName"]').fill("E2EItinerary");
 
-  await page
-    .locator('textarea[name="reservationText"]')
-    .fill("RCCL CONF 8842199 / WONDER OF THE SEAS / 7NT");
-
   await page.locator('[contenteditable="true"]').click();
   await page.keyboard.type("Day 1 Galveston, Day 2 at sea, Day 3 Cozumel");
-
-  await page.locator('textarea[name="itinerary"]').fill("Galveston, Cozumel");
 
   await page.getByRole("button", { name: "Create booking" }).click();
   await page.waitForURL(/\/admin\/bookings\/[a-z0-9]+$/);
 
-  // The one-line summary is what the Sailing panel prints back.
-  await expect(page.getByText("Galveston, Cozumel")).toBeVisible();
+  await expect(
+    page.getByRole("cell", { name: "Perpetua E2EItinerary" }),
+  ).toBeVisible();
+
+  // And the Sailing panel prints it back, rather than storing it unseen.
+  await expect(
+    page.getByText("Day 1 Galveston, Day 2 at sea, Day 3 Cozumel"),
+  ).toBeVisible();
 });

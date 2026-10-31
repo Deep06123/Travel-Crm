@@ -157,7 +157,6 @@ test("a cruise booking is held to the same card rules", async ({ page }) => {
   await signIn(page, operations);
   await page.goto("/admin/bookings/new/cruise");
 
-  await page.locator('select[name="customerId"]').selectOption(customer.id);
   await page.locator('input[name="cruiseLine"]').fill("Royal Caribbean");
   await page.locator('input[name="guests.0.firstName"]').fill("Perpetua");
   await page.locator('input[name="guests.0.lastName"]').fill("E2ECard");

@@ -4,7 +4,12 @@ import { notFound } from "next/navigation";
 import { SendETicketButton } from "@/features/bookings/send-eticket-button";
 import { currentUserCan, requirePermission } from "@/lib/auth/dal";
 import { PERMISSIONS } from "@/lib/permissions";
+import { hasSignedAuthorization } from "@/server/services/booking-signature-service";
 import { getETicketPreview } from "@/server/services/customer-email-service";
+
+/** Mirrors the gate in `bookingEmailAction`, which is where it is enforced. */
+export const AWAITING_SIGNATURE =
+  "The customer has not signed the authorization yet. Send them the authorization email from the booking page first.";
 
 export const metadata: Metadata = {
   title: "E-ticket · Travel CRM",
@@ -36,9 +41,10 @@ export default async function ETicketPage({
 
   const { id } = await params;
 
-  const preview = await getETicketPreview(id, {
-    redactDateOfBirth: !canViewSensitive,
-  });
+  const [preview, signed] = await Promise.all([
+    getETicketPreview(id, { redactDateOfBirth: !canViewSensitive }),
+    hasSignedAuthorization(id),
+  ]);
 
   if (!preview) notFound();
 
@@ -47,7 +53,11 @@ export default async function ETicketPage({
       <div className="mx-auto w-full max-w-[680px] px-4">
         <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
           {canSend ? (
-            <SendETicketButton bookingId={id} recipient={preview.recipient} />
+            <SendETicketButton
+              bookingId={id}
+              recipient={preview.recipient}
+              blockedReason={signed ? undefined : AWAITING_SIGNATURE}
+            />
           ) : (
             <span className="text-xs text-ink-muted">
               Sending requires the message.send permission.

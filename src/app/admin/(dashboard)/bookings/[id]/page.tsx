@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { Eye, Info } from "lucide-react";
+import { Download, Eye, Info } from "lucide-react";
 
 import { PageHeader } from "@/components/layout/admin-shell";
 import {
@@ -14,30 +14,33 @@ import {
   Tr,
 } from "@/components/tables/data-table";
 import { Card, Panel } from "@/components/ui/panel";
+import { RichText } from "@/components/ui/rich-text";
 import {
   Badge,
   BookingStatusBadge,
   FollowUpStatusBadge,
   McoStatusBadge,
-  PaymentStatusBadge,
   PriorityBadge,
-  RefundStatusBadge,
   TicketStatusBadge,
 } from "@/components/ui/status-badge";
 import { CommentVisibility, DocumentOrigin } from "@/generated/prisma/enums";
 import { CommentForm, FollowUpForm } from "@/features/bookings/comment-form";
-import {
-  RecordPaymentForm,
-  RequestRefundForm,
-} from "@/features/finance/booking-finance-forms";
+import { DOCUMENTS_FAILED_PARAM } from "@/features/bookings/document-attachments.constants";
 import { DocumentUploadForm } from "@/features/documents/upload-form";
+import { AuthorizationPanel } from "@/features/bookings/authorization-panel";
 import { CustomerEmailPanel } from "@/features/bookings/customer-email-panel";
-import { DeleteBookingControl } from "@/features/bookings/delete-booking-control";
+import { SendETicketButton } from "@/features/bookings/send-eticket-button";
 import { McoControl } from "@/features/bookings/mco-control";
 import { StatusControl } from "@/features/bookings/status-control";
 import { TicketingControl } from "@/features/bookings/ticketing-control";
 import { TicketingReferencesForm } from "@/features/bookings/ticketing-references-form";
 import { BookingFinancialsForm } from "@/features/bookings/booking-financials-form";
+import {
+  BillingPanel,
+  OverviewPanel,
+  SailingPanel,
+  TravellersPanel,
+} from "@/features/bookings/booking-edit-forms";
 import { currentUserCan, requirePermission } from "@/lib/auth/dal";
 import {
   allowedMcoTransitionsFrom,
@@ -52,12 +55,14 @@ import {
   formatDateTime,
   fullName,
   isOverdue,
+  toCalendarInputValue,
 } from "@/lib/format";
 import { PERMISSIONS } from "@/lib/permissions";
 import {
   getBookingDetail,
   redactPassengers,
 } from "@/server/services/booking-service";
+import { getBookingSignatures } from "@/server/services/booking-signature-service";
 import { getBookingPosition } from "@/server/services/payment-service";
 import {
   BOOKING_CONFIRMED,
@@ -73,6 +78,25 @@ function humanise(value: string): string {
   return lower.charAt(0).toUpperCase() + lower.slice(1);
 }
 
+/**
+ * The options a picker offers, plus whatever the booking already points at.
+ *
+ * Only active types, agents and suppliers are listed, which is right for a new
+ * choice and wrong for an existing one: a booking assigned to someone who has
+ * since left would show an empty picker, and saving the panel for an unrelated
+ * reason would quietly unassign them.
+ */
+function withCurrent(
+  options: { id: string; name: string }[],
+  current: { id: string; name: string } | null,
+): { id: string; name: string }[] {
+  if (!current || options.some((option) => option.id === current.id)) {
+    return options;
+  }
+
+  return [...options, current];
+}
+
 function DetailRow({ label, value }: { label: string; value: React.ReactNode }) {
   return (
     <div className="flex flex-col gap-0.5 py-1.5">
@@ -86,39 +110,42 @@ function DetailRow({ label, value }: { label: string; value: React.ReactNode }) 
 
 export default async function BookingDetailPage({
   params,
+  searchParams,
 }: PageProps<"/admin/bookings/[id]">) {
   await requirePermission(PERMISSIONS.BOOKING_VIEW);
+
+  // Set by the create action when a file chosen on the booking form failed to
+  // store; see `features/bookings/document-attachments.ts`.
+  const rawDocumentsFailed = (await searchParams)[DOCUMENTS_FAILED_PARAM];
+  const documentsFailed =
+    typeof rawDocumentsFailed === "string" && /^\d+$/.test(rawDocumentsFailed)
+      ? Number(rawDocumentsFailed)
+      : 0;
 
   const [
     canChangeStatus,
     canViewSensitive,
     canViewPayments,
-    canViewRefunds,
     canComment,
     canManageFollowUps,
     canViewDocuments,
     canUploadDocuments,
-    canRecordPayments,
-    canRequestRefunds,
     canResendEmail,
     canUpdateBooking,
     canUpdateMco,
-    canDeleteBooking,
+    canSendAuthorization,
   ] = await Promise.all([
     currentUserCan(PERMISSIONS.BOOKING_CHANGE_STATUS),
     currentUserCan(PERMISSIONS.PASSENGER_VIEW_SENSITIVE),
     currentUserCan(PERMISSIONS.PAYMENT_VIEW),
-    currentUserCan(PERMISSIONS.REFUND_VIEW),
     currentUserCan(PERMISSIONS.COMMENT_CREATE),
     currentUserCan(PERMISSIONS.FOLLOW_UP_MANAGE),
     currentUserCan(PERMISSIONS.DOCUMENT_VIEW),
     currentUserCan(PERMISSIONS.DOCUMENT_UPLOAD),
-    currentUserCan(PERMISSIONS.PAYMENT_RECORD),
-    currentUserCan(PERMISSIONS.REFUND_REQUEST),
     currentUserCan(PERMISSIONS.MESSAGE_SEND),
     currentUserCan(PERMISSIONS.BOOKING_UPDATE),
     currentUserCan(PERMISSIONS.BOOKING_MCO_UPDATE),
-    currentUserCan(PERMISSIONS.BOOKING_DELETE),
+    currentUserCan(PERMISSIONS.BOOKING_SIGNATURE_SEND),
   ]);
 
   const { id } = await params;
@@ -131,14 +158,6 @@ export default async function BookingDetailPage({
     ? booking.passengers
     : redactPassengers(booking.passengers);
 
-  const agents = canManageFollowUps
-    ? await prisma.adminUser.findMany({
-        where: { status: "ACTIVE" },
-        select: { id: true, name: true },
-        orderBy: { name: "asc" },
-      })
-    : [];
-
   // Only the active ones are offered. A booking already pointing at a retired
   // supplier keeps it — the control shows that separately rather than letting
   // the field read as empty.
@@ -149,6 +168,36 @@ export default async function BookingDetailPage({
         orderBy: { name: "asc" },
       })
     : [];
+
+  // Needed by the follow-up assignee picker and by the overview editor, so
+  // loaded when either is on screen rather than once per feature.
+  const agents =
+    canManageFollowUps || canUpdateBooking
+      ? await prisma.adminUser.findMany({
+          where: { status: "ACTIVE" },
+          select: { id: true, name: true },
+          orderBy: { name: "asc" },
+        })
+      : [];
+
+  // Only the editors need these, and only the active ones are offered. A
+  // booking already pointing at a retired type or supplier keeps it: the
+  // editor adds the stored one back to its list rather than quietly dropping
+  // the value the next time the panel is saved.
+  const [bookingTypes, suppliers] = canUpdateBooking
+    ? await Promise.all([
+        prisma.bookingType.findMany({
+          where: { isActive: true },
+          select: { id: true, label: true },
+          orderBy: { label: "asc" },
+        }),
+        prisma.supplier.findMany({
+          where: { isActive: true },
+          select: { id: true, name: true },
+          orderBy: { name: "asc" },
+        }),
+      ])
+    : [[], []];
 
   // Dates are formatted here rather than in the panel: the panel is a Client
   // Component, and `@/lib/format` reaches `@/lib/env`, which is server-only.
@@ -163,6 +212,36 @@ export default async function BookingDetailPage({
       lastError: row.lastError,
     }),
   );
+
+  // Same reason as above: the panel is a Client Component, so the dates are
+  // formatted here rather than there.
+  const signatures = (await getBookingSignatures(booking.id)).map((row) => ({
+    id: row.id,
+    status: row.status,
+    recipientEmail: row.recipientEmail,
+    sentAtLabel: formatDateTime(row.sentAt),
+    expiresAtLabel: formatDateTime(row.expiresAt),
+    viewedAtLabel: row.viewedAt ? formatDateTime(row.viewedAt) : null,
+    signedAtLabel: row.signedAt ? formatDateTime(row.signedAt) : null,
+    signatureName: row.signatureName,
+    signedPhone: row.signedPhone,
+    consentText: row.consentText,
+    ipAddress: row.ipAddress,
+    device: row.device,
+    operatingSystem: row.operatingSystem,
+    browser: row.browser,
+    screenSize: row.screenSize,
+    clientTimezone: row.clientTimezone,
+    geoCity: row.geoCity,
+    geoRegion: row.geoRegion,
+    geoCountry: row.geoCountry,
+    sentBy: row.sentBy,
+  }));
+
+  const hasSignature = signatures.some((row) => row.status === "SIGNED");
+
+  const emailRecipient =
+    booking.contactEmail?.trim() || booking.customer.email?.trim() || "";
 
   // A resend is only offered for an event this booking has actually reached.
   // Offering "resend tickets issued" on an unticketed booking would promise
@@ -179,6 +258,11 @@ export default async function BookingDetailPage({
   ];
 
   const margin = booking.totalMinor - booking.supplierCostMinor;
+
+  const splitTotalMinor = booking.chargeSplits.reduce(
+    (sum, split) => sum + split.amountMinor,
+    0,
+  );
 
   // Derived from the stored payment, refund, chargeback and adjustment rows —
   // never cached, so it cannot drift from what it summarises.
@@ -238,7 +322,40 @@ export default async function BookingDetailPage({
       <div className="grid gap-4 xl:grid-cols-3">
         {/* Left column — the record itself */}
         <div className="flex flex-col gap-4 xl:col-span-2">
-          <Panel title="Overview" collapsible={false}>
+          <OverviewPanel
+            bookingId={booking.id}
+            canEdit={canUpdateBooking}
+            bookingTypes={withCurrent(
+              bookingTypes.map((type) => ({ id: type.id, name: type.label })),
+              booking.bookingType
+                ? { id: booking.bookingType.id, name: booking.bookingType.label }
+                : null,
+            )}
+            agents={withCurrent(
+              agents,
+              booking.assignedAgent
+                ? { id: booking.assignedAgent.id, name: booking.assignedAgent.name }
+                : null,
+            )}
+            suppliers={withCurrent(
+              suppliers,
+              booking.supplier
+                ? { id: booking.supplier.id, name: booking.supplier.name }
+                : null,
+            )}
+            values={{
+              bookingTypeId: booking.bookingType?.id ?? "",
+              chargeOutcome: booking.chargeOutcome,
+              source: booking.source ?? "",
+              language: booking.language ?? "",
+              assignedAgentId: booking.assignedAgent?.id ?? "",
+              supplierId: booking.supplier?.id ?? "",
+              bookedAt: toCalendarInputValue(booking.bookedAt),
+              contactName: booking.contactName ?? "",
+              contactEmail: booking.contactEmail ?? "",
+              contactPhone: booking.contactPhone ?? "",
+            }}
+          >
             <dl className="grid gap-x-6 sm:grid-cols-2 lg:grid-cols-3">
               <DetailRow label="Booking type" value={booking.bookingType?.label} />
               <DetailRow label="Charge outcome" value={humanise(booking.chargeOutcome)} />
@@ -267,12 +384,29 @@ export default async function BookingDetailPage({
               <DetailRow label="Email" value={booking.contactEmail} />
               <DetailRow label="Phone" value={booking.contactPhone} />
             </dl>
-          </Panel>
+          </OverviewPanel>
 
           {/* What was taken down at booking time, minus the parts that were
               never submitted. There is no card number or CVV to show because
               neither was ever sent to the server. */}
-          <Panel title="Billing information" defaultOpen={false}>
+          <BillingPanel
+            bookingId={booking.id}
+            canEdit={canUpdateBooking}
+            values={{
+              cardHolderName: booking.cardHolderName ?? "",
+              cardType: booking.cardType ?? "",
+              cardLast4: booking.cardLast4 ?? "",
+              cardExpiry: booking.cardExpiry ?? "",
+              inboundPhone: booking.inboundPhone ?? "",
+              billingPhone: booking.billingPhone ?? "",
+              billingEmails: booking.billingEmails ?? "",
+              billingAddressLine1: booking.billingAddressLine1 ?? "",
+              billingCity: booking.billingCity ?? "",
+              billingState: booking.billingState ?? "",
+              billingPostalCode: booking.billingPostalCode ?? "",
+              billingCountry: booking.billingCountry ?? "",
+            }}
+          >
             <dl className="grid gap-x-6 sm:grid-cols-2 lg:grid-cols-3">
               <DetailRow label="Card holder" value={booking.cardHolderName} />
               <DetailRow
@@ -303,7 +437,7 @@ export default async function BookingDetailPage({
               <DetailRow label="Zip code" value={booking.billingPostalCode} />
               <DetailRow label="Country" value={booking.billingCountry} />
             </dl>
-          </Panel>
+          </BillingPanel>
 
           {booking.flightDetail ? (
             <Panel title="Itinerary" collapsible={false}>
@@ -377,6 +511,20 @@ export default async function BookingDetailPage({
                 </Tbody>
               </TableShell>
 
+              {/* Composed in the same editor the cruise form uses, and until
+                  now stored but never shown. */}
+              {booking.flightDetail.itineraryHtml ? (
+                <div className="mt-4">
+                  <p className="text-xs font-medium tracking-wide text-ink-muted uppercase">
+                    Itinerary
+                  </p>
+                  <RichText
+                    html={booking.flightDetail.itineraryHtml}
+                    className="mt-1"
+                  />
+                </div>
+              ) : null}
+
               {booking.flightDetail.pnrText ? (
                 <details className="mt-4">
                   <summary className="cursor-pointer text-sm font-medium text-navy-500">
@@ -394,7 +542,33 @@ export default async function BookingDetailPage({
           ) : null}
 
           {booking.cruiseDetail ? (
-            <Panel title="Sailing" collapsible={false}>
+            <SailingPanel
+              bookingId={booking.id}
+              canEdit={canUpdateBooking}
+              values={{
+                cruiseLine: booking.cruiseDetail.cruiseLine,
+                ship: booking.cruiseDetail.ship ?? "",
+                reservationNumber: booking.cruiseDetail.reservationNumber ?? "",
+                sailingName: booking.cruiseDetail.sailingName ?? "",
+                specialRequest: booking.cruiseDetail.specialRequest ?? "",
+                departurePort: booking.cruiseDetail.departurePort ?? "",
+                arrivalPort: booking.cruiseDetail.arrivalPort ?? "",
+                sailDate: toCalendarInputValue(booking.cruiseDetail.sailDate),
+                returnDate: toCalendarInputValue(
+                  booking.cruiseDetail.returnDate,
+                ),
+                nights: booking.cruiseDetail.nights?.toString() ?? "",
+                deckNumber: booking.cruiseDetail.deckNumber ?? "",
+                cabinNumber: booking.cruiseDetail.cabinNumber ?? "",
+                cabinCategory: booking.cruiseDetail.cabinCategory ?? "",
+                cabinCount: booking.cruiseDetail.cabinCount.toString(),
+                diningPreference: booking.cruiseDetail.diningPreference ?? "",
+                gratuitiesIncluded: booking.cruiseDetail.gratuitiesIncluded,
+                insuranceIncluded: booking.cruiseDetail.insuranceIncluded,
+                assistanceNotes: booking.cruiseDetail.assistanceNotes ?? "",
+                itineraryHtml: booking.cruiseDetail.itineraryHtml ?? "",
+              }}
+            >
               <dl className="grid gap-x-6 sm:grid-cols-2 lg:grid-cols-4">
                 <DetailRow label="Cruise line" value={booking.cruiseDetail.cruiseLine} />
                 <DetailRow label="Ship" value={booking.cruiseDetail.ship} />
@@ -451,14 +625,25 @@ export default async function BookingDetailPage({
                 />
               </dl>
 
-              {booking.cruiseDetail.itinerary ? (
+              {/* The itinerary as it was composed. `itinerary` is the one-line
+                  summary older records carry; the form no longer offers it, so
+                  it is a fallback rather than a second thing to read. */}
+              {booking.cruiseDetail.itineraryHtml ||
+              booking.cruiseDetail.itinerary ? (
                 <div className="mt-3">
                   <p className="text-xs font-medium tracking-wide text-ink-muted uppercase">
                     Itinerary
                   </p>
-                  <p className="mt-0.5 text-sm whitespace-pre-wrap text-ink">
-                    {booking.cruiseDetail.itinerary}
-                  </p>
+                  {booking.cruiseDetail.itineraryHtml ? (
+                    <RichText
+                      html={booking.cruiseDetail.itineraryHtml}
+                      className="mt-1"
+                    />
+                  ) : (
+                    <p className="mt-0.5 text-sm whitespace-pre-wrap text-ink">
+                      {booking.cruiseDetail.itinerary}
+                    </p>
+                  )}
                 </div>
               ) : null}
 
@@ -467,17 +652,45 @@ export default async function BookingDetailPage({
                   {booking.cruiseDetail.assistanceNotes}
                 </p>
               ) : null}
-            </Panel>
+
+            </SailingPanel>
           ) : null}
 
-          <Panel
-            title={isCruise ? "Guests" : "Passengers"}
+          <TravellersPanel
+            bookingId={booking.id}
+            canEdit={canUpdateBooking}
+            isCruise={isCruise}
+            canEditSensitive={canViewSensitive}
             description={
               canViewSensitive
                 ? undefined
                 : "Passport details and dates of birth are hidden for your role."
             }
-            collapsible={false}
+            travellers={booking.passengers.map((passenger) => ({
+              id: passenger.id,
+              title: passenger.title ?? "",
+              firstName: passenger.firstName,
+              middleName: passenger.middleName ?? "",
+              lastName: passenger.lastName,
+              type: passenger.type,
+              gender: passenger.gender ?? "",
+              // From the unredacted rows: a role that may not see these is
+              // not shown them, and the service keeps what is stored.
+              dateOfBirth: canViewSensitive
+                ? toCalendarInputValue(passenger.dateOfBirth)
+                : "",
+              passportNumber: canViewSensitive
+                ? (passenger.passportNumber ?? "")
+                : "",
+              passportCountry: canViewSensitive
+                ? (passenger.passportCountry ?? "")
+                : "",
+              passportExpiry: canViewSensitive
+                ? toCalendarInputValue(passenger.passportExpiry)
+                : "",
+              cabinNumber: passenger.cabinNumber ?? "",
+              notes: passenger.notes ?? "",
+            }))}
           >
             <TableShell>
               <Thead>
@@ -497,19 +710,7 @@ export default async function BookingDetailPage({
                   passengers.map((passenger) => (
                     <Tr key={passenger.id}>
                       <Td numeric>{passenger.sequence}</Td>
-                      <Td>
-                        {fullName(passenger)}
-                        {/* Shown only on a name change, so an ordinary
-                            booking reads exactly as it did before. */}
-                        {passenger.previousFirstName ?? passenger.previousLastName ? (
-                          <span className="block text-xs text-ink-muted">
-                            Was{" "}
-                            {[passenger.previousFirstName, passenger.previousLastName]
-                              .filter(Boolean)
-                              .join(" ")}
-                          </span>
-                        ) : null}
-                      </Td>
+                      <Td>{fullName(passenger)}</Td>
                       <Td className="text-ink-muted">{humanise(passenger.type)}</Td>
                       {canViewSensitive ? (
                         <Td className="text-ink-muted">
@@ -529,7 +730,8 @@ export default async function BookingDetailPage({
                 )}
               </Tbody>
             </TableShell>
-          </Panel>
+
+          </TravellersPanel>
 
           {!isCruise ? (
           <Panel title="Ticketing" collapsible={false}>
@@ -623,6 +825,53 @@ export default async function BookingDetailPage({
                 />
               </dl>
 
+              {/* The division itself, when there is one. A booking flagged as
+                  split with no rows behind it is shown as exactly that, rather
+                  than as an empty space that reads like nothing was split. */}
+              {booking.splitCharges ? (
+                <div className="mt-3">
+                  <h3 className="mb-1 text-sm font-semibold text-ink">
+                    How the total is split
+                  </h3>
+                  {booking.chargeSplits.length > 0 ? (
+                    <TableShell>
+                      <Thead>
+                        <Tr>
+                          <Th>Title</Th>
+                          <Th align="right">Amount</Th>
+                        </Tr>
+                      </Thead>
+                      <Tbody>
+                        {booking.chargeSplits.map((split) => (
+                          <Tr key={split.id}>
+                            <Td>{split.title}</Td>
+                            <Td align="right" numeric>
+                              {formatMoney(split.amountMinor, booking.currency)}
+                            </Td>
+                          </Tr>
+                        ))}
+                      </Tbody>
+                    </TableShell>
+                  ) : (
+                    <p className="text-sm text-ink-muted">
+                      Marked as split, but the individual charges were never
+                      recorded.
+                    </p>
+                  )}
+
+                  {/* Said plainly rather than left to be added up by eye: a
+                      split that no longer matches the booking value is the
+                      thing worth noticing here. */}
+                  {booking.chargeSplits.length > 0 ? (
+                    <p className="mt-1 text-xs text-ink-muted">
+                      {splitTotalMinor === booking.totalMinor
+                        ? `These add up to ${formatMoney(splitTotalMinor, booking.currency)}, matching the gross booking value.`
+                        : `These add up to ${formatMoney(splitTotalMinor, booking.currency)}, which does not match the gross booking value of ${formatMoney(booking.totalMinor, booking.currency)}.`}
+                    </p>
+                  ) : null}
+                </div>
+              ) : null}
+
               {position ? (
                 <>
                   <h3 className="mt-4 mb-1 text-sm font-semibold text-ink">
@@ -706,6 +955,14 @@ export default async function BookingDetailPage({
                       booking.currency,
                     ),
                   }}
+                  splitCharges={booking.splitCharges}
+                  splits={booking.chargeSplits.map((split) => ({
+                    title: split.title,
+                    amount: minorToDecimalString(
+                      split.amountMinor,
+                      booking.currency,
+                    ),
+                  }))}
                 />
               ) : null}
 
@@ -717,143 +974,24 @@ export default async function BookingDetailPage({
             </Panel>
           ) : null}
 
-          {canViewPayments ? (
-            <Panel title="Payments" collapsible={false}>
-              <TableShell>
-                <Thead>
-                  <Tr>
-                    <Th>Reference</Th>
-                    <Th align="right">Amount</Th>
-                    <Th>Method</Th>
-                    <Th>Status</Th>
-                    <Th>Source</Th>
-                    <Th>Recorded</Th>
-                  </Tr>
-                </Thead>
-                <Tbody>
-                  {booking.payments.length === 0 ? (
-                    <EmptyState
-                      colSpan={6}
-                      title="No payments recorded"
-                      description="Nothing has been collected against this booking."
-                    />
-                  ) : (
-                    booking.payments.map((payment) => (
-                      <Tr key={payment.id}>
-                        <Td>{payment.reference}</Td>
-                        <Td align="right" numeric>
-                          {formatMoney(payment.amountMinor, payment.currency)}
-                        </Td>
-                        <Td className="text-ink-muted">{humanise(payment.method)}</Td>
-                        <Td>
-                          <PaymentStatusBadge status={payment.status} />
-                        </Td>
-                        <Td>
-                          {/* A manually typed record is not provider-verified,
-                              and the table says so rather than implying it. */}
-                          <Badge
-                            tone={
-                              payment.captureMode === "PROVIDER_CONFIRMED"
-                                ? "success"
-                                : "neutral"
-                            }
-                          >
-                            {payment.captureMode === "PROVIDER_CONFIRMED"
-                              ? `Confirmed by ${payment.provider ?? "provider"}`
-                              : "Manually recorded"}
-                          </Badge>
-                        </Td>
-                        <Td className="whitespace-nowrap text-ink-muted">
-                          {formatDate(payment.createdAt)}
-                        </Td>
-                      </Tr>
-                    ))
-                  )}
-                </Tbody>
-              </TableShell>
+          <Panel
+            title="Documents"
+            defaultOpen={booking.documents.length > 0 || documentsFailed > 0}
+          >
+            {/* The booking was created but one of the files attached to the
+                form did not store. Said here rather than on the form, which
+                the operator has already been redirected away from. */}
+            {documentsFailed > 0 ? (
+              <p
+                role="alert"
+                className="mb-4 rounded-md bg-status-danger-bg px-3 py-2 text-sm text-status-danger"
+              >
+                {documentsFailed === 1
+                  ? "One document could not be attached when the booking was created. Upload it again below."
+                  : `${documentsFailed} documents could not be attached when the booking was created. Upload them again below.`}
+              </p>
+            ) : null}
 
-              {canRecordPayments ? (
-                <div className="mt-4 border-t border-line pt-4">
-                  <h3 className="mb-3 text-sm font-semibold text-ink">
-                    Record a payment
-                  </h3>
-                  <RecordPaymentForm
-                    bookingId={booking.id}
-                    currency={booking.currency}
-                  />
-                </div>
-              ) : null}
-            </Panel>
-          ) : null}
-
-          {canViewRefunds ? (
-            <Panel title="Refunds and voids" defaultOpen={booking.refunds.length > 0}>
-              <TableShell>
-                <Thead>
-                  <Tr>
-                    <Th>Reference</Th>
-                    <Th>Kind</Th>
-                    <Th align="right">Requested</Th>
-                    <Th align="right">Approved</Th>
-                    <Th>Status</Th>
-                    <Th>Requested</Th>
-                  </Tr>
-                </Thead>
-                <Tbody>
-                  {booking.refunds.length === 0 ? (
-                    <EmptyState colSpan={6} title="No refunds or voids" />
-                  ) : (
-                    booking.refunds.map((refund) => (
-                      <Tr key={refund.id}>
-                        <Td>{refund.reference}</Td>
-                        <Td className="text-ink-muted">{humanise(refund.kind)}</Td>
-                        <Td align="right" numeric>
-                          {formatMoney(refund.requestedAmountMinor, refund.currency)}
-                        </Td>
-                        <Td align="right" numeric>
-                          {refund.approvedAmountMinor === null
-                            ? "—"
-                            : formatMoney(refund.approvedAmountMinor, refund.currency)}
-                        </Td>
-                        <Td>
-                          <RefundStatusBadge status={refund.status} />
-                        </Td>
-                        <Td className="whitespace-nowrap text-ink-muted">
-                          {formatDate(refund.requestedAt)}
-                        </Td>
-                      </Tr>
-                    ))
-                  )}
-                </Tbody>
-              </TableShell>
-
-              {canRequestRefunds && position ? (
-                <div className="mt-4 border-t border-line pt-4">
-                  <h3 className="mb-3 text-sm font-semibold text-ink">
-                    Request a refund or void
-                  </h3>
-                  <RequestRefundForm
-                    bookingId={booking.id}
-                    currency={booking.currency}
-                    refundableMinor={availableToRefundMinor}
-                    payments={booking.payments
-                      .filter(
-                        (payment) =>
-                          payment.status === "CAPTURED" ||
-                          payment.status === "PARTIALLY_REFUNDED",
-                      )
-                      .map((payment) => ({
-                        id: payment.id,
-                        reference: payment.reference,
-                        amountMinor: payment.amountMinor,
-                      }))}
-                  />
-                </div>
-              ) : null}
-            </Panel>
-          ) : null}
-
-          <Panel title="Documents" defaultOpen={booking.documents.length > 0}>
             {booking.documents.length === 0 ? (
               <p className="text-sm text-ink-muted">No documents attached.</p>
             ) : (
@@ -883,6 +1021,21 @@ export default async function BookingDetailPage({
                           <span className="sr-only">View {document.title}</span>
                         </a>
                       ) : null}
+                      {/* `download=1` makes the same protected route send the
+                          bytes as an attachment; a PDF the operator needs to
+                          forward should not have to be re-saved out of the
+                          browser's viewer. */}
+                      {canViewDocuments ? (
+                        <a
+                          href={`/api/admin/documents/${document.id}/view?download=1`}
+                          className="rounded p-1.5 text-ink-muted hover:bg-surface-sunken hover:text-navy-500"
+                        >
+                          <Download className="size-4" />
+                          <span className="sr-only">
+                            Download {document.title}
+                          </span>
+                        </a>
+                      ) : null}
                     </div>
                   </li>
                 ))}
@@ -895,18 +1048,6 @@ export default async function BookingDetailPage({
               </div>
             ) : null}
           </Panel>
-
-          {/* Last on the page, and only for the role that holds
-              booking.delete: erasing a record is not an everyday action and
-              should not sit beside the ones that are. */}
-          {canDeleteBooking ? (
-            <Panel title="Danger zone" collapsible={false}>
-              <DeleteBookingControl
-                bookingId={booking.id}
-                bookingNumber={booking.bookingNumber}
-              />
-            </Panel>
-          ) : null}
         </div>
 
         {/* Right column — actions and activity */}
@@ -938,6 +1079,36 @@ export default async function BookingDetailPage({
               />
             </Panel>
           ) : null}
+
+          {/* Ahead of the e-ticket controls because it gates them: an agent
+              reading down the column meets the authorization before the send
+              button it governs. */}
+          <Panel title="Customer authorization" collapsible={false}>
+            <AuthorizationPanel
+              bookingId={booking.id}
+              rows={signatures}
+              canSend={canSendAuthorization}
+              recipient={emailRecipient}
+            />
+
+            <div className="mt-4 border-t border-line pt-4">
+              {canResendEmail ? (
+                <SendETicketButton
+                  bookingId={booking.id}
+                  recipient={emailRecipient}
+                  blockedReason={
+                    hasSignature
+                      ? undefined
+                      : "The customer has not signed the authorization yet."
+                  }
+                />
+              ) : (
+                <p className="text-xs text-ink-subtle">
+                  Sending the e-ticket requires the message.send permission.
+                </p>
+              )}
+            </div>
+          </Panel>
 
           <Panel title="Customer email" collapsible={false}>
             <CustomerEmailPanel

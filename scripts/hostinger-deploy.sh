@@ -7,10 +7,11 @@
 #   cd /srv/travel-crm/repo && scripts/hostinger-deploy.sh
 #
 # What it does, in order: back up, fetch, build a standalone release beside the
-# live one, apply migrations, switch a symlink, restart, and prove the new
-# process answers. If it does not answer, the symlink goes back to the previous
-# release and the service is restarted on that — so a build that compiles but
-# cannot boot costs seconds of downtime rather than an evening.
+# live one, apply migrations, seed reference data, switch a symlink, restart,
+# and prove the new process answers. If it does not answer, the symlink goes
+# back to the previous release and the service is restarted on that — so a
+# build that compiles but cannot boot costs seconds of downtime rather than an
+# evening.
 #
 # What it deliberately does NOT do is undo a migration. Prisma migrations here
 # are forward-only: a schema rollback is a restore from the backup this script
@@ -171,7 +172,33 @@ step "Applying migrations"
 npx prisma migrate deploy || fail "Migration failed. The previous release is still live and untouched."
 
 # ---------------------------------------------------------------------------
-# 6. Switch and restart.
+# 6. Seed reference data.
+#
+# Permissions are rows, not code. `PERMISSIONS` in the catalog is only the
+# source the seed upserts from — every check at runtime reads RolePermission,
+# so a capability added in a release does not exist until this has run. Without
+# it, a new permission silently denies everyone, including SUPER_ADMIN, and the
+# control it guards simply never appears. That is a hard failure to diagnose
+# from the outside, which is why it belongs here rather than in a runbook.
+#
+# Safe on every deploy, and safe on a live database. Permissions, role grants,
+# booking types, business settings and suppliers are all upserted by key, so
+# re-running converges rather than duplicating. Grants edited in the role
+# screen for a key the catalog still lists are reasserted to the default —
+# intended, since the catalog is the source of truth for what a role may do.
+#
+# The administrator block is skipped outright once any administrator exists, so
+# this cannot touch an existing account or reset a password.
+#
+# Before the switch, deliberately: the new code must not serve a request until
+# the rows its permission checks look for are present.
+# ---------------------------------------------------------------------------
+
+step "Seeding reference data"
+npm run db:seed || fail "Seed failed. The previous release is still live and untouched."
+
+# ---------------------------------------------------------------------------
+# 7. Switch and restart.
 # ---------------------------------------------------------------------------
 
 step "Switching to $STAMP"
@@ -183,7 +210,7 @@ mv -Tf "$CURRENT.tmp" "$CURRENT"
 sudo systemctl restart "$SERVICE"
 
 # ---------------------------------------------------------------------------
-# 7. Prove it answers — and go back if it does not.
+# 8. Prove it answers — and go back if it does not.
 #
 # /api/health runs SELECT 1, so a 200 means this process started, read its
 # configuration and reached MySQL. A unit that is "active" proves only that
@@ -221,7 +248,7 @@ if [ -z "$healthy" ]; then
 fi
 
 # ---------------------------------------------------------------------------
-# 8. Prune.
+# 9. Prune.
 # ---------------------------------------------------------------------------
 
 step "Pruning old releases (keeping $KEEP_RELEASES)"

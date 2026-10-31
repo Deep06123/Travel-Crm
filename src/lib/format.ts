@@ -213,6 +213,26 @@ export function toDateInputValue(
 }
 
 /**
+ * Value for an `<input type="date">` holding a calendar date.
+ *
+ * The UTC counterpart of `toDateInputValue`, and for the reason set out above
+ * `formatCalendarDate`: a sail date or a date of birth is stored as midnight
+ * UTC, and rendering it in the business timezone lands on the previous
+ * evening — so editing a sailing on the ninth would offer the eighth, and
+ * saving without touching the field would silently move it a day earlier
+ * every time.
+ */
+export function toCalendarInputValue(
+  value: Date | string | null | undefined,
+): string {
+  if (!value) return "";
+  const date = typeof value === "string" ? new Date(value) : value;
+  if (Number.isNaN(date.getTime())) return "";
+
+  return date.toISOString().slice(0, 10);
+}
+
+/**
  * True when a due date has passed.
  *
  * Lives here rather than inline in a component because React's purity rule

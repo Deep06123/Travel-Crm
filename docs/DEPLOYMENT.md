@@ -47,6 +47,8 @@ reaches the browser bundle.
 | `SMTP_USER` / `SMTP_PASSWORD` | no | Omit both for a relay that authorises by network |
 | `MAIL_FROM` | if smtp | Envelope sender, e.g. `Travel CRM <bookings@example.com>` |
 | `MAIL_REPLY_TO` | no | Where customer replies land, if not `MAIL_FROM` |
+| `GEOIP_PROVIDER` | no | `none` (default) or `ipapi`. Resolves an approximate city and country for the IP a customer signed a booking from. The IP itself is recorded either way; without a provider those columns stay null. A failed lookup never fails a signature |
+| `GEOIP_API_KEY` | no | Raises ipapi.co's keyless rate limit |
 
 First-run only, used by the seed and then removable:
 
@@ -386,16 +388,31 @@ back: sign-in appears to succeed and every subsequent request is anonymous.
 
 ```bash
 cd /srv/travel-crm/repo
-SKIP_BACKUP=1 scripts/hostinger-deploy.sh    # nothing to back up yet
-npm run db:seed                              # capture the printed password
+SKIP_BACKUP=1 scripts/hostinger-deploy.sh    # capture the printed password
 sudo systemctl enable travel-crm             # start at boot
 ```
 
-The seed is where the first `SUPER_ADMIN` comes from, and it runs once. The
-database has tables but no permissions, no roles and no administrator until it
-does, so sign-in is impossible beforehand. **Capture the one-time password from
-stdout** — it is printed once, stored only as a bcrypt digest, and is not
+The seed is where the first `SUPER_ADMIN` comes from. The database has tables
+but no permissions, no roles and no administrator until it runs, so sign-in is
+impossible beforehand. **Capture the one-time password from the deploy
+output** — it is printed once, stored only as a bcrypt digest, and is not
 recoverable afterwards. The account is flagged to change it at first sign-in.
+
+The deploy script runs the seed itself, on every release and not only the
+first. That is deliberate: permissions are rows, not code. `PERMISSIONS` in
+`src/lib/permissions/catalog.ts` is only the source the seed upserts from, and
+every check at runtime reads the `RolePermission` table — so a capability added
+in a release does not exist until the seed has run. Skip it and the new
+permission denies everyone, including `SUPER_ADMIN`, and the control it guards
+silently never appears.
+
+Re-running is safe. Permissions, role grants, booking types, business settings
+and suppliers are upserted by key, so the seed converges rather than
+duplicating, and the administrator block is skipped outright once any
+administrator exists — it cannot touch an existing account or reset a
+password. One consequence worth knowing: a grant edited in the role screen for
+a key the catalog still lists is reasserted to its default on the next deploy.
+The catalog is the source of truth for what a role may do.
 
 ### 8. Verify
 
@@ -573,6 +590,18 @@ of this document — local is not production).
 - [ ] Confirming a test booking produces a `SENT` notification carrying a
       provider message id, and the message arrives
 - [ ] The arriving message contains no passport number and no supplier cost
+
+**Customer authorization and e-signature**
+- [ ] The booking page shows a "Customer authorization" panel, and the
+      "Send authorization email" button is present — if it is missing for a
+      `SUPER_ADMIN`, the seed did not run
+- [ ] Sending produces a message whose **CLICK TO CONFIRM** link points at the
+      public host, not at `localhost` — that link is built from `AUTH_URL`
+- [ ] Opening the link in a signed-out browser renders the signing page
+- [ ] Signing records the IP address on the booking. An empty IP behind nginx
+      means `X-Real-IP` is not reaching the app; see `deploy/nginx.conf`
+- [ ] Re-opening a signed link is refused, and shows no booking detail
+- [ ] "Send e-ticket" is disabled before signing and enabled after
 
 **Operations**
 - [ ] `scripts/backup.sh` completes and writes a manifest

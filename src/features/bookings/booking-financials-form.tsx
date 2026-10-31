@@ -11,6 +11,7 @@ import {
   updateBookingFinancialsAction,
   type BookingFinancialsState,
 } from "./actions";
+import { ChargeSplits } from "./charge-splits";
 
 function SubmitButton() {
   const { pending } = useFormStatus();
@@ -21,6 +22,14 @@ function SubmitButton() {
       {pending ? "Saving…" : "Save amounts"}
     </Button>
   );
+}
+
+/** One stored split, ready to seed the editor. */
+export interface ChargeSplitValue {
+  /** What this part of the total is for, e.g. "Deposit". */
+  title: string;
+  /** Decimal string in the booking's currency, e.g. "900.00". */
+  amount: string;
 }
 
 export interface BookingAmounts {
@@ -49,10 +58,15 @@ export function BookingFinancialsForm({
   bookingId,
   currency,
   amounts,
+  splitCharges,
+  splits,
 }: {
   bookingId: string;
   currency: string;
   amounts: BookingAmounts;
+  splitCharges: boolean;
+  /** The stored splits, as decimal strings in the booking's currency. */
+  splits: ChargeSplitValue[];
 }) {
   const [state, formAction] = useActionState<BookingFinancialsState, FormData>(
     updateBookingFinancialsAction,
@@ -60,6 +74,32 @@ export function BookingFinancialsForm({
   );
 
   const error = (field: string) => state.fieldErrors?.[field];
+  const sectionHasError = (prefix: string): boolean =>
+    Object.keys(state.fieldErrors ?? {}).some((key) => key.startsWith(prefix));
+
+  /**
+   * What the split editor reads its starting values from.
+   *
+   * On the create form this is the rejected submission; here it is the stored
+   * booking, which is the same question answered from a different place — so
+   * the editor takes a lookup rather than either shape directly.
+   */
+  const seeded = (field: string, fallback = ""): string => {
+    const retained = state.values?.[field];
+    if (retained !== undefined) return retained;
+
+    if (field === "splitCharges") return splitCharges ? "true" : "false";
+    if (field === "total") return amounts.total;
+
+    const match = /^splits\.(\d+)\.(title|amount)$/.exec(field);
+    if (match) {
+      const split = splits[Number(match[1])];
+      if (!split) return fallback;
+      return split[match[2] as "title" | "amount"];
+    }
+
+    return fallback;
+  };
 
   return (
     <form action={formAction} className="mt-4 border-t border-line pt-4">
@@ -174,6 +214,20 @@ export function BookingFinancialsForm({
             />
           )}
         </Field>
+
+      </div>
+
+      {/* Set on the create form and, until now, fixed from then on — so a
+          booking that turned out to be collected across two cards could only
+          be corrected by recreating it. The same editor the create form uses,
+          seeded from what is stored. */}
+      <div className="mt-3">
+        <ChargeSplits
+          value={seeded}
+          error={error}
+          sectionHasError={sectionHasError}
+          currency={currency}
+        />
       </div>
 
       <div className="mt-3 flex items-center gap-3">

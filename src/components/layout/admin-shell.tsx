@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useState, type ReactNode } from "react";
 
 import { Sidebar, SidebarToggle } from "./sidebar";
+import { TimeZoneClock } from "./timezone-clock";
 import type { NavSection } from "./navigation";
 
 /**
@@ -79,6 +80,8 @@ export function AdminShell({
               })}
             </ol>
           </nav>
+
+          <TimeZoneClock />
 
           <div className="flex shrink-0 items-center gap-2">
             <Link

@@ -46,7 +46,6 @@ test("a cruise keeps the sail and return dates it was given", async ({
   // Every booking needs a card: the form will not submit without one.
   await fillCardDetails(page);
 
-  await page.locator('select[name="customerId"]').selectOption(customer.id);
   await page.locator('input[name="cruiseLine"]').fill("Royal Caribbean");
   await page.locator('input[name="guests.0.firstName"]').fill("Perpetua");
   await page.locator('input[name="guests.0.lastName"]').fill("E2ECalendar");

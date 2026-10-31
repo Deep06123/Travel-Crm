@@ -7,6 +7,8 @@ import {
   createTestCustomer,
   createTestUser,
   getBookingStatus,
+  recordTestPayment,
+  requestTestRefund,
   signIn,
   type TestBooking,
   type TestCustomer,
@@ -160,20 +162,21 @@ test("cancelling requires a typed confirmation and a reason", async ({ page }) =
   expect(await getBookingStatus(booking.id)).toBe("CANCELLED");
 });
 
-test("finance records a payment and the booking position updates", async ({ page }) => {
+test("a collected payment shows in the booking position", async ({ page }) => {
   const booking = await createTestBooking(customer.id, operations.id, {
     totalMinor: 100_000,
+  });
+
+  await recordTestPayment(booking.id, customer.id, finance.id, {
+    amountMinor: 40_000,
   });
 
   await signIn(page, finance);
   await page.goto(`/admin/bookings/${booking.id}`);
 
-  await page.locator("#pay-amount").fill("400.00");
-  await page.getByRole("button", { name: "Record payment" }).click();
-
-  await expect(page.getByText("Payment recorded.")).toBeVisible();
-
-  // Collected is now 400.00 against a 1,000.00 booking, so 600.00 is still owed.
+  // Collected is 400.00 against a 1,000.00 booking, so 600.00 is still owed.
+  // The Accounting panel derives both from the payment rows, which is what
+  // survives the removal of the Payments panel.
   await expect(page.getByText("$400.00").first()).toBeVisible();
   await expect(page.getByText("$600.00").first()).toBeVisible();
 });
@@ -185,18 +188,21 @@ test("a manually entered payment is never shown as provider-confirmed", async ({
     totalMinor: 50_000,
   });
 
+  // Arranged directly: the booking page no longer carries a Payments panel,
+  // so the payments list is where provenance is read.
+  const payment = await recordTestPayment(booking.id, customer.id, finance.id, {
+    amountMinor: 50_000,
+    providerTransactionId: "pi_e2e_claimed",
+  });
+
   await signIn(page, finance);
-  await page.goto(`/admin/bookings/${booking.id}`);
+  await page.goto(`/admin/payments?q=${payment.reference}`);
 
-  await page.locator("#pay-amount").fill("500.00");
-  await page.locator("#pay-txn").fill("pi_e2e_claimed");
-  await page.getByRole("button", { name: "Record payment" }).click();
-
-  await expect(page.getByText("Payment recorded.")).toBeVisible();
+  const row = page.locator("tr").filter({ hasText: payment.reference });
 
   // Supplying a provider reference must not promote the record's provenance.
-  await expect(page.getByText("Manually recorded").first()).toBeVisible();
-  await expect(page.getByText(/Confirmed by/)).toHaveCount(0);
+  await expect(row.getByText("Manually recorded")).toBeVisible();
+  await expect(row.getByText(/Confirmed by/)).toHaveCount(0);
 });
 
 test("a refund cannot be approved by the person who requested it", async ({ page }) => {
@@ -204,23 +210,21 @@ test("a refund cannot be approved by the person who requested it", async ({ page
     totalMinor: 100_000,
   });
 
-  // Finance collects, then raises the refund.
-  await signIn(page, finance);
-  await page.goto(`/admin/bookings/${booking.id}`);
-  await page.locator("#pay-amount").fill("1000.00");
-  await page.getByRole("button", { name: "Record payment" }).click();
-  await expect(page.getByText("Payment recorded.")).toBeVisible();
-
-  await page.reload();
-  await page.getByRole("button", { name: /Expand Refunds and voids/ }).click();
-  await page.locator("#rfd-amount").fill("250.00");
-  await page.locator("#rfd-reason").fill("Partial refund, schedule change");
-  await page.getByRole("button", { name: "Request refund" }).click();
-  await expect(page.getByText(/Refund requested/)).toBeVisible();
+  // Finance collects, then raises the refund. Both are arranged directly:
+  // neither form is on the booking page any more, and what this test is about
+  // is who may approve, which the refund desk still decides.
+  const payment = await recordTestPayment(booking.id, customer.id, finance.id, {
+    amountMinor: 100_000,
+  });
+  await requestTestRefund(booking.id, payment.id, finance.id, {
+    amountMinor: 25_000,
+    reason: "Partial refund, schedule change",
+  });
 
   expect(await countRefunds(booking.id)).toBe(1);
 
   // The same person tries to approve their own request.
+  await signIn(page, finance);
   await page.goto("/admin/refunds");
   const ownRow = page.locator("tr").filter({ hasText: booking.bookingNumber });
   await ownRow.getByRole("button", { name: "Approve" }).click();
@@ -236,18 +240,13 @@ test("a second approver can approve, and the refund reaches completion", async (
     totalMinor: 100_000,
   });
 
-  await signIn(page, finance);
-  await page.goto(`/admin/bookings/${booking.id}`);
-  await page.locator("#pay-amount").fill("1000.00");
-  await page.getByRole("button", { name: "Record payment" }).click();
-  await expect(page.getByText("Payment recorded.")).toBeVisible();
-
-  await page.reload();
-  await page.getByRole("button", { name: /Expand Refunds and voids/ }).click();
-  await page.locator("#rfd-amount").fill("100.00");
-  await page.locator("#rfd-reason").fill("Goodwill");
-  await page.getByRole("button", { name: "Request refund" }).click();
-  await expect(page.getByText(/Refund requested/)).toBeVisible();
+  const payment = await recordTestPayment(booking.id, customer.id, finance.id, {
+    amountMinor: 100_000,
+  });
+  await requestTestRefund(booking.id, payment.id, finance.id, {
+    amountMinor: 10_000,
+    reason: "Goodwill",
+  });
 
   // A different person approves and then records execution. Earlier tests left
   // their own refunds in the list, so the row is located by booking number

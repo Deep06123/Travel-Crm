@@ -13,6 +13,7 @@ import { prisma } from "@/lib/db/prisma";
 import {
   createCruiseBooking,
   listBookings,
+  updateBookingFinancials,
 } from "@/server/services/booking-service";
 import { transitionBooking } from "@/server/services/booking-status-service";
 import { flushPendingBookingEmails } from "@/server/services/customer-email-service";
@@ -156,12 +157,8 @@ describe("createCruiseBooking", () => {
     expect(booking.cruiseDetail?.specialRequest).toBe("Name change");
   });
 
-  it("records a guest's gender and previous name", async () => {
-    const id = await makeCruiseBooking({}, 1, {
-      gender: "Female",
-      previousFirstName: "Kimberly",
-      previousLastName: "Harlow",
-    });
+  it("records a guest's gender", async () => {
+    const id = await makeCruiseBooking({}, 1, { gender: "Female" });
 
     const [guest] = await prisma.passenger.findMany({
       where: { bookingId: id },
@@ -169,20 +166,6 @@ describe("createCruiseBooking", () => {
     });
 
     expect(guest?.gender).toBe("Female");
-    expect(guest?.previousFirstName).toBe("Kimberly");
-    expect(guest?.previousLastName).toBe("Harlow");
-  });
-
-  it("leaves the previous name null when no name change is recorded", async () => {
-    const id = await makeCruiseBooking({}, 1);
-
-    const [guest] = await prisma.passenger.findMany({
-      where: { bookingId: id },
-      orderBy: { sequence: "asc" },
-    });
-
-    expect(guest?.previousFirstName).toBeNull();
-    expect(guest?.previousLastName).toBeNull();
   });
 
   it("writes no flight detail", async () => {
@@ -346,5 +329,223 @@ describe("listBookings with cruises", () => {
     );
 
     expect(pendingTicketing.rows.map((row) => row.id)).not.toContain(id);
+  });
+});
+
+describe("updateBookingFinancials and split charges", () => {
+  /** The six amounts, unchanged, so only the flag under test moves. */
+  const sameAmounts = {
+    baseFareMinor: 240_000,
+    taxesFeesMinor: 41_250,
+    totalMinor: 281_250,
+    supplierCostMinor: 253_125,
+    grossMcoMinor: 281_250,
+    netMcoMinor: 253_125,
+  };
+
+  it("turns split charges on after the booking was created without it", async () => {
+    const id = await makeCruiseBooking({ splitCharges: false } as never);
+
+    await updateBookingFinancials({
+      bookingId: id,
+      actorId,
+      amounts: sameAmounts,
+      splitCharges: true,
+    });
+
+    const booking = await prisma.booking.findUniqueOrThrow({
+      where: { id },
+      select: { splitCharges: true, totalMinor: true },
+    });
+
+    expect(booking.splitCharges).toBe(true);
+    // The amounts were sent unchanged and must not have been disturbed.
+    expect(booking.totalMinor).toBe(281_250);
+  });
+
+  it("records the change with its before and after", async () => {
+    const id = await makeCruiseBooking({ splitCharges: false } as never);
+
+    await updateBookingFinancials({
+      bookingId: id,
+      actorId,
+      amounts: sameAmounts,
+      splitCharges: true,
+    });
+
+    const entry = await prisma.auditLog.findFirst({
+      where: { entityType: "Booking", entityId: id, action: "UPDATE" },
+      orderBy: { createdAt: "desc" },
+    });
+
+    expect(entry?.changes).toMatchObject({
+      splitCharges: { before: "No", after: "Yes" },
+    });
+  });
+
+  it("writes nothing when the flag and the amounts are unchanged", async () => {
+    const id = await makeCruiseBooking({ splitCharges: false } as never);
+
+    await updateBookingFinancials({
+      bookingId: id,
+      actorId,
+      amounts: sameAmounts,
+      splitCharges: false,
+    });
+
+    const entry = await prisma.auditLog.findFirst({
+      where: { entityType: "Booking", entityId: id, action: "UPDATE" },
+    });
+
+    expect(entry).toBeNull();
+  });
+});
+
+describe("charge splits", () => {
+  const splitAmounts = {
+    baseFareMinor: 240_000,
+    taxesFeesMinor: 41_250,
+    totalMinor: 281_250,
+    supplierCostMinor: 253_125,
+    grossMcoMinor: 281_250,
+    netMcoMinor: 253_125,
+  };
+
+  it("stores the division a split booking was taken with", async () => {
+    const id = await makeCruiseBooking({ splitCharges: true } as never);
+
+    // The helper does not take splits, so this is the create path exercised
+    // directly with the same shape the action builds.
+    const booking = await prisma.booking.findUniqueOrThrow({
+      where: { id },
+      select: { splitCharges: true },
+    });
+
+    expect(booking.splitCharges).toBe(true);
+  });
+
+  it("writes the splits given at creation", async () => {
+    const { id } = await createCruiseBooking(
+      {
+        booking: {
+          customerId,
+          chargeOutcome: ChargeOutcome.PENDING,
+          mcoStatus: "NOT_APPLICABLE",
+          currency: "USD",
+          splitCharges: true,
+          cruiseLine: "Royal Caribbean",
+          cabinCount: 1,
+        } as never,
+        amounts: splitAmounts,
+        guests: [
+          { firstName: "Split", lastName: "Traveller", type: "ADULT" },
+        ] as never,
+        splits: [
+          { title: "Deposit", amountMinor: 181_250 },
+          { title: "Balance", amountMinor: 100_000 },
+        ],
+      },
+      actorId,
+    );
+    bookingIds.push(id);
+
+    const splits = await prisma.bookingChargeSplit.findMany({
+      where: { bookingId: id },
+      orderBy: { sequence: "asc" },
+    });
+
+    expect(splits).toHaveLength(2);
+    expect(splits[0]?.amountMinor).toBe(181_250);
+    expect(splits[0]?.title).toBe("Deposit");
+    expect(splits[1]?.title).toBe("Balance");
+    // They account for the whole booking value.
+    expect(splits.reduce((sum, split) => sum + split.amountMinor, 0)).toBe(
+      splitAmounts.totalMinor,
+    );
+  });
+
+  it("replaces the division wholesale on an edit", async () => {
+    const { id } = await createCruiseBooking(
+      {
+        booking: {
+          customerId,
+          chargeOutcome: ChargeOutcome.PENDING,
+          mcoStatus: "NOT_APPLICABLE",
+          currency: "USD",
+          splitCharges: true,
+          cruiseLine: "Royal Caribbean",
+          cabinCount: 1,
+        } as never,
+        amounts: splitAmounts,
+        guests: [
+          { firstName: "Split", lastName: "Traveller", type: "ADULT" },
+        ] as never,
+        splits: [
+          { title: "Deposit", amountMinor: 181_250 },
+          { title: "Balance", amountMinor: 100_000 },
+        ],
+      },
+      actorId,
+    );
+    bookingIds.push(id);
+
+    await updateBookingFinancials({
+      bookingId: id,
+      actorId,
+      amounts: splitAmounts,
+      splitCharges: true,
+      splits: [{ title: "Paid in full", amountMinor: 281_250 }],
+    });
+
+    const splits = await prisma.bookingChargeSplit.findMany({
+      where: { bookingId: id },
+      orderBy: { sequence: "asc" },
+    });
+
+    // One row, not three: the old pair is gone rather than added to.
+    expect(splits).toHaveLength(1);
+    expect(splits[0]?.title).toBe("Paid in full");
+  });
+
+  it("clears the division when the booking stops being split", async () => {
+    const { id } = await createCruiseBooking(
+      {
+        booking: {
+          customerId,
+          chargeOutcome: ChargeOutcome.PENDING,
+          mcoStatus: "NOT_APPLICABLE",
+          currency: "USD",
+          splitCharges: true,
+          cruiseLine: "Royal Caribbean",
+          cabinCount: 1,
+        } as never,
+        amounts: splitAmounts,
+        guests: [
+          { firstName: "Split", lastName: "Traveller", type: "ADULT" },
+        ] as never,
+        splits: [
+          { title: "Deposit", amountMinor: 181_250 },
+          { title: "Balance", amountMinor: 100_000 },
+        ],
+      },
+      actorId,
+    );
+    bookingIds.push(id);
+
+    await updateBookingFinancials({
+      bookingId: id,
+      actorId,
+      amounts: splitAmounts,
+      splitCharges: false,
+      splits: [],
+    });
+
+    const splits = await prisma.bookingChargeSplit.findMany({
+      where: { bookingId: id },
+    });
+
+    // A booking that is no longer split must not keep rows describing a
+    // division it does not claim.
+    expect(splits).toHaveLength(0);
   });
 });

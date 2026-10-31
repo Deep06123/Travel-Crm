@@ -1,4 +1,4 @@
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 
 import type { Page } from "@playwright/test";
 import bcrypt from "bcryptjs";
@@ -227,6 +227,146 @@ export async function getBookingStatus(bookingId: string): Promise<string | null
   );
 
   return rows[0]?.status ?? null;
+}
+
+/**
+ * A captured payment against a booking.
+ *
+ * Arranged here rather than through the UI because the booking page no longer
+ * offers a record-payment form. The rows these write are the same ones the
+ * payment service writes, so the pages under test — the payments list, the
+ * refund desk — still read real data; only the arranging is direct.
+ *
+ * `captureMode` is MANUAL_RECORD with a provider reference set, which is the
+ * combination the provenance test is about: a typed-in reference must not
+ * promote a manual record to a provider-confirmed one.
+ */
+export async function recordTestPayment(
+  bookingId: string,
+  customerId: string,
+  recordedById: string,
+  options: { amountMinor: number; providerTransactionId?: string | null },
+): Promise<{ id: string; reference: string }> {
+  const id = newId();
+  const reference = `PAYE2E${randomBytes(3).toString("hex").toUpperCase()}`;
+
+  await query(
+    `INSERT INTO \`Payment\`
+       (\`id\`, \`reference\`, \`bookingId\`, \`customerId\`, \`amountMinor\`,
+        \`currency\`, \`method\`, \`captureMode\`, \`status\`, \`provider\`,
+        \`providerTransactionId\`, \`reconciliationStatus\`, \`recordedById\`,
+        \`capturedAt\`, \`createdAt\`, \`updatedAt\`)
+     VALUES (?, ?, ?, ?, ?, 'USD', 'CREDIT_CARD', 'MANUAL_RECORD', 'CAPTURED',
+             NULL, ?, 'UNRECONCILED', ?, NOW(3), NOW(3), NOW(3))`,
+    [
+      id,
+      reference,
+      bookingId,
+      customerId,
+      options.amountMinor,
+      options.providerTransactionId ?? null,
+      recordedById,
+    ],
+  );
+
+  return { id, reference };
+}
+
+/** A refund request awaiting approval, raised by `requestedById`. */
+export async function requestTestRefund(
+  bookingId: string,
+  paymentId: string,
+  requestedById: string,
+  options: { amountMinor: number; reason: string },
+): Promise<{ id: string; reference: string }> {
+  const id = newId();
+  const reference = `RFDE2E${randomBytes(3).toString("hex").toUpperCase()}`;
+
+  await query(
+    `INSERT INTO \`Refund\`
+       (\`id\`, \`reference\`, \`kind\`, \`bookingId\`, \`paymentId\`,
+        \`requestedAmountMinor\`, \`currency\`, \`reason\`, \`status\`,
+        \`requestedById\`, \`requestedAt\`, \`createdAt\`, \`updatedAt\`)
+     VALUES (?, ?, 'REFUND', ?, ?, ?, 'USD', ?, 'PENDING', ?, NOW(3), NOW(3), NOW(3))`,
+    [
+      id,
+      reference,
+      bookingId,
+      paymentId,
+      options.amountMinor,
+      options.reason,
+      requestedById,
+    ],
+  );
+
+  return { id, reference };
+}
+
+/**
+ * An outstanding authorization link, as if an agent had emailed one.
+ *
+ * The raw token is returned and only its SHA-256 is stored, exactly as
+ * `createSignatureRequest` does — the browser test needs the token to visit
+ * `/sign/<token>`, and the database must never hold anything that could be
+ * replayed into one.
+ *
+ * Arranged directly rather than by clicking "Send authorization email",
+ * because that path needs a working SMTP transport and the test is about the
+ * public signing page, not about delivery.
+ */
+export async function seedSignatureRequest(
+  bookingId: string,
+  recipientEmail: string,
+  sentById: string,
+  options: { expiresInDays?: number } = {},
+): Promise<{ id: string; token: string }> {
+  const id = newId();
+  const token = randomBytes(32).toString("base64url");
+  const tokenHash = createHash("sha256").update(token).digest("hex");
+
+  await query(
+    `INSERT INTO \`BookingSignature\`
+       (\`id\`, \`bookingId\`, \`tokenHash\`, \`status\`, \`recipientEmail\`,
+        \`expiresAt\`, \`sentAt\`, \`sentById\`, \`createdAt\`, \`updatedAt\`)
+     VALUES (?, ?, ?, 'SENT', ?,
+             DATE_ADD(NOW(3), INTERVAL ? DAY), NOW(3), ?, NOW(3), NOW(3))`,
+    [
+      id,
+      bookingId,
+      tokenHash,
+      recipientEmail,
+      options.expiresInDays ?? 14,
+      sentById,
+    ],
+  );
+
+  return { id, token };
+}
+
+/** The stored signature for a booking, or null if nothing has been signed. */
+export async function readSignature(bookingId: string): Promise<{
+  status: string;
+  signatureName: string | null;
+  signedPhone: string | null;
+  ipAddress: string | null;
+  browser: string | null;
+} | null> {
+  const rows = await query<{
+    status: string;
+    signatureName: string | null;
+    signedPhone: string | null;
+    ipAddress: string | null;
+    browser: string | null;
+  }>(
+    `SELECT \`status\`, \`signatureName\`, \`signedPhone\`, \`ipAddress\`, \`browser\`
+       FROM \`BookingSignature\`
+      WHERE \`bookingId\` = ? AND \`status\` = 'SIGNED'
+      ORDER BY \`createdAt\` DESC
+      LIMIT 1`,
+    [bookingId],
+  );
+
+  return rows[0] ?? null;
 }
 
 export async function countRefunds(bookingId: string): Promise<number> {

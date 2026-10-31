@@ -15,7 +15,7 @@ import { derivePriority } from "@/lib/bookings/priority";
 import { businessDayBounds } from "@/lib/format";
 import { sanitiseRichText } from "@/lib/html/sanitise";
 import { prisma } from "@/lib/db/prisma";
-import { nextBookingNumber } from "@/lib/db/references";
+import { nextBookingNumber, nextCustomerReference } from "@/lib/db/references";
 import {
   paginate,
   resolveSort,
@@ -440,6 +440,15 @@ export async function getBookingDetail(id: string) {
       grossMcoMinor: true,
       netMcoMinor: true,
       splitCharges: true,
+      chargeSplits: {
+        select: {
+          id: true,
+          sequence: true,
+          title: true,
+          amountMinor: true,
+        },
+        orderBy: { sequence: "asc" as const },
+      },
       financialNotes: true,
       travelStartDate: true,
       travelEndDate: true,
@@ -586,6 +595,12 @@ export function redactPassengers(
 
 // --- Cruise bookings --------------------------------------------------------
 
+/** One line of a split total, already converted against the currency. */
+export interface ChargeSplitDraft {
+  title: string;
+  amountMinor: number;
+}
+
 export interface CreateCruiseBookingInput {
   booking: CruiseBookingInput;
   /** Minor-unit amounts, already converted against the booking's currency. */
@@ -598,6 +613,78 @@ export interface CreateCruiseBookingInput {
     netMcoMinor: number;
   };
   guests: CruiseGuestInput[];
+  /** How the total is divided, when `booking.splitCharges` says it is. */
+  splits?: ChargeSplitDraft[];
+}
+
+/**
+ * Settles which customer a cruise booking belongs to.
+ *
+ * The cruise form has no customer picker: a cruise is sold to the people
+ * sailing, so the first guest is the customer. An existing record is reused
+ * when the booking's contact email or phone identifies one — matching on the
+ * name alone is deliberately not enough, as it is elsewhere in the app.
+ */
+async function resolveCruiseCustomerId(
+  tx: Prisma.TransactionClient,
+  booking: CruiseBookingInput,
+  guests: CruiseGuestInput[],
+  actorId: string,
+): Promise<string> {
+  if (booking.customerId) return booking.customerId;
+
+  const lead = guests[0];
+  if (!lead) {
+    throw new Error("A cruise booking needs at least one guest to own it.");
+  }
+
+  const email = booking.contactEmail ?? null;
+  const phone = booking.contactPhone ?? null;
+
+  const identifiers: Prisma.CustomerWhereInput[] = [];
+  if (email) identifiers.push({ email });
+  if (phone) identifiers.push({ phone });
+
+  if (identifiers.length > 0) {
+    const existing = await tx.customer.findFirst({
+      where: { OR: identifiers },
+      select: { id: true },
+      orderBy: { createdAt: "asc" },
+    });
+    if (existing) return existing.id;
+  }
+
+  const reference = await nextCustomerReference(tx);
+
+  const customer = await tx.customer.create({
+    data: {
+      reference,
+      firstName: lead.firstName,
+      lastName: lead.lastName,
+      email,
+      phone,
+      billingAddressLine1: booking.billingAddressLine1 ?? null,
+      billingCity: booking.billingCity ?? null,
+      billingState: booking.billingState ?? null,
+      billingPostalCode: booking.billingPostalCode ?? null,
+      billingCountry: booking.billingCountry ?? null,
+      preferredLanguage: booking.language ?? null,
+    },
+    select: { id: true },
+  });
+
+  await recordAudit(
+    {
+      action: AuditAction.CREATE,
+      entityType: "Customer",
+      entityId: customer.id,
+      adminUserId: actorId,
+      summary: `Created customer ${reference} from a cruise booking`,
+    },
+    tx,
+  );
+
+  return customer.id;
 }
 
 /**
@@ -610,11 +697,12 @@ export interface CreateCruiseBookingInput {
  * ticketing backlog.
  */
 export async function createCruiseBooking(
-  { booking, amounts, guests }: CreateCruiseBookingInput,
+  { booking, amounts, guests, splits = [] }: CreateCruiseBookingInput,
   actorId: string,
 ): Promise<{ id: string; bookingNumber: string }> {
   return prisma.$transaction(async (tx) => {
     const bookingNumber = await nextBookingNumber(tx);
+    const customerId = await resolveCruiseCustomerId(tx, booking, guests, actorId);
 
     const created = await tx.booking.create({
       data: {
@@ -625,7 +713,7 @@ export async function createCruiseBooking(
         priority: derivePriority(booking.sailDate, new Date()),
         chargeOutcome: booking.chargeOutcome,
         bookingTypeId: booking.bookingTypeId ?? null,
-        customerId: booking.customerId,
+        customerId,
         createdById: actorId,
         assignedAgentId: booking.assignedAgentId ?? null,
         supplierId: booking.supplierId ?? null,
@@ -702,6 +790,20 @@ export async function createCruiseBooking(
           },
         },
 
+        // Only written when the booking claims to be split: a row here would
+        // otherwise describe a division the booking says does not exist.
+        ...(booking.splitCharges && splits.length > 0
+          ? {
+              chargeSplits: {
+                create: splits.map((split, index) => ({
+                  sequence: index + 1,
+                  title: split.title,
+                  amountMinor: split.amountMinor,
+                })),
+              },
+            }
+          : {}),
+
         // Guests reuse the Passenger table; ticketNumber stays null because a
         // cruise guest does not hold an air ticket.
         passengers: {
@@ -714,8 +816,6 @@ export async function createCruiseBooking(
             type: guest.type,
             gender: guest.gender ?? null,
             dateOfBirth: guest.dateOfBirth ?? null,
-            previousFirstName: guest.previousFirstName ?? null,
-            previousLastName: guest.previousLastName ?? null,
             passportNumber: guest.passportNumber ?? null,
             passportCountry: guest.passportCountry ?? null,
             passportExpiry: guest.passportExpiry ?? null,
@@ -978,8 +1078,12 @@ export async function updateBookingFinancials(input: {
     grossMcoMinor: number;
     netMcoMinor: number;
   };
+  /** Whether the total is collected across more than one card. */
+  splitCharges: boolean;
+  /** The division, replacing whatever was stored. Empty clears it. */
+  splits?: ChargeSplitDraft[];
 }): Promise<{ bookingId: string; bookingNumber: string }> {
-  const { bookingId, actorId, amounts } = input;
+  const { bookingId, actorId, amounts, splitCharges, splits = [] } = input;
 
   return prisma.$transaction(async (tx) => {
     const booking = await tx.booking.findUnique({
@@ -994,6 +1098,11 @@ export async function updateBookingFinancials(input: {
         supplierCostMinor: true,
         grossMcoMinor: true,
         netMcoMinor: true,
+        splitCharges: true,
+        chargeSplits: {
+          select: { title: true, amountMinor: true },
+          orderBy: { sequence: "asc" as const },
+        },
       },
     });
 
@@ -1017,6 +1126,36 @@ export async function updateBookingFinancials(input: {
       };
     }
 
+    // Not an amount, but it travels with them: it says how the total is
+    // collected, and the audit entry should read the same way.
+    if (booking.splitCharges !== splitCharges) {
+      changes["splitCharges"] = {
+        before: booking.splitCharges ? "Yes" : "No",
+        after: splitCharges ? "Yes" : "No",
+      };
+    }
+
+    // The division is replaced wholesale rather than diffed row by row: these
+    // rows have no identity worth preserving — "the 900.00 deposit" is the
+    // whole of what one is — and a replace cannot leave a half-applied split.
+    const wanted = splitCharges ? splits : [];
+    const describe = (
+      rows: readonly { title: string; amountMinor: number }[],
+    ) =>
+      rows.length === 0
+        ? "none"
+        : rows
+            .map((row) => `${row.title}: ${row.amountMinor} ${booking.currency}`)
+            .join("; ");
+
+    const splitsBefore = describe(booking.chargeSplits);
+    const splitsAfter = describe(wanted);
+    const splitsChanged = splitsBefore !== splitsAfter;
+
+    if (splitsChanged) {
+      changes["chargeSplits"] = { before: splitsBefore, after: splitsAfter };
+    }
+
     // Nothing moved: no write, and no audit entry claiming one happened.
     if (Object.keys(changes).length === 0) {
       return { bookingId: booking.id, bookingNumber: booking.bookingNumber };
@@ -1031,6 +1170,19 @@ export async function updateBookingFinancials(input: {
         supplierCostMinor: amounts.supplierCostMinor,
         grossMcoMinor: amounts.grossMcoMinor,
         netMcoMinor: amounts.netMcoMinor,
+        splitCharges,
+        ...(splitsChanged
+          ? {
+              chargeSplits: {
+                deleteMany: {},
+                create: wanted.map((split, index) => ({
+                  sequence: index + 1,
+                  title: split.title,
+                  amountMinor: split.amountMinor,
+                })),
+              },
+            }
+          : {}),
       },
     });
 

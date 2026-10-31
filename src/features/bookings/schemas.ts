@@ -32,6 +32,19 @@ const requiredText = (max: number, message: string) =>
   z.string().trim().min(1, message).max(max);
 
 /**
+ * A Yes/No `<select>`, which submits the string "true" or "false".
+ *
+ * Not `z.coerce.boolean()`: that is `Boolean(value)`, and the string "false"
+ * is truthy, so every one of these fields stored `true` whatever was chosen.
+ * A checkbox coerces correctly — it submits "on" or nothing at all — which is
+ * why the problem was confined to the fields rendered as a select.
+ */
+export const yesNo = z
+  .enum(["true", "false"])
+  .default("false")
+  .transform((value) => value === "true");
+
+/**
  * Billing information shared by the flight and cruise forms.
  *
  * There is no `cardNumber` or `cvv` here, and there must never be one. The
@@ -274,7 +287,7 @@ export const flightBookingSchema = z
     netMco: optionalText(30),
     mcoSupplierId: optionalText(40),
     mcoStatus: z.enum(McoStatus).default(McoStatus.NOT_APPLICABLE),
-    splitCharges: z.coerce.boolean().default(false),
+    splitCharges: yesNo,
     financialNotes: optionalText(5_000),
 
     // H. Comments and follow-up
@@ -363,7 +376,22 @@ export const bookingFinancialsSchema = z.object({
   supplierCost: optionalText(30),
   grossMco: optionalText(30),
   netMco: optionalText(30),
+  splitCharges: yesNo,
 });
+
+/**
+ * One line of a split total: what it is for, and how much of the total it is.
+ *
+ * The amount stays a decimal string here, as every amount on these forms does:
+ * it cannot be turned into minor units until the booking's currency is known,
+ * and the currency is parsed alongside it.
+ */
+export const chargeSplitSchema = z.object({
+  title: requiredText(120, "Name this charge."),
+  amount: requiredText(30, "Enter an amount."),
+});
+
+export type ChargeSplitInput = z.infer<typeof chargeSplitSchema>;
 
 /** Recording the references a ticket is issued against. */
 export const ticketingDetailsSchema = z.object({

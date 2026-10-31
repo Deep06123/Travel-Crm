@@ -90,8 +90,25 @@ const nextConfig: NextConfig = {
   serverExternalPackages: ["@prisma/adapter-mariadb", "mariadb"],
 
   turbopack: {
+    /**
+     * Tailwind runs on the one stylesheet that imports it, and nothing else.
+     *
+     * The pattern was `*.css`, which matched every stylesheet in the graph —
+     * including the CSS this loader had just emitted. Turbopack fed that output
+     * back in, Tailwind compiled it again, and the new result invalidated the
+     * previous one: in development that was an endless "Fast Refresh
+     * rebuilding", each round ending in a full page reload, several times a
+     * second, with no file having changed. It made the application look like it
+     * was refreshing on its own and it broke every browser test, because a form
+     * cannot be submitted on a page that keeps reloading underneath it.
+     *
+     * `globals.css` is the only file that says `@import "tailwindcss"`, so
+     * naming it directly is not a narrowing of what Tailwind sees — utilities
+     * are still collected from the whole source tree by Tailwind's own content
+     * scanning. It only stops the compiler being pointed at its own output.
+     */
     rules: {
-      "*.css": {
+      "./src/app/globals.css": {
         loaders: ["@tailwindcss/turbopack"],
         as: "*.css",
       },

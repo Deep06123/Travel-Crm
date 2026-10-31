@@ -6,6 +6,7 @@ import { z } from "zod";
 import { requirePermission } from "@/lib/auth/dal";
 import { loggerFor } from "@/lib/logging/logger";
 import { PERMISSIONS } from "@/lib/permissions";
+import { hasSignedAuthorization } from "@/server/services/booking-signature-service";
 import {
   BOOKING_CONFIRMED,
   BOOKING_TICKETED,
@@ -96,6 +97,20 @@ export async function bookingEmailAction(
 
   // Reading is not sending: nothing is written and nothing is transmitted.
   if (intent === "preview") return buildPreview(bookingId, event);
+
+  // The e-ticket is the document the customer was asked to authorize, so it
+  // does not go out before they have. Enforced here rather than only by
+  // disabling the button, because a disabled button is a courtesy and this is
+  // a rule — the form can be posted directly.
+  //
+  // Previews are deliberately above this check: staff still need to read the
+  // document while they are waiting for the signature.
+  if (event === BOOKING_TICKETED && !(await hasSignedAuthorization(bookingId))) {
+    return {
+      error:
+        "The customer has not signed the authorization yet, so the e-ticket cannot be sent. Send them the authorization email first.",
+    };
+  }
 
   // Both halves or neither. Sending a generated body under an edited subject
   // would be a message nobody wrote.

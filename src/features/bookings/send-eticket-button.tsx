@@ -20,17 +20,15 @@ import { bookingEmailAction, type BookingEmailState } from "./email-actions";
  * to the generated message when they are absent, which is what this page is
  * for — sending the document as rendered, not an edited version of it.
  */
-function SubmitButton({ disabled }: { disabled: boolean }) {
+function SubmitButton({ blockedReason }: { blockedReason?: string | undefined }) {
   const { pending } = useFormStatus();
 
   return (
     <Button
       type="submit"
       variant="destructive"
-      disabled={pending || disabled}
-      title={
-        disabled ? "This booking has no contact address to send to." : undefined
-      }
+      disabled={pending || blockedReason !== undefined}
+      title={blockedReason}
     >
       {pending ? <Loader2 className="animate-spin" /> : <Send />}
       {pending ? "Sending…" : "Click here Send E-Ticket Email"}
@@ -41,15 +39,29 @@ function SubmitButton({ disabled }: { disabled: boolean }) {
 export function SendETicketButton({
   bookingId,
   recipient,
+  blockedReason,
 }: {
   bookingId: string;
   /** Empty when the booking has no contact address; nothing could be sent. */
   recipient: string;
+  /**
+   * Why the send is unavailable, or `undefined` when it is available.
+   *
+   * Shown to the operator as well as used to disable the button: a control
+   * that is greyed out without saying why reads as a bug. The server applies
+   * the same rules in `bookingEmailAction` — this only saves a round trip.
+   */
+  blockedReason?: string | undefined;
 }) {
   const [state, formAction] = useActionState<BookingEmailState, FormData>(
     bookingEmailAction,
     {},
   );
+
+  const blocked =
+    recipient === ""
+      ? "This booking has no contact address to send to."
+      : blockedReason;
 
   return (
     <div>
@@ -57,8 +69,12 @@ export function SendETicketButton({
         <input type="hidden" name="bookingId" value={bookingId} />
         <input type="hidden" name="event" value="BOOKING_TICKETED" />
         <input type="hidden" name="intent" value="send" />
-        <SubmitButton disabled={recipient === ""} />
+        <SubmitButton blockedReason={blocked} />
       </form>
+
+      {blocked ? (
+        <p className="mt-2 text-xs text-ink-muted">{blocked}</p>
+      ) : null}
 
       {state.error ? (
         <p

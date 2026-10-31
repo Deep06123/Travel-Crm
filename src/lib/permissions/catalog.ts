@@ -39,6 +39,10 @@ export const PERMISSIONS = {
   BOOKING_UPDATE: "booking.update",
   BOOKING_CHANGE_STATUS: "booking.changeStatus",
   BOOKING_MCO_UPDATE: "booking.mcoUpdate",
+  /// Emailing the customer an authorization link. Separate from `message.send`
+  /// because it mints a token that shows booking detail to whoever opens it,
+  /// which an ordinary customer email does not.
+  BOOKING_SIGNATURE_SEND: "booking.signature.send",
   BOOKING_CANCEL: "booking.cancel",
   /// Erasing the record outright, as opposed to cancelling it. Only for a
   /// booking that should never have existed.
@@ -132,6 +136,7 @@ export const PERMISSION_DEFINITIONS: readonly PermissionDefinition[] = [
   { key: PERMISSIONS.BOOKING_UPDATE, description: "Edit booking details", category: BOOKINGS },
   { key: PERMISSIONS.BOOKING_CHANGE_STATUS, description: "Move a booking through its lifecycle", category: BOOKINGS },
   { key: PERMISSIONS.BOOKING_MCO_UPDATE, description: "Move a booking's MCO through its settlement cycle", category: BOOKINGS },
+  { key: PERMISSIONS.BOOKING_SIGNATURE_SEND, description: "Email the customer an authorization and e-signature link", category: BOOKINGS },
   { key: PERMISSIONS.BOOKING_CANCEL, description: "Cancel a booking", category: BOOKINGS },
   { key: PERMISSIONS.BOOKING_DELETE, description: "Permanently delete a booking created in error", category: BOOKINGS },
   { key: PERMISSIONS.BOOKING_ASSIGN, description: "Assign a booking to an agent", category: BOOKINGS },
@@ -239,6 +244,7 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<AdminRole, PermissionKey[]> = {
     PERMISSIONS.BOOKING_UPDATE,
     PERMISSIONS.BOOKING_CHANGE_STATUS,
     PERMISSIONS.BOOKING_MCO_UPDATE,
+    PERMISSIONS.BOOKING_SIGNATURE_SEND,
     PERMISSIONS.BOOKING_CANCEL,
     PERMISSIONS.BOOKING_ASSIGN,
     PERMISSIONS.BOOKING_SET_PRIORITY,
@@ -311,6 +317,7 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<AdminRole, PermissionKey[]> = {
 
   [AdminRole.SUPPORT]: [
     PERMISSIONS.BOOKING_VIEW,
+    PERMISSIONS.BOOKING_SIGNATURE_SEND,
     PERMISSIONS.PASSENGER_VIEW,
     PERMISSIONS.COMMENT_VIEW,
     PERMISSIONS.COMMENT_CREATE,

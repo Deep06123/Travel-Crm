@@ -29,7 +29,8 @@ export interface ETicketOptions {
   supportPhone?: string | null;
 }
 
-function escapeHtml(value: string): string {
+/** Shared with the authorization email, so both escape identically. */
+export function escapeHtml(value: string): string {
   return value
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
@@ -39,7 +40,7 @@ function escapeHtml(value: string): string {
 }
 
 /** `09-01-2025`, matching the reference ticket rather than the CRM's format. */
-function formatTicketDate(value: Date | null | undefined): string {
+export function formatTicketDate(value: Date | null | undefined): string {
   if (!value) return "—";
 
   const day = String(value.getUTCDate()).padStart(2, "0");

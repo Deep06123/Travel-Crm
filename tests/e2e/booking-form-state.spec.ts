@@ -76,7 +76,7 @@ test("a rejected flight booking keeps the selected customer", async ({
   await expect(page.getByText("Select a customer.")).toHaveCount(0);
 });
 
-test("a rejected cruise booking keeps the selected customer", async ({
+test("a rejected cruise booking keeps what was typed", async ({
   page,
 }) => {
   await signIn(page, operations);
@@ -85,9 +85,6 @@ test("a rejected cruise booking keeps the selected customer", async ({
   // Every booking needs a card: the form will not submit without one.
   await fillCardDetails(page);
 
-  const customerSelect = page.locator('select[name="customerId"]');
-
-  await customerSelect.selectOption(customer.id);
   await page.locator('input[name="cruiseLine"]').fill("Royal Caribbean");
   await page.locator('input[name="guests.0.firstName"]').fill("Perpetua");
   await page.locator('input[name="guests.0.lastName"]').fill("E2EState");
@@ -104,11 +101,12 @@ test("a rejected cruise booking keeps the selected customer", async ({
     "The return date cannot be before sailing.",
   );
 
-  await expect(customerSelect).toHaveValue(customer.id);
+  await expect(page.locator('input[name="cruiseLine"]')).toHaveValue(
+    "Royal Caribbean",
+  );
   await expect(page.locator('input[name="reservationNumber"]')).toHaveValue(
     "STATE2",
   );
-  await expect(page.getByText("Select a customer.")).toHaveCount(0);
 });
 
 test("correcting the rejected field creates the booking", async ({ page }) => {
@@ -118,7 +116,6 @@ test("correcting the rejected field creates the booking", async ({ page }) => {
   // Every booking needs a card: the form will not submit without one.
   await fillCardDetails(page);
 
-  await page.locator('select[name="customerId"]').selectOption(customer.id);
   await page.locator('input[name="cruiseLine"]').fill("Royal Caribbean");
   await page.locator('input[name="guests.0.firstName"]').fill("Perpetua");
   await page.locator('input[name="guests.0.lastName"]').fill("E2EState");
@@ -131,7 +128,7 @@ test("correcting the rejected field creates the booking", async ({ page }) => {
   );
 
   // The second attempt corrects only what was wrong. Before the fix this
-  // failed again, on the customer, because the first attempt had cleared it.
+  // failed again, on a field the first attempt had cleared.
   await page.locator('input[name="returnDate"]').fill("2027-11-16");
   await page.getByRole("button", { name: "Create booking" }).click();
 

@@ -11,6 +11,7 @@ import { FormGuide } from "@/components/ui/form-guide";
 import { StickySelect } from "@/components/ui/sticky-select";
 import { Panel } from "@/components/ui/panel";
 
+import { BookingDocuments } from "./booking-documents";
 import { BillingInformation, useCardEntry } from "./billing-information";
 import { ItinerarySource } from "./itinerary-source";
 import {
@@ -513,6 +514,8 @@ export function FlightBookingForm({
 
       {/* H — Notes. Payments (G) are recorded against the saved booking, so
           the booking exists before money is attached to it. */}
+      <BookingDocuments error={error} />
+
       <Panel title="Notes" defaultOpen={false}>
         <Field id="comment" label="Notes" error={error("comment")}>
           {(props) => <Textarea {...props} name="comment" rows={3} defaultValue={value("comment")} />}
