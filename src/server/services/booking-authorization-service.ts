@@ -165,6 +165,61 @@ export interface SendAuthorizationInput {
   origin: string;
 }
 
+export interface AuthorizationPreview {
+  /** Empty when the booking has no contact address — nothing could be sent. */
+  recipient: string;
+  subject: string;
+  html: string;
+}
+
+/**
+ * Renders the authorization email so it can be read before it is sent.
+ *
+ * Writes nothing, sends nothing, and — the part that matters — mints no token.
+ * Issuing one would revoke whatever link the customer is already holding, so
+ * merely looking at the message would silently break the one in their inbox.
+ * The confirm button therefore points at a placeholder, and the page says so.
+ *
+ * Returns `null` when the booking does not exist, so the caller can answer
+ * with a 404 rather than an error.
+ */
+export async function previewAuthorizationEmail(
+  bookingId: string,
+): Promise<AuthorizationPreview | null> {
+  const booking = await prisma.booking.findUnique({
+    where: { id: bookingId },
+    select: AUTHORIZATION_SELECT,
+  });
+
+  if (!booking) return null;
+
+  const rendered = renderBookingAuthorization(toAuthorizationData(booking), {
+    signUrl: PREVIEW_SIGN_URL,
+    // Only ever printed as a date in the body. The real expiry is set when a
+    // link is actually issued; this stands in for the shape of the sentence.
+    expiresAt: new Date(Date.now() + PREVIEW_EXPIRY_DAYS * 24 * 60 * 60 * 1_000),
+  });
+
+  return {
+    recipient:
+      booking.contactEmail?.trim() || booking.customer.email?.trim() || "",
+    subject: rendered.subject,
+    html: rendered.html,
+  };
+}
+
+/**
+ * Stands in for the real signing link in a preview.
+ *
+ * Deliberately inert rather than a plausible-looking URL: an operator who
+ * clicks it in the preview should land nowhere, not on a signing page for some
+ * other booking.
+ */
+const PREVIEW_SIGN_URL = "#preview-link-not-issued";
+
+/** Matches `EXPIRY_DAYS` in `booking-signature-service`. */
+const PREVIEW_EXPIRY_DAYS = 14;
+
 /**
  * Emails the customer their authorization link.
  *

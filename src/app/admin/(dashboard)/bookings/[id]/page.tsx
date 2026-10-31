@@ -1096,6 +1096,7 @@ export default async function BookingDetailPage({
                 <SendETicketButton
                   bookingId={booking.id}
                   recipient={emailRecipient}
+                  viewHref={`/admin/bookings/${booking.id}/eticket`}
                   blockedReason={
                     hasSignature
                       ? undefined

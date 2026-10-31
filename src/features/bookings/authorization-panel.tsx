@@ -1,10 +1,10 @@
 "use client";
 
-import { Loader2, Send } from "lucide-react";
+import { ExternalLink, Loader2, Send } from "lucide-react";
 import { useActionState } from "react";
 import { useFormStatus } from "react-dom";
 
-import { Button } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
 import { Badge } from "@/components/ui/status-badge";
 import type { BookingSignatureStatus } from "@/generated/prisma/enums";
 
@@ -190,18 +190,37 @@ export function AuthorizationPanel({
       )}
 
       {canSend ? (
-        <form action={formAction}>
+        <form action={formAction} className="flex flex-col items-start gap-2">
           <input type="hidden" name="bookingId" value={bookingId} />
-          <SubmitButton
-            label={
-              signed
-                ? "Send a new authorization email"
-                : outstanding
-                  ? "Resend authorization email"
-                  : "Send authorization email"
-            }
-            {...(blocked ? { blocked } : {})}
-          />
+
+          <div className="flex flex-wrap gap-2">
+            <SubmitButton
+              label={
+                signed
+                  ? "Send a new authorization email"
+                  : outstanding
+                    ? "Resend authorization email"
+                    : "Send authorization email"
+              }
+              {...(blocked ? { blocked } : {})}
+            />
+
+            {/* Reading the message before sending it, in a new tab rather than
+                a dialog: it is a full page, and the operator usually wants the
+                booking still open beside it. Outside the form's submit path —
+                an anchor cannot submit it — so checking the wording never
+                risks putting a second copy in the customer's inbox. */}
+            <a
+              href={`/admin/bookings/${bookingId}/authorization`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className={buttonVariants({ variant: "secondary" })}
+            >
+              <ExternalLink className="size-4" />
+              View email
+            </a>
+          </div>
+
           {blocked ? (
             <p className="mt-2 text-xs text-ink-muted">{blocked}</p>
           ) : null}

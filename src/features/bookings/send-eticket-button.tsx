@@ -1,10 +1,10 @@
 "use client";
 
-import { Loader2, Send } from "lucide-react";
+import { ExternalLink, Loader2, Send } from "lucide-react";
 import { useActionState } from "react";
 import { useFormStatus } from "react-dom";
 
-import { Button } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
 
 import { bookingEmailAction, type BookingEmailState } from "./email-actions";
 
@@ -40,6 +40,7 @@ export function SendETicketButton({
   bookingId,
   recipient,
   blockedReason,
+  viewHref,
 }: {
   bookingId: string;
   /** Empty when the booking has no contact address; nothing could be sent. */
@@ -52,6 +53,13 @@ export function SendETicketButton({
    * the same rules in `bookingEmailAction` — this only saves a round trip.
    */
   blockedReason?: string | undefined;
+  /**
+   * Where to open the document for reading, or `undefined` to offer no link.
+   *
+   * Left off by the e-ticket page itself, which is already that document —
+   * a link from a page back to itself is noise.
+   */
+  viewHref?: string | undefined;
 }) {
   const [state, formAction] = useActionState<BookingEmailState, FormData>(
     bookingEmailAction,
@@ -65,11 +73,30 @@ export function SendETicketButton({
 
   return (
     <div>
-      <form action={formAction}>
+      <form action={formAction} className="flex flex-wrap gap-2">
         <input type="hidden" name="bookingId" value={bookingId} />
         <input type="hidden" name="event" value="BOOKING_TICKETED" />
         <input type="hidden" name="intent" value="send" />
         <SubmitButton blockedReason={blocked} />
+
+        {/* Deliberately available even while the send is blocked: staff still
+            need to check the document while they wait for the signature.
+            An anchor cannot submit the form, so reading is never a send.
+
+            Named for what it opens rather than a bare "View", because the
+            authorization panel carries two of these side by side and two
+            links reading "View" are indistinguishable to a screen reader. */}
+        {viewHref ? (
+          <a
+            href={viewHref}
+            target="_blank"
+            rel="noopener noreferrer"
+            className={buttonVariants({ variant: "secondary" })}
+          >
+            <ExternalLink className="size-4" />
+            View e-ticket
+          </a>
+        ) : null}
       </form>
 
       {blocked ? (
