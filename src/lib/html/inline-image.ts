@@ -37,6 +37,28 @@ export const IMAGE_EXTENSIONS: Record<string, string> = {
 };
 
 /**
+ * The inverse: what to serve a stored key as.
+ *
+ * Derived from the extension in the key itself, which only the upload route
+ * could have set and only from `ALLOWED_IMAGE_TYPES`. A file that lied about
+ * its type on the way in therefore still cannot be served as HTML on the way
+ * out. Shared by the serving route and the mail attachment builder for the
+ * same reason the rest of this module is shared — two copies would drift.
+ */
+export const CONTENT_TYPE_BY_EXTENSION: Record<string, string> = {
+  png: "image/png",
+  jpg: "image/jpeg",
+  webp: "image/webp",
+  gif: "image/gif",
+};
+
+/** Content type for a storage key, or null when the extension is unknown. */
+export function contentTypeForKey(key: string): string | null {
+  const extension = key.split(".").pop()?.toLowerCase() ?? "";
+  return CONTENT_TYPE_BY_EXTENSION[extension] ?? null;
+}
+
+/**
  * Largest upload accepted, in bytes.
  *
  * A screenshot is well under this. The cap exists because the editor's markup

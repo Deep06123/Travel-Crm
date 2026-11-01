@@ -15,6 +15,10 @@ import { isProduction } from "@/lib/env";
 import { loggerFor } from "@/lib/logging/logger";
 import { getMailer } from "@/lib/mail";
 import {
+  prepareItineraryForEmail,
+  prepareItineraryForPreview,
+} from "@/lib/mail/inline-itinerary";
+import {
   defaultAuthorizationBody,
   renderBookingAuthorization,
   type AuthorizationOverride,
@@ -84,6 +88,9 @@ const AUTHORIZATION_SELECT = {
       arrivalAt: true,
     },
   },
+  // Only the itinerary from each detail: the raw PNR and the reservation text
+  // are staff working material and have no place in a customer's inbox.
+  flightDetail: { select: { itineraryHtml: true } },
   cruiseDetail: {
     select: {
       cruiseLine: true,
@@ -92,6 +99,7 @@ const AUTHORIZATION_SELECT = {
       sailDate: true,
       returnDate: true,
       nights: true,
+      itineraryHtml: true,
     },
   },
   // Passport numbers are deliberately not selected, as in the lifecycle
@@ -133,6 +141,19 @@ function billingAddress(booking: AuthorizationRow): string | null {
     .filter((part): part is string => Boolean(part));
 
   return parts.length > 0 ? parts.join(", ") : null;
+}
+
+/**
+ * The itinerary as stored, before its images have been relocated.
+ *
+ * Never rendered as-is: every `src` in it addresses an administrator-only
+ * route. `toAuthorizationData` leaves `itineraryHtml` unset for that reason,
+ * and each caller sets the prepared form on the data it renders from.
+ */
+function storedItinerary(booking: AuthorizationRow): string | null {
+  return booking.product === BookingProduct.CRUISE
+    ? (booking.cruiseDetail?.itineraryHtml ?? null)
+    : (booking.flightDetail?.itineraryHtml ?? null);
 }
 
 function toAuthorizationData(booking: AuthorizationRow): BookingAuthorizationData {
@@ -225,7 +246,13 @@ export async function previewAuthorizationEmail(
 
   if (!booking) return null;
 
-  const data = toAuthorizationData(booking);
+  // Data URIs, not `cid:`: there is no message here to attach to, and the
+  // preview renders in a sandboxed iframe where the stored path resolves to
+  // nothing.
+  const data: BookingAuthorizationData = {
+    ...toAuthorizationData(booking),
+    itineraryHtml: await prepareItineraryForPreview(storedItinerary(booking)),
+  };
 
   const rendered = renderBookingAuthorization(
     data,
@@ -366,8 +393,12 @@ export async function sendAuthorizationEmail({
     return { result: "suppressed", reason };
   }
 
+  // Prepared after the suppression checks above, so a booking that was never
+  // going to be emailed does not pull image bytes out of storage first.
+  const itinerary = await prepareItineraryForEmail(storedItinerary(booking));
+
   const rendered = renderBookingAuthorization(
-    toAuthorizationData(booking),
+    { ...toAuthorizationData(booking), itineraryHtml: itinerary.html },
     { signUrl, expiresAt },
     override,
   );
@@ -378,6 +409,7 @@ export async function sendAuthorizationEmail({
       subject: rendered.subject,
       text: rendered.text,
       html: rendered.html,
+      attachments: itinerary.attachments,
     });
 
     await record(NotificationStatus.SENT, {

@@ -19,6 +19,10 @@ import { withUpsertRetry } from "@/lib/db/upsert-retry";
 import { loggerFor } from "@/lib/logging/logger";
 import { getMailer } from "@/lib/mail";
 import {
+  prepareItineraryForEmail,
+  prepareItineraryForPreview,
+} from "@/lib/mail/inline-itinerary";
+import {
   renderBookingConfirmed,
   renderBookingTicketed,
   renderEditedEmail,
@@ -103,8 +107,13 @@ const BOOKING_SELECT = {
       sailDate: true,
       returnDate: true,
       nights: true,
+      itineraryHtml: true,
     },
   },
+  // Only the itinerary. The rest of the flight detail — the raw PNR, the
+  // locator — is working material for staff and has no place in a customer's
+  // inbox.
+  flightDetail: { select: { itineraryHtml: true } },
   // Passport numbers are deliberately not selected: nothing in a customer
   // email may carry one, and the safest way to guarantee that is for the data
   // never to be loaded.
@@ -173,7 +182,14 @@ export async function previewBookingEmail(
     throw new Error(`Booking ${bookingId} does not exist.`);
   }
 
-  const data = toEmailData(booking);
+  // Only the text part is returned, but the itinerary is still prepared
+  // rather than read raw: `htmlToPlainText` names an image it cannot flatten,
+  // and that count should match the images the sent message will carry.
+  const data: BookingEmailData = {
+    ...toEmailData(booking),
+    itineraryHtml: await prepareItineraryForPreview(storedItinerary(booking)),
+  };
+
   const rendered =
     event === BOOKING_CONFIRMED
       ? renderBookingConfirmed(data)
@@ -216,7 +232,14 @@ export async function getETicketPreview(
 
   if (!booking) return null;
 
-  const data = toEmailData(booking);
+  // Images inlined as data URIs: the preview renders in a `sandbox=""` iframe,
+  // an opaque origin that sends no cookies and cannot resolve the stored
+  // relative path, so the image would be broken here for the same reason it
+  // would be in a mailbox.
+  const data: BookingEmailData = {
+    ...toEmailData(booking),
+    itineraryHtml: await prepareItineraryForPreview(storedItinerary(booking)),
+  };
 
   const issued =
     booking.status === BookingStatus.TICKETED ||
@@ -355,7 +378,19 @@ export async function sendBookingEmail({
   // An operator-edited version replaces the generated one wholesale. The
   // booking data is still read above, because the recipient and the
   // suppression checks come from it either way.
-  const data = toEmailData(booking);
+  //
+  // An edited message carries no itinerary and so needs no attachments: the
+  // operator wrote the whole body, and attaching images nothing in it refers
+  // to would put unexplained files in the customer's inbox.
+  const itinerary = override
+    ? { html: null, attachments: [] }
+    : await prepareItineraryForEmail(storedItinerary(booking));
+
+  const data: BookingEmailData = {
+    ...toEmailData(booking),
+    itineraryHtml: itinerary.html,
+  };
+
   const rendered = override
     ? renderEditedEmail(override.subject, override.body)
     : event === BOOKING_CONFIRMED
@@ -373,6 +408,7 @@ export async function sendBookingEmail({
       subject: rendered.subject,
       text: rendered.text,
       html: rendered.html,
+      attachments: itinerary.attachments,
     });
 
     await prisma.notification.update({
@@ -414,6 +450,20 @@ export async function sendBookingEmail({
 
 /** Derived from the select above, so adding a field cannot desync the two. */
 type BookingRow = Prisma.BookingGetPayload<{ select: typeof BOOKING_SELECT }>;
+
+/**
+ * The itinerary as stored, before its images have been relocated.
+ *
+ * Never rendered directly: every `src` in it points at an administrator-only
+ * route. Callers pass it through `prepareItineraryForEmail` (or the preview
+ * equivalent) and set the result on the data, which is why `toEmailData` below
+ * leaves `itineraryHtml` unset rather than filling it in with this.
+ */
+function storedItinerary(booking: BookingRow): string | null {
+  return booking.product === BookingProduct.CRUISE
+    ? (booking.cruiseDetail?.itineraryHtml ?? null)
+    : (booking.flightDetail?.itineraryHtml ?? null);
+}
 
 function toEmailData(booking: BookingRow): BookingEmailData {
   const customerName =

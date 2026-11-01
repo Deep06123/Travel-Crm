@@ -63,6 +63,18 @@ export class SmtpMailAdapter implements MailAdapter {
       ...(message.replyTo ?? this.options.replyTo
         ? { replyTo: message.replyTo ?? this.options.replyTo }
         : {}),
+      // `cid` makes nodemailer place the part inline and reference it from the
+      // HTML, rather than hanging it off the message as a download.
+      ...(message.attachments?.length
+        ? {
+            attachments: message.attachments.map((attachment) => ({
+              filename: attachment.filename,
+              content: attachment.content,
+              contentType: attachment.contentType,
+              ...(attachment.cid ? { cid: attachment.cid } : {}),
+            })),
+          }
+        : {}),
     });
 
     return { providerReference: info.messageId };

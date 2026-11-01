@@ -226,4 +226,32 @@ describe("the emails use the same document", () => {
     expect(mail.html).toContain("Welcome aboard, Priya");
     expect(mail.html).not.toContain(CONFIRMED);
   });
+
+  it("prints the itinerary after the booking details", () => {
+    const mail = renderBookingTicketed({
+      ...BASE,
+      itineraryHtml: '<p>Gate closes 30 min before</p><img src="cid:tkt@booking">',
+    });
+
+    const details = mail.html.indexOf("Booking Details");
+    const itinerary = mail.html.indexOf("Itinerary");
+
+    expect(details).toBeGreaterThan(-1);
+    expect(itinerary).toBeGreaterThan(details);
+
+    // Markup, not escaped text, and the attachment reference is preserved.
+    expect(mail.html).toContain("<p>Gate closes 30 min before</p>");
+    expect(mail.html).toContain('src="cid:tkt@booking"');
+
+    // The plain-text part carries it too, for a client that reads only that.
+    expect(mail.text).toContain("Itinerary:");
+    expect(mail.text).toContain("Gate closes 30 min before");
+  });
+
+  it("prints no itinerary section when the booking has none", () => {
+    const mail = renderBookingConfirmed(BASE);
+
+    expect(mail.html).not.toContain("Itinerary");
+    expect(mail.text).not.toContain("Itinerary:");
+  });
 });

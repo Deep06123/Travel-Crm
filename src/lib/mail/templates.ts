@@ -4,6 +4,7 @@ import { formatCalendarDate, formatDate } from "@/lib/format";
 import { formatMoney } from "@/lib/financial/money";
 
 import { renderETicket } from "./eticket";
+import { htmlToPlainText } from "./html";
 
 /**
  * Customer-facing email bodies.
@@ -68,6 +69,19 @@ export interface BookingEmailData {
   emailTopHeading?: string | null;
   /** Support number for the e-ticket header, from the booking's TFN. */
   supportPhone?: string | null;
+  /**
+   * The itinerary composed in the booking's rich-text editor.
+   *
+   * Already sanitised — it is read back from the column `sanitiseRichText`
+   * wrote — and already passed through `prepareItineraryForEmail`, so every
+   * image `src` points at an attachment rather than at the administrator-only
+   * route it is stored under. Embedded as markup, not escaped; it is the one
+   * field in these messages that is markup by design.
+   *
+   * Null for a booking that has none, which both templates render as no
+   * section rather than as an empty one.
+   */
+  itineraryHtml?: string | null;
 }
 
 export interface RenderedEmail {
@@ -91,7 +105,27 @@ function escapeHtml(value: string): string {
     .replace(/'/g, "&#39;");
 }
 
+/**
+ * The itinerary for the plain-text part: the structured detail, then the
+ * composed one.
+ *
+ * Both, not one or the other. The segments are what the system knows; the
+ * composed block is what the agent wrote, and on some bookings it is the only
+ * itinerary there is.
+ */
 function itineraryLines(data: BookingEmailData): string[] {
+  return [...structuredItineraryLines(data), ...composedItineraryLines(data)];
+}
+
+function composedItineraryLines(data: BookingEmailData): string[] {
+  const composed = data.itineraryHtml?.trim();
+  if (!composed) return [];
+
+  const lines = htmlToPlainText(composed);
+  return lines.length > 0 ? ["", "Itinerary:", ...lines] : [];
+}
+
+function structuredItineraryLines(data: BookingEmailData): string[] {
   if (data.product === "CRUISE" && data.cruise) {
     const { cruiseLine, ship, departurePort, sailDate, returnDate, nights } =
       data.cruise;

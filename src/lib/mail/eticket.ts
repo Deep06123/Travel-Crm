@@ -1,6 +1,11 @@
 import { formatMoney } from "@/lib/financial/money";
 
-import { escapeHtml, formatTicketDate, sectionHeading } from "./html";
+import {
+  escapeHtml,
+  formatTicketDate,
+  itinerarySection,
+  sectionHeading,
+} from "./html";
 import { renderPolicySections } from "./policies";
 import type { BookingEmailData } from "./templates";
 
@@ -199,6 +204,12 @@ export function renderETicket(
       ${bookingDetailRows(data)}
     </table>
   </td></tr>
+
+  <!-- The itinerary as the agent composed it, below the structured detail it
+       elaborates on. Sometimes it is the carrier's own ticket as an image, in
+       which case this is the part of the email the customer actually travels
+       on. -->
+  ${itinerarySection(data.itineraryHtml)}
 
   <tr><td style="padding:16px 20px;border-top:1px solid #e5e7eb;">
     <p style="margin:0;font-size:12px;color:#777777;line-height:1.5;">

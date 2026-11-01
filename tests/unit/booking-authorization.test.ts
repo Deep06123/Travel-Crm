@@ -186,6 +186,42 @@ describe("renderBookingAuthorization", () => {
     expect(html).not.toContain("Your card was charged");
     expect(html).not.toContain("It is your e-ticket receipt.");
   });
+
+  it("prints the itinerary after the charges and before the signing button", () => {
+    const { html, text } = renderBookingAuthorization(
+      {
+        ...BASE,
+        itineraryHtml: '<p>JFK to LHR, 10 Jan</p><img src="cid:ticket@booking">',
+      },
+      LINK,
+    );
+
+    const charges = html.indexOf("Total Charges &amp; Authorization");
+    const itinerary = html.indexOf("Itinerary");
+    const button = html.indexOf("CLICK TO CONFIRM");
+
+    // Order is the point: the cardholder reads what they are agreeing to
+    // before they are asked to agree to it.
+    expect(charges).toBeGreaterThan(-1);
+    expect(itinerary).toBeGreaterThan(charges);
+    expect(button).toBeGreaterThan(itinerary);
+
+    // Embedded as markup, and the attachment reference survives untouched.
+    expect(html).toContain("<p>JFK to LHR, 10 Jan</p>");
+    expect(html).toContain('src="cid:ticket@booking"');
+
+    // The plain-text part says so too, naming the image it cannot flatten.
+    expect(text).toContain("Itinerary:");
+    expect(text).toContain("JFK to LHR, 10 Jan");
+    expect(text).toContain("[image attached]");
+  });
+
+  it("prints no itinerary section when the booking has none", () => {
+    const { html, text } = renderBookingAuthorization(BASE, LINK);
+
+    expect(html).not.toContain("Itinerary");
+    expect(text).not.toContain("Itinerary:");
+  });
 });
 
 /**

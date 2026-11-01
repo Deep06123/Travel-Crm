@@ -1,5 +1,6 @@
 import { requireAuthOrThrow } from "@/lib/auth/dal";
 import {
+  CONTENT_TYPE_BY_EXTENSION,
   INLINE_IMAGE_ROUTE,
   isInlineImageSrc,
   storageKeyFromPath,
@@ -11,13 +12,14 @@ import {
 } from "@/lib/permissions";
 import { ObjectNotFoundError, getStorage } from "@/lib/storage";
 
-/** Content type per extension, from the allow-list the upload enforced. */
-const CONTENT_TYPES: Record<string, string> = {
-  png: "image/png",
-  jpg: "image/jpeg",
-  webp: "image/webp",
-  gif: "image/gif",
-};
+/**
+ * Content type per extension, from the allow-list the upload enforced.
+ *
+ * Shared with the mail attachment builder, which has to label the same bytes
+ * for a different transport — two copies of this map would be two answers to
+ * the same question.
+ */
+const CONTENT_TYPES = CONTENT_TYPE_BY_EXTENSION;
 
 /**
  * Serves an image embedded in an itinerary.

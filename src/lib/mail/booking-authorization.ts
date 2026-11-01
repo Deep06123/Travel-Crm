@@ -4,7 +4,13 @@ import type { CardType } from "@/generated/prisma/enums";
 import { CARD_BRAND_RULES } from "@/features/bookings/card-validation";
 import { formatMoney } from "@/lib/financial/money";
 
-import { escapeHtml, formatTicketDate, sectionHeading } from "./html";
+import {
+  escapeHtml,
+  formatTicketDate,
+  htmlToPlainText,
+  itinerarySection,
+  sectionHeading,
+} from "./html";
 import { renderPolicySections } from "./policies";
 import type { BookingEmailData, RenderedEmail } from "./templates";
 
@@ -158,6 +164,15 @@ export interface AuthorizationOverride {
   body?: string | undefined;
 }
 
+/** The composed itinerary for the plain-text part, or nothing. */
+function itineraryText(html: string | null | undefined): string[] {
+  const composed = html?.trim();
+  if (!composed) return [];
+
+  const lines = htmlToPlainText(composed);
+  return lines.length > 0 ? ["", "Itinerary:", ...lines] : [];
+}
+
 /** Plain-text paragraphs, blank lines dropped. */
 function paragraphs(body: string): string[] {
   return body
@@ -240,6 +255,10 @@ export function renderBookingAuthorization(
     "",
     `Total ${isCruise ? "cruise" : "flight"} booking amount: ${total}`,
     ...charges,
+    // Mirrors the HTML part, where the itinerary sits between the charges and
+    // the call to action: the cardholder reads what they are agreeing to
+    // before they are asked to agree to it, in either part of the message.
+    ...itineraryText(data.itineraryHtml),
     "",
     ACKNOWLEDGEMENT,
     "",
@@ -323,6 +342,11 @@ export function renderBookingAuthorization(
       .join("")}
     <p style="margin:16px 0 0;font-size:13px;line-height:1.6;color:#333333;">${escapeHtml(ACKNOWLEDGEMENT)}</p>
   </td></tr>
+
+  <!-- Above the call to action deliberately: the itinerary is what the
+       cardholder is being asked to agree to, so it has to be readable before
+       the button, not after it. -->
+  ${itinerarySection(data.itineraryHtml)}
 
   <tr><td style="padding:10px 20px 28px;text-align:center;">
     ${callToAction(signUrl)}

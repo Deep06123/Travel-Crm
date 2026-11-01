@@ -7,12 +7,28 @@ import "server-only";
  * text-only client, a screen reader and a spam filter all read the plain part,
  * and an HTML-only message scores badly with every one of them.
  */
+/**
+ * A file carried inside the message.
+ *
+ * Present for images embedded in an itinerary, which cannot be linked: they
+ * are served from an administrator-only route, so a customer's mail client
+ * could never fetch one. Referenced from the HTML part as `src="cid:<cid>"`.
+ */
+export interface MailAttachment {
+  filename: string;
+  content: Buffer;
+  contentType: string;
+  /** Set for an image referenced by the body; absent for a plain attachment. */
+  cid?: string | undefined;
+}
+
 export interface MailMessage {
   to: string;
   subject: string;
   text: string;
   html?: string;
   replyTo?: string | undefined;
+  attachments?: readonly MailAttachment[] | undefined;
 }
 
 export interface MailResult {
