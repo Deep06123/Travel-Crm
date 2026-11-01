@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useSyncExternalStore } from "react";
 
 /**
  * The consent the customer agrees to.
@@ -76,6 +76,57 @@ function describeClient() {
   };
 }
 
+/**
+ * `describeClient()`, computed once and cached.
+ *
+ * `useSyncExternalStore` may call the snapshot on any render and compares the
+ * result by identity, so handing it a fresh object each time would re-render
+ * forever. The description is a property of the browser, not of this component,
+ * so one module-level value is also the honest shape for it.
+ */
+let cachedClient: ReturnType<typeof describeClient> | null = null;
+
+function clientSnapshot(): ReturnType<typeof describeClient> {
+  return (cachedClient ??= describeClient());
+}
+
+/**
+ * `null` on the server and through hydration, so the first client render
+ * matches the HTML the server sent and React then re-renders with the real
+ * description. Same two-step as the effect this replaces, without a setState
+ * in an effect body.
+ */
+function serverClientSnapshot(): null {
+  return null;
+}
+
+/** Nothing to subscribe to: the description never changes after it is read. */
+function subscribeToClient(): () => void {
+  return () => {};
+}
+
+/** One line of the security block. `undefined` until the browser value lands. */
+function SecurityRow({
+  label,
+  value,
+  last,
+}: {
+  label: string;
+  value: string | undefined;
+  last?: boolean;
+}) {
+  return (
+    <p
+      className={`flex justify-between gap-3 text-[13px] ${
+        last ? "" : "mb-2.5 border-b border-[#e5e8ef] pb-2.5"
+      }`}
+    >
+      <strong className="text-[#444]">{label}</strong>
+      <span className="break-words text-right">{value ?? "Detecting…"}</span>
+    </p>
+  );
+}
+
 interface Props {
   token: string;
   /** Rendered as the signature and submitted as the name authorized. */
@@ -103,6 +154,16 @@ export function SignatureForm({ token, customerName, contactPhone }: Props) {
   const [consented, setConsented] = useState(false);
   const [phone, setPhone] = useState(contactPhone);
   const [status, setStatus] = useState<Status>({ state: "idle" });
+
+  // Shown as well as submitted, so the customer can see exactly what is being
+  // recorded against their signature before they agree to it. Subscribed to
+  // rather than read during render: on the server `describeClient` returns
+  // blanks, and rendering those first would be a hydration mismatch.
+  const client = useSyncExternalStore(
+    subscribeToClient,
+    clientSnapshot,
+    serverClientSnapshot,
+  );
 
   const signed = status.state === "done";
   const sending = status.state === "sending";
@@ -205,7 +266,27 @@ export function SignatureForm({ token, customerName, contactPhone }: Props) {
         with your signature.
       </p>
 
-      <p className="mt-6 text-xs leading-relaxed text-[#777]">
+      <h2 className="mb-2 mt-6 text-base font-semibold text-[#173b70]">
+        Customer Security Information
+      </h2>
+      <div className="rounded-lg bg-[#f5f7fb] p-4">
+        <SecurityRow label="Device" value={client?.device} />
+        <SecurityRow label="Operating System" value={client?.operatingSystem} />
+        <SecurityRow label="Browser" value={client?.browser} />
+        <SecurityRow label="Screen Size" value={client?.screenSize} />
+        <SecurityRow label="Timezone" value={client?.clientTimezone} />
+        {/* Neither is known to the page: the server reads the address off the
+            request and resolves the location from it, precisely so a client
+            cannot choose either one. */}
+        <SecurityRow label="IP Address" value="Recorded securely by server" />
+        <SecurityRow
+          label="Location"
+          value="Approximate IP location, if available"
+          last
+        />
+      </div>
+
+      <p className="mt-4 text-xs leading-relaxed text-[#777]">
         Your IP address and approximate location will be recorded by the booking
         server when you submit your confirmation. IP-based location is
         approximate and may be inaccurate.

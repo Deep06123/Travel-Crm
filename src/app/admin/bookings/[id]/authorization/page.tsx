@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 
 import { requirePermission } from "@/lib/auth/dal";
+import { isProduction } from "@/lib/env";
 import { PERMISSIONS } from "@/lib/permissions";
 import { previewAuthorizationEmail } from "@/server/services/booking-authorization-service";
 
@@ -34,7 +35,22 @@ export default async function AuthorizationEmailPage({
   await requirePermission(PERMISSIONS.BOOKING_SIGNATURE_SEND);
 
   const { id } = await params;
-  const preview = await previewAuthorizationEmail(id);
+
+  /**
+   * Development gets a working confirm button; production gets the shape of
+   * one.
+   *
+   * The route behind this link mints a token and opens the signing page, which
+   * is the only way to reach it on a machine with no mail transport. It is a
+   * real link with a real cost — it revokes any unsigned link for the booking,
+   * exactly as a resend does — so the banner below says so rather than letting
+   * it look free.
+   */
+  const signUrl = isProduction()
+    ? ""
+    : `/admin/bookings/${encodeURIComponent(id)}/authorization/sign`;
+
+  const preview = await previewAuthorizationEmail(id, {}, signUrl);
 
   if (!preview) notFound();
 
@@ -53,11 +69,21 @@ export default async function AuthorizationEmailPage({
           </span>
         </div>
 
-        <p className="mb-4 rounded-md bg-status-info-bg px-3 py-2 text-xs text-navy-700">
-          This is a preview. <strong>Confirm</strong> below is inert — a signing
-          link is issued only when the email is actually sent, because issuing
-          one here would replace any link the customer is already holding.
-        </p>
+        {signUrl === "" ? (
+          <p className="mb-4 rounded-md bg-status-info-bg px-3 py-2 text-xs text-navy-700">
+            This is a preview. <strong>Confirm</strong> below is inert — a
+            signing link is issued only when the email is actually sent, because
+            issuing one here would replace any link the customer is already
+            holding.
+          </p>
+        ) : (
+          <p className="mb-4 rounded-md bg-status-warning-bg px-3 py-2 text-xs text-status-warning">
+            Development build. <strong>Click to confirm</strong> below issues a
+            real signing link and opens the signing page in a new tab — and, as
+            a resend does, revokes any unsigned link already out for this
+            booking. In production this button is inert.
+          </p>
+        )}
 
         {/* The email body, rendered as it will arrive. `srcDoc` isolates it in
             its own document so the application's stylesheet cannot leak in and
@@ -67,8 +93,16 @@ export default async function AuthorizationEmailPage({
           srcDoc={preview.html}
           className="h-[1800px] w-full rounded-lg border border-line bg-white shadow-sm"
           // Nothing in this document needs to run, and it carries the booking's
-          // billing detail.
-          sandbox=""
+          // billing detail — so nothing is allowed, with one exception.
+          //
+          // Development additionally allows the confirm link to open a tab.
+          // A sandboxed frame cannot navigate itself, and a popup inherits the
+          // sandbox unless it is let out — the signing page is a client
+          // component, so inheriting "no scripts" would hand over a dead form.
+          // Neither flag lets anything run *in this frame*.
+          sandbox={
+            signUrl === "" ? "" : "allow-popups allow-popups-to-escape-sandbox"
+          }
         />
       </div>
     </div>

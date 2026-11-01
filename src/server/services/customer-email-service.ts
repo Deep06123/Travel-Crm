@@ -10,6 +10,10 @@ import {
 } from "@/generated/prisma/enums";
 import type { Prisma } from "@/generated/prisma/client";
 import { renderETicket } from "@/lib/mail/eticket";
+import {
+  bookingRecipientLine,
+  bookingRecipients,
+} from "@/lib/bookings/recipients";
 import { prisma } from "@/lib/db/prisma";
 import { withUpsertRetry } from "@/lib/db/upsert-retry";
 import { loggerFor } from "@/lib/logging/logger";
@@ -78,6 +82,7 @@ const BOOKING_SELECT = {
   emailTopHeading: true,
   contactName: true,
   contactEmail: true,
+  billingEmails: true,
   customer: { select: { firstName: true, lastName: true, email: true } },
   segments: {
     orderBy: { sequence: "asc" },
@@ -175,8 +180,7 @@ export async function previewBookingEmail(
       : renderBookingTicketed(data);
 
   return {
-    recipient:
-      booking.contactEmail?.trim() || booking.customer.email?.trim() || "",
+    recipient: bookingRecipientLine(booking),
     subject: rendered.subject,
     body: rendered.text,
   };
@@ -239,8 +243,7 @@ export async function getETicketPreview(
   );
 
   return {
-    recipient:
-      booking.contactEmail?.trim() || booking.customer.email?.trim() || "",
+    recipient: bookingRecipientLine(booking),
     subject: rendered.subject,
     html,
   };
@@ -276,8 +279,8 @@ export async function sendBookingEmail({
     throw new Error(`Booking ${bookingId} does not exist.`);
   }
 
-  const recipient =
-    booking.contactEmail?.trim() || booking.customer.email?.trim() || null;
+  const recipients = bookingRecipients(booking);
+  const recipient = recipients.length > 0 ? recipients.join(", ") : null;
 
   const upsert = async (
     data: {

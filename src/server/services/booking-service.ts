@@ -16,6 +16,7 @@ import { businessDayBounds } from "@/lib/format";
 import { sanitiseRichText } from "@/lib/html/sanitise";
 import { prisma } from "@/lib/db/prisma";
 import { nextBookingNumber, nextCustomerReference } from "@/lib/db/references";
+import { withUpsertRetry } from "@/lib/db/upsert-retry";
 import {
   paginate,
   resolveSort,
@@ -43,6 +44,45 @@ import type {
  * schema enforces.
  */
 
+/**
+ * Resolve the supplier typed on a booking form to an `McoSupplier` row.
+ *
+ * The field is free text rather than a picker, so a name that is not on file
+ * yet creates the supplier. Only the name is known at this point — `mailFrom`,
+ * the contact details and the notes stay blank for Admin → MCO suppliers to
+ * fill in.
+ *
+ * An `upsert` under `withUpsertRetry`, not a `findFirst` then a `create`: the
+ * name column is unique, so two agents typing the same new supplier name at
+ * once would otherwise collide and fail one of the two bookings outright. The
+ * retry re-reads and takes the no-op update branch on the row the other write
+ * committed.
+ *
+ * Deliberately outside the booking transaction. MySQL's REPEATABLE READ pins a
+ * transaction's snapshot at its first read, so a retry *inside* the transaction
+ * would keep failing to see the row that just caused the conflict. The cost is
+ * that a booking which then fails to save leaves the supplier behind — a
+ * name-only row in reference data, which the next booking for that supplier
+ * reuses rather than duplicating.
+ */
+async function resolveMcoSupplierId(
+  name: string | undefined,
+): Promise<string | null> {
+  const trimmed = name?.trim();
+  if (!trimmed) return null;
+
+  const supplier = await withUpsertRetry("mco-supplier", () =>
+    prisma.mcoSupplier.upsert({
+      where: { name: trimmed },
+      create: { name: trimmed },
+      update: {},
+      select: { id: true },
+    }),
+  );
+
+  return supplier.id;
+}
+
 export interface CreateFlightBookingInput {
   booking: FlightBookingInput;
   /** Minor-unit amounts, already converted against the booking's currency. */
@@ -62,6 +102,8 @@ export async function createFlightBooking(
   { booking, amounts, passengers, segments }: CreateFlightBookingInput,
   actorId: string,
 ): Promise<{ id: string; bookingNumber: string }> {
+  const mcoSupplierId = await resolveMcoSupplierId(booking.mcoSupplierName);
+
   return prisma.$transaction(async (tx) => {
     const bookingNumber = await nextBookingNumber(tx);
 
@@ -79,7 +121,7 @@ export async function createFlightBooking(
         createdById: actorId,
         assignedAgentId: booking.assignedAgentId ?? null,
         supplierId: booking.supplierId ?? null,
-        mcoSupplierId: booking.mcoSupplierId ?? null,
+        mcoSupplierId,
         tfnId: booking.tfnId ?? null,
         source: booking.source ?? null,
         language: booking.language ?? null,
@@ -700,6 +742,8 @@ export async function createCruiseBooking(
   { booking, amounts, guests, splits = [] }: CreateCruiseBookingInput,
   actorId: string,
 ): Promise<{ id: string; bookingNumber: string }> {
+  const mcoSupplierId = await resolveMcoSupplierId(booking.mcoSupplierName);
+
   return prisma.$transaction(async (tx) => {
     const bookingNumber = await nextBookingNumber(tx);
     const customerId = await resolveCruiseCustomerId(tx, booking, guests, actorId);
@@ -717,7 +761,7 @@ export async function createCruiseBooking(
         createdById: actorId,
         assignedAgentId: booking.assignedAgentId ?? null,
         supplierId: booking.supplierId ?? null,
-        mcoSupplierId: booking.mcoSupplierId ?? null,
+        mcoSupplierId,
         tfnId: booking.tfnId ?? null,
         source: booking.source ?? null,
         language: booking.language ?? null,

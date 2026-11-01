@@ -4,7 +4,8 @@ import type { CardType } from "@/generated/prisma/enums";
 import { CARD_BRAND_RULES } from "@/features/bookings/card-validation";
 import { formatMoney } from "@/lib/financial/money";
 
-import { escapeHtml, formatTicketDate } from "./eticket";
+import { escapeHtml, formatTicketDate, sectionHeading } from "./html";
+import { renderPolicySections } from "./policies";
 import type { BookingEmailData, RenderedEmail } from "./templates";
 
 /**
@@ -62,10 +63,6 @@ function maskedCard(data: BookingAuthorizationData): string | null {
   if (!last4) return brand;
 
   return brand ? `${brand} (****${last4})` : `****${last4}`;
-}
-
-function sectionHeading(title: string): string {
-  return `<tr><td style="background:#0b1f44;padding:12px 20px;color:#ffffff;font-size:17px;font-weight:normal;">${escapeHtml(title)}</td></tr>`;
 }
 
 const CELL = "padding:8px 10px;border:1px solid #d9dee5;font-size:13px;";
@@ -129,37 +126,44 @@ const ACKNOWLEDGEMENT =
   "fully understand and agree to the itinerary and ticket restrictions. I have " +
   "checked and verified all details, including passenger names, dates and timings.";
 
-const BOOKING_POLICY = [
-  "Cards will be charged only after we receive your authorization from the cardholder.",
-  "You will receive your e-tickets and carrier confirmation in a separate email.",
-  "Tickets are issued once the payment has been successfully processed.",
-  "If you do not receive an email or call within 24 hours of making this reservation, please contact us.",
-  "We strongly recommend all travellers confirm the status of their flight at least 24–48 hours before departure.",
-];
+/**
+ * The message block at the top of the email, as plain text.
+ *
+ * Split out so the operator can be shown the generated wording, edit it, and
+ * send what they read. Everything below it — the traveller table, the card
+ * authorization detail, the charges, the signing button and the policies — is
+ * generated from the booking and is deliberately not editable: it is the
+ * document the customer is being asked to authorize, and hand-typed figures in
+ * it would be exactly the discrepancy a dispute turns on.
+ */
+export function defaultAuthorizationBody(
+  data: BookingAuthorizationData,
+): string {
+  return [
+    `Dear ${data.customerName},`,
+    "Greetings for the day!",
+    "As per our conversation, we have made the changes to your itinerary. We request you to kindly go through it thoroughly, including the travel details and passenger information, and confirm that all details are correct. If you notice any discrepancies, please inform us right now, as later changes may not be permitted or might be subject to penalties and fees.",
+  ].join("\n\n");
+}
 
-const CHANGE_RULES = [
-  "Travel itinerary changes, if permitted by the airline fare rules, may incur a change fee imposed by the airline, which can vary by market, carrier and fare conditions. An administrative fee may also apply.",
-  "Name changes are not permitted under any circumstances.",
-  "Tickets are generally non-refundable unless the airline's fare rules say otherwise. On a refundable ticket the airline may apply a cancellation penalty as per its fare rules.",
-  "Refunds, where applicable, are processed from the date the cancellation request is created and are issued in the same form of payment used at the time of booking.",
-  "No refunds are provided in the case of a no-show.",
-];
+/**
+ * What the operator typed in the editor, where they have edited anything.
+ *
+ * Both fields are optional and independent at this level; the action that
+ * collects them is what insists on having both or neither.
+ */
+export interface AuthorizationOverride {
+  subject?: string | undefined;
+  /** Plain text. Blank lines separate paragraphs; the template wraps it. */
+  body?: string | undefined;
+}
 
-const TRAVEL_RULES = [
-  "All passengers must hold the valid travel documents, including a valid passport and any necessary visas, at the time of travel.",
-  "Please review your tickets and itinerary carefully on receipt. All times shown are local time.",
-  "Arrive at the airport at least 3 hours before an international departure and 2 hours before a domestic one.",
-  "All international flights should be reconfirmed at least 72 hours prior to departure.",
-  "Tickets submitted for refund or reissue are subject to the applicable airline charges, if any.",
-  "We do not assume responsibility for, and will not compensate passengers for, travel interruptions caused by circumstances beyond our control, including acts of God or changes made by airlines, hotels, cruise companies or tour operators.",
-  "We strongly advise all customers to purchase travel insurance and to review the terms and conditions applicable to their tickets.",
-  "Please keep a copy of this email for your records. It serves as confirmation of your booking request; the e-ticket receipt will be sent shortly.",
-];
-
-function bulletList(items: readonly string[]): string {
-  return `<ul style="margin:0;padding-left:20px;font-size:13px;color:#444444;line-height:1.6;">${items
-    .map((item) => `<li style="margin-bottom:6px;">${escapeHtml(item)}</li>`)
-    .join("")}</ul>`;
+/** Plain-text paragraphs, blank lines dropped. */
+function paragraphs(body: string): string[] {
+  return body
+    .split(/\r?\n\s*\r?\n/)
+    .map((part) => part.trim())
+    .filter(Boolean);
 }
 
 export interface AuthorizationLink {
@@ -167,16 +171,53 @@ export interface AuthorizationLink {
    * The one-use link minted by `booking-signature-service`. Interpolated into
    * an `href` rather than escaped as text, so the caller must pass a URL it
    * built itself — never anything a customer supplied.
+   *
+   * Empty renders the call to action as text rather than a link, for the
+   * preview — where no token has been minted and there is nowhere to go. It
+   * must not be a placeholder `href`: the preview displays this document in a
+   * `srcDoc` iframe, whose base URL is the admin page's own, so even a bare
+   * fragment navigates the frame off the email and onto a page it cannot load.
    */
   signUrl: string;
   /** Printed in the email so the customer knows not to sit on it. */
   expiresAt: Date;
 }
 
-/** Renders the authorization email. */
+const CTA_STYLE =
+  "display:inline-block;padding:16px 38px;background:#1769e0;color:#ffffff;" +
+  "font-size:17px;font-weight:bold;text-decoration:none;border-radius:6px;";
+
+/**
+ * The confirm button, as a link or as the shape of one.
+ *
+ * A `<span>` rather than an anchor with a dead `href` when there is no link to
+ * give. The preview renders this document inside a `srcDoc` iframe, which
+ * inherits the admin page's base URL, so any `href` at all — including `#` —
+ * takes the frame off the email and onto a page the sandbox cannot load. It
+ * looks identical either way, which is the point of a preview.
+ */
+function callToAction(signUrl: string): string {
+  return signUrl === ""
+    ? `<span style="${CTA_STYLE}opacity:0.75;">CLICK TO CONFIRM</span>`
+    : // `target` matters in one place only: in the preview this document sits
+      // in a sandboxed iframe, which cannot navigate itself, so the link has
+      // to open a tab to go anywhere. Mail clients open links in a browser
+      // regardless, so it costs the real email nothing.
+      `<a href="${signUrl}" target="_blank" rel="noopener" style="${CTA_STYLE}">CLICK TO CONFIRM</a>`;
+}
+
+/**
+ * Renders the authorization email.
+ *
+ * `override` carries an operator's edits from the preview editor. An edited
+ * subject and message replace the generated ones; nothing else about the
+ * document can be edited, so an email sent from the editor still states the
+ * same charges and still carries the signing link.
+ */
 export function renderBookingAuthorization(
   data: BookingAuthorizationData,
   { signUrl, expiresAt }: AuthorizationLink,
+  override: AuthorizationOverride = {},
 ): RenderedEmail {
   const total = formatMoney(data.totalMinor, data.currency);
   const card = maskedCard(data);
@@ -184,15 +225,12 @@ export function renderBookingAuthorization(
   const charges = chargeLines(data);
   const isCruise = data.product === "CRUISE";
 
+  const message = paragraphs(
+    override.body?.trim() || defaultAuthorizationBody(data),
+  );
+
   const text = [
-    `Dear ${data.customerName},`,
-    "",
-    "Greetings for the day!",
-    "",
-    "As per our conversation, we have made the changes to your itinerary. Please",
-    "go through it thoroughly, including the travel details and passenger",
-    "information, and confirm that all details are correct.",
-    "",
+    ...message.flatMap((part) => [part, ""]),
     `Booking ID: ${data.bookingNumber}`,
     `Confirmation: ${confirmation}`,
     `Booked on: ${formatTicketDate(data.bookedAt)}`,
@@ -223,9 +261,15 @@ export function renderBookingAuthorization(
   </td></tr>
 
   <tr><td style="padding:18px 20px;">
-    <p style="margin:0 0 8px;font-size:14px;font-weight:bold;">Dear ${escapeHtml(data.customerName)},</p>
-    <p style="margin:0 0 6px;font-size:14px;">Greetings for the day!</p>
-    <p style="margin:0;font-size:14px;line-height:1.6;">As per our conversation, we have made the changes to your itinerary. We request you to kindly go through it thoroughly, including the travel details and passenger information, and confirm that all details are correct. If you notice any discrepancies, please inform us right now, as later changes may not be permitted or might be subject to penalties and fees.</p>
+    ${message
+      .map((part, index) => {
+        const last = index === message.length - 1;
+        // The opening line is the salutation in the generated wording and
+        // reads as one in an edited message too, so it keeps its weight.
+        const weight = index === 0 ? "font-weight:bold;" : "";
+        return `<p style="margin:0 0 ${last ? "0" : "8px"};font-size:14px;line-height:1.6;${weight}">${escapeHtml(part).replace(/\r?\n/g, "<br />")}</p>`;
+      })
+      .join("")}
   </td></tr>
 
   <tr><td style="padding:0 20px 18px;">
@@ -281,28 +325,18 @@ export function renderBookingAuthorization(
   </td></tr>
 
   <tr><td style="padding:10px 20px 28px;text-align:center;">
-    <a href="${signUrl}" style="display:inline-block;padding:16px 38px;background:#1769e0;color:#ffffff;font-size:17px;font-weight:bold;text-decoration:none;border-radius:6px;">CLICK TO CONFIRM</a>
+    ${callToAction(signUrl)}
     <p style="margin:12px 0 0;font-size:12px;color:#777777;">This link is for you alone and stops working after ${escapeHtml(formatTicketDate(expiresAt))}.</p>
   </td></tr>
 
-  ${sectionHeading("Booking Policy")}
-  <tr><td style="padding:16px 20px;">${bulletList(BOOKING_POLICY)}</td></tr>
-
-  ${sectionHeading("Change Rules")}
-  <tr><td style="padding:16px 20px;">${bulletList(CHANGE_RULES)}</td></tr>
-
-  ${sectionHeading(isCruise ? "Cruise Rules and Restrictions" : "Flight Rules and Restrictions")}
-  <tr><td style="padding:16px 20px;">${bulletList(TRAVEL_RULES)}</td></tr>
-
-  <tr><td style="padding:16px 20px;border-top:1px solid #e5e7eb;text-align:center;">
-    <div style="font-size:15px;font-weight:bold;color:#333333;">We are open 24x7 — Call us @ <span style="color:#0000cc;">${escapeHtml(data.supportPhone ?? "")}</span></div>
-  </td></tr>
+  ${renderPolicySections({ document: "authorization", isCruise, supportPhone: data.supportPhone })}
 
 </table>
 </body></html>`;
 
   return {
     subject:
+      override.subject?.trim() ||
       data.customEmailSubject?.trim() ||
       `Please confirm your booking — ${data.bookingNumber}`,
     text,

@@ -709,7 +709,7 @@ model BookingSignature {
 
   /// Where the link was sent. Snapshotted, because the booking's contact
   /// address can be edited after the fact and the evidence must not move.
-  recipientEmail String
+  recipientEmail String   @db.Text
   expiresAt      DateTime
   sentAt         DateTime   @default(now())
   sentById       String?
@@ -1470,7 +1470,9 @@ model Notification {
   booking   Booking? @relation(fields: [bookingId], references: [id], onDelete: SetNull)
 
   /// Email address, phone number or AdminUser id depending on `channel`.
-  recipient String
+  /// Text, not VARCHAR: an email recipient is every address in the billing
+  /// section's Email IDs field, which is a comma-separated list.
+  recipient String  @db.Text
   template  String?
   payload   Json?
 
@@ -1484,7 +1486,11 @@ model Notification {
 
   @@index([status, createdAt])
   @@index([eventType, createdAt])
-  @@index([recipient])
+  /// Prefixed, because MySQL cannot index a TEXT column at full width. 191 is
+  /// the width the column had before it became TEXT, so the index covers every
+  /// single-address lookup exactly as it did — and matches the prefix the
+  /// `recipient_lists` migration builds.
+  @@index([recipient(length: 191)])
 }
 
 /// Inbound provider event. The unique constraint on (provider, externalId)

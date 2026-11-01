@@ -133,6 +133,72 @@ describe("renderETicket", () => {
     expect(html).toContain("sail with");
     expect(html).toContain("ROYAL CARIBBEAN");
   });
+
+  /**
+   * The terms at the foot of the document.
+   *
+   * The e-ticket is the message a customer still has months later, when a
+   * change fee or a no-show is being argued about, so it carries the same
+   * rules the authorization email stated.
+   */
+  it("prints the policy sections at the foot of the document", () => {
+    const html = renderETicket(BASE, CONFIRMED, "x");
+
+    expect(html).toContain("Booking Policy");
+    expect(html).toContain("Change Rules");
+    expect(html).toContain("Flight Rules and Restrictions");
+    expect(html).toContain("No refunds are provided in the case of a no-show.");
+    expect(html).toContain("We are open 24x7");
+  });
+
+  /**
+   * The customer is holding the e-ticket while they read this, so the terms
+   * cannot promise to send them one.
+   */
+  it("writes the stage-dependent lines for a document already issued", () => {
+    const html = renderETicket(BASE, CONFIRMED, "x");
+
+    expect(html).toContain("Your card was charged only after we received");
+    expect(html).toContain(
+      "Your e-tickets and carrier confirmation are set out in this email.",
+    );
+    expect(html).toContain("It is your e-ticket receipt.");
+
+    expect(html).not.toContain("will receive your e-tickets");
+    expect(html).not.toContain("the e-ticket receipt will be sent shortly");
+    expect(html).not.toContain("Cards will be charged only after");
+    expect(html).not.toContain("within 24 hours of making this reservation");
+  });
+
+  it("titles the last policy section for the product", () => {
+    const html = renderETicket(
+      {
+        ...BASE,
+        product: "CRUISE",
+        segments: [],
+        cruise: {
+          cruiseLine: "Royal Caribbean",
+          ship: "Wonder of the Seas",
+          departurePort: "Miami",
+          sailDate: new Date("2027-03-01T00:00:00Z"),
+          returnDate: new Date("2027-03-08T00:00:00Z"),
+          nights: 7,
+        },
+      },
+      CONFIRMED,
+      "x",
+    );
+
+    expect(html).toContain("Cruise Rules and Restrictions");
+    expect(html).not.toContain("Flight Rules and Restrictions");
+  });
+
+  it("omits the call-us line when the booking has no support number", () => {
+    const html = renderETicket({ ...BASE, supportPhone: null }, CONFIRMED, "x");
+
+    expect(html).toContain("Booking Policy");
+    expect(html).not.toContain("We are open 24x7");
+  });
 });
 
 describe("the emails use the same document", () => {

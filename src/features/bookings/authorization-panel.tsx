@@ -1,13 +1,14 @@
 "use client";
 
-import { ExternalLink, Loader2, Send } from "lucide-react";
-import { useActionState } from "react";
+import { ExternalLink, Loader2, Pencil, Send } from "lucide-react";
+import { useActionState, useState } from "react";
 import { useFormStatus } from "react-dom";
 
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Badge } from "@/components/ui/status-badge";
 import type { BookingSignatureStatus } from "@/generated/prisma/enums";
 
+import { EmailEditor } from "./email-editor";
 import {
   sendAuthorizationEmailAction,
   type AuthorizationState,
@@ -83,13 +84,50 @@ function location(row: SignatureRow): string | null {
   return parts.length > 0 ? parts.join(", ") : null;
 }
 
+/**
+ * Clickable even when the send cannot succeed.
+ *
+ * The button used to be disabled whenever the booking had no contact address.
+ * It reads as a broken control: an operator sees a greyed-out Send, not the
+ * sentence underneath explaining why. Letting the click through means the
+ * action answers in the operator's own words — and the server applies the rule
+ * either way, so nothing can leave that should not. `pending` still disables
+ * it, which is the one case where a second click would do harm.
+ */
 function SubmitButton({ label, blocked }: { label: string; blocked?: string }) {
   const { pending } = useFormStatus();
 
   return (
-    <Button type="submit" disabled={pending || blocked !== undefined} title={blocked}>
+    <Button type="submit" disabled={pending} title={blocked}>
       {pending ? <Loader2 className="animate-spin" /> : <Send />}
       {pending ? "Sending…" : label}
+    </Button>
+  );
+}
+
+/**
+ * Opens the message for editing before it goes.
+ *
+ * Carries `intent` as its own name/value rather than a hidden input, so only a
+ * click on *this* button asks for a preview — the Send button beside it submits
+ * the same form and must keep its default intent.
+ *
+ * Deliberately available even when the send is blocked: an operator with no
+ * contact address on the booking still needs to read and prepare the wording.
+ */
+function EditButton() {
+  const { pending } = useFormStatus();
+
+  return (
+    <Button
+      type="submit"
+      name="intent"
+      value="preview"
+      variant="secondary"
+      disabled={pending}
+    >
+      {pending ? <Loader2 className="size-4 animate-spin" /> : <Pencil className="size-4" />}
+      Edit email
     </Button>
   );
 }
@@ -111,6 +149,19 @@ export function AuthorizationPanel({
     sendAuthorizationEmailAction,
     {},
   );
+
+  /**
+   * The preview the operator has dismissed, if any.
+   *
+   * Compared by identity against the current result, so asking for the preview
+   * again reopens the editor rather than being swallowed by an earlier
+   * dismissal. Derived rather than mirrored — a successful send returns a
+   * result with no `preview`, which closes the editor on its own.
+   */
+  const [dismissed, setDismissed] = useState<AuthorizationState["preview"]>();
+
+  const editing =
+    state.preview && state.preview !== dismissed ? state.preview : undefined;
 
   // The signature is the evidence, wherever it sits in the history — a later
   // send does not undo it. The outstanding link is only interesting while
@@ -219,6 +270,8 @@ export function AuthorizationPanel({
               <ExternalLink className="size-4" />
               View email
             </a>
+
+            <EditButton />
           </div>
 
           {blocked ? (
@@ -238,6 +291,39 @@ export function AuthorizationPanel({
           Sending requires the booking.signature.send permission.
         </p>
       )}
+
+      {/* A separate form from the one above: nesting forms is invalid HTML,
+          and this one posts the edited wording rather than a bare send. */}
+      {canSend && editing ? (
+        <EmailEditor
+          title="Authorization email"
+          fieldKey={`authorization-${bookingId}`}
+          recipient={editing.recipient}
+          subject={editing.subject}
+          body={editing.body}
+          hidden={{ bookingId, intent: "send" }}
+          bodyHint="Plain text, shown at the top of the email. Leave a blank line between paragraphs."
+          note={
+            <p className="rounded-md bg-surface-sunken px-3 py-2 text-xs text-ink-muted">
+              Only this opening message and the subject can be changed. The
+              traveller table, card and billing details, charges and the confirm
+              button are generated from the booking and go out as shown in{" "}
+              <a
+                href={`/admin/bookings/${bookingId}/authorization`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="underline"
+              >
+                the preview
+              </a>
+              .
+            </p>
+          }
+          submitLabel="Send this version"
+          onClose={() => setDismissed(state.preview)}
+          formAction={formAction}
+        />
+      ) : null}
 
       {state.error ? (
         <p

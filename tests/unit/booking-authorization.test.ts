@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { CardType } from "@/generated/prisma/enums";
 import {
+  defaultAuthorizationBody,
   renderBookingAuthorization,
   type BookingAuthorizationData,
 } from "@/lib/mail/booking-authorization";
@@ -167,4 +168,84 @@ describe("renderBookingAuthorization", () => {
 
     expect(subject).toBe("Action needed on your trip");
   });
+
+  /**
+   * The mirror of the e-ticket's assertion. This message goes out before the
+   * card is charged and before the tickets exist, so its terms are written in
+   * the future tense — the same rules, at the other end of the booking.
+   */
+  it("writes the stage-dependent policy lines for a booking not yet charged", () => {
+    const { html } = renderBookingAuthorization(BASE, LINK);
+
+    expect(html).toContain("Cards will be charged only after we receive");
+    expect(html).toContain(
+      "You will receive your e-tickets and carrier confirmation in a separate email.",
+    );
+    expect(html).toContain("the e-ticket receipt will be sent shortly");
+
+    expect(html).not.toContain("Your card was charged");
+    expect(html).not.toContain("It is your e-ticket receipt.");
+  });
 });
+
+/**
+ * The preview editor.
+ *
+ * An operator may rewrite the opening message and the subject. Everything the
+ * customer is authorizing — the figures, the card detail and the signing link
+ * — is generated, and an edit must not be able to drop any of it.
+ */
+describe("renderBookingAuthorization with an operator's edits", () => {
+  const EDIT = {
+    subject: "Please confirm today",
+    body: "Hi Gopinder,\n\nOne change since we spoke: the return is now a day later.\n\nPlease confirm below.",
+  };
+
+  it("sends the edited subject in place of the generated one", () => {
+    const { subject } = renderBookingAuthorization(
+      { ...BASE, customEmailSubject: "Ignored once edited" },
+      LINK,
+      EDIT,
+    );
+
+    expect(subject).toBe("Please confirm today");
+  });
+
+  it("replaces the opening message in both the HTML and the text", () => {
+    const { html, text } = renderBookingAuthorization(BASE, LINK, EDIT);
+
+    expect(html).toContain("the return is now a day later");
+    expect(text).toContain("the return is now a day later");
+    expect(html).not.toContain("Greetings for the day!");
+    expect(text).not.toContain("Greetings for the day!");
+  });
+
+  it("keeps the charges, the card detail and the signing link", () => {
+    const { html } = renderBookingAuthorization(BASE, LINK, EDIT);
+
+    expect(html).toContain("$123.00");
+    expect(html).toContain("****1111");
+    expect(html).toContain(LINK.signUrl);
+    expect(html).toContain(ACKNOWLEDGEMENT_OPENING);
+  });
+
+  it("escapes the edited message rather than interpolating markup", () => {
+    const { html } = renderBookingAuthorization(BASE, LINK, {
+      ...EDIT,
+      body: "<script>alert(1)</script>",
+    });
+
+    expect(html).not.toContain("<script>alert(1)</script>");
+    expect(html).toContain("&lt;script&gt;");
+  });
+
+  it("falls back to the generated wording when nothing was edited", () => {
+    const { html } = renderBookingAuthorization(BASE, LINK, {});
+
+    expect(html).toContain("Greetings for the day!");
+    expect(html).toContain(defaultAuthorizationBody(BASE).split("\n\n")[0]!);
+  });
+});
+
+/** The opening of the sentence the signature is given against. */
+const ACKNOWLEDGEMENT_OPENING = "I acknowledge receipt of this email";

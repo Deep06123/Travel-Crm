@@ -27,6 +27,7 @@ import { CommentVisibility, DocumentOrigin } from "@/generated/prisma/enums";
 import { CommentForm, FollowUpForm } from "@/features/bookings/comment-form";
 import { DOCUMENTS_FAILED_PARAM } from "@/features/bookings/document-attachments.constants";
 import { DocumentUploadForm } from "@/features/documents/upload-form";
+import { bookingRecipientLine } from "@/lib/bookings/recipients";
 import { AuthorizationPanel } from "@/features/bookings/authorization-panel";
 import { CustomerEmailPanel } from "@/features/bookings/customer-email-panel";
 import { SendETicketButton } from "@/features/bookings/send-eticket-button";
@@ -240,8 +241,7 @@ export default async function BookingDetailPage({
 
   const hasSignature = signatures.some((row) => row.status === "SIGNED");
 
-  const emailRecipient =
-    booking.contactEmail?.trim() || booking.customer.email?.trim() || "";
+  const emailRecipient = bookingRecipientLine(booking);
 
   // A resend is only offered for an event this booking has actually reached.
   // Offering "resend tickets issued" on an unticketed booking would promise

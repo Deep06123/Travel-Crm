@@ -6,11 +6,18 @@ import {
   NotificationStatus,
 } from "@/generated/prisma/enums";
 import type { Prisma } from "@/generated/prisma/client";
+import {
+  bookingRecipientLine,
+  bookingRecipients,
+} from "@/lib/bookings/recipients";
 import { prisma } from "@/lib/db/prisma";
+import { isProduction } from "@/lib/env";
 import { loggerFor } from "@/lib/logging/logger";
 import { getMailer } from "@/lib/mail";
 import {
+  defaultAuthorizationBody,
   renderBookingAuthorization,
+  type AuthorizationOverride,
   type BookingAuthorizationData,
 } from "@/lib/mail/booking-authorization";
 
@@ -64,6 +71,7 @@ const AUTHORIZATION_SELECT = {
   billingState: true,
   billingPostalCode: true,
   billingCountry: true,
+  billingEmails: true,
   customer: { select: { firstName: true, lastName: true, email: true } },
   segments: {
     orderBy: { sequence: "asc" },
@@ -163,12 +171,27 @@ export interface SendAuthorizationInput {
   actorId: string;
   /** Absolute origin the signing link is built against, e.g. `https://crm.example.com`. */
   origin: string;
+  /**
+   * The operator's edits from the preview editor, where they made any.
+   *
+   * Absent means "send the generated message", which is what the plain Send
+   * button does.
+   */
+  override?: AuthorizationOverride | undefined;
 }
 
 export interface AuthorizationPreview {
   /** Empty when the booking has no contact address — nothing could be sent. */
   recipient: string;
   subject: string;
+  /**
+   * The editable message block, as plain text.
+   *
+   * Only the opening message is editable — see `defaultAuthorizationBody`.
+   * Offered alongside `html` so the same preview can serve both the read-only
+   * page and the editor on the booking.
+   */
+  body: string;
   html: string;
 }
 
@@ -185,6 +208,15 @@ export interface AuthorizationPreview {
  */
 export async function previewAuthorizationEmail(
   bookingId: string,
+  override: AuthorizationOverride = {},
+  /**
+   * What the confirm button points at, or `""` to render it inert.
+   *
+   * Empty everywhere that matters: no token has been minted, so there is
+   * genuinely nowhere to go. Development passes the route that mints one on
+   * demand, which is the only way to reach the signing page without a mailbox.
+   */
+  signUrl: string = PREVIEW_SIGN_URL,
 ): Promise<AuthorizationPreview | null> {
   const booking = await prisma.booking.findUnique({
     where: { id: bookingId },
@@ -193,17 +225,25 @@ export async function previewAuthorizationEmail(
 
   if (!booking) return null;
 
-  const rendered = renderBookingAuthorization(toAuthorizationData(booking), {
-    signUrl: PREVIEW_SIGN_URL,
-    // Only ever printed as a date in the body. The real expiry is set when a
-    // link is actually issued; this stands in for the shape of the sentence.
-    expiresAt: new Date(Date.now() + PREVIEW_EXPIRY_DAYS * 24 * 60 * 60 * 1_000),
-  });
+  const data = toAuthorizationData(booking);
+
+  const rendered = renderBookingAuthorization(
+    data,
+    {
+      signUrl,
+      // Only ever printed as a date in the body. The real expiry is set when a
+      // link is actually issued; this stands in for the shape of the sentence.
+      expiresAt: new Date(
+        Date.now() + PREVIEW_EXPIRY_DAYS * 24 * 60 * 60 * 1_000,
+      ),
+    },
+    override,
+  );
 
   return {
-    recipient:
-      booking.contactEmail?.trim() || booking.customer.email?.trim() || "",
+    recipient: bookingRecipientLine(booking),
     subject: rendered.subject,
+    body: override.body?.trim() || defaultAuthorizationBody(data),
     html: rendered.html,
   };
 }
@@ -211,11 +251,14 @@ export async function previewAuthorizationEmail(
 /**
  * Stands in for the real signing link in a preview.
  *
- * Deliberately inert rather than a plausible-looking URL: an operator who
- * clicks it in the preview should land nowhere, not on a signing page for some
- * other booking.
+ * Empty, so `renderBookingAuthorization` draws the call to action as text
+ * instead of a link. It was a `#preview-link-not-issued` fragment, which only
+ * looked inert: the preview shows the email in a `srcDoc` iframe, whose base
+ * URL is the admin page's own, so clicking it navigated the frame to the admin
+ * page inside a `sandbox=""` frame — an opaque origin with no cookies, which
+ * fails to load and leaves the operator staring at a blank panel.
  */
-const PREVIEW_SIGN_URL = "#preview-link-not-issued";
+const PREVIEW_SIGN_URL = "";
 
 /** Matches `EXPIRY_DAYS` in `booking-signature-service`. */
 const PREVIEW_EXPIRY_DAYS = 14;
@@ -237,6 +280,7 @@ export async function sendAuthorizationEmail({
   bookingId,
   actorId,
   origin,
+  override = {},
 }: SendAuthorizationInput): Promise<AuthorizationSendResult> {
   const booking = await prisma.booking.findUnique({
     where: { id: bookingId },
@@ -247,8 +291,8 @@ export async function sendAuthorizationEmail({
     throw new Error(`Booking ${bookingId} does not exist.`);
   }
 
-  const recipient =
-    booking.contactEmail?.trim() || booking.customer.email?.trim() || null;
+  const recipients = bookingRecipients(booking);
+  const recipient = recipients.length > 0 ? recipients.join(", ") : null;
 
   const record = async (
     status: NotificationStatus,
@@ -282,7 +326,7 @@ export async function sendAuthorizationEmail({
 
   const mailer = getMailer();
 
-  if (!mailer) {
+  if (!mailer && isProduction()) {
     const reason =
       'No mail transport is configured (MAIL_DRIVER="none"), so no email was attempted.';
     await record(NotificationStatus.SUPPRESSED, { lastError: reason });
@@ -297,10 +341,36 @@ export async function sendAuthorizationEmail({
   );
 
   const signUrl = `${origin.replace(/\/+$/, "")}/sign/${encodeURIComponent(token)}`;
-  const rendered = renderBookingAuthorization(toAuthorizationData(booking), {
-    signUrl,
-    expiresAt,
-  });
+
+  // The raw token is a bearer credential: whoever holds this URL can sign the
+  // booking. It is written to the log only outside production, and only so the
+  // signing page can be reached on a machine with no mail transport — the one
+  // situation where the link has nowhere else to go. `isProduction()` is the
+  // guard rather than the absence of a mailer, so a misconfigured deployment
+  // that loses its SMTP settings cannot start printing live links.
+  if (!isProduction()) {
+    log.warn(
+      { bookingId, signatureId, signUrl },
+      "Development build: signing URL logged in full",
+    );
+  }
+
+  // Development with no transport: the token exists and the link above is
+  // usable, but nothing was delivered. The Notification says SUPPRESSED
+  // because that is what happened — the row must not claim a send that the
+  // customer could never have received.
+  if (!mailer) {
+    const reason =
+      'No mail transport is configured (MAIL_DRIVER="none"). A signing link was issued and written to the server log, so the signing page can be opened directly. Nothing was emailed.';
+    await record(NotificationStatus.SUPPRESSED, { lastError: reason });
+    return { result: "suppressed", reason };
+  }
+
+  const rendered = renderBookingAuthorization(
+    toAuthorizationData(booking),
+    { signUrl, expiresAt },
+    override,
+  );
 
   try {
     const { providerReference } = await mailer.send({

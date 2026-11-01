@@ -1,5 +1,7 @@
 import { formatMoney } from "@/lib/financial/money";
 
+import { escapeHtml, formatTicketDate, sectionHeading } from "./html";
+import { renderPolicySections } from "./policies";
 import type { BookingEmailData } from "./templates";
 
 /**
@@ -29,26 +31,6 @@ export interface ETicketOptions {
   supportPhone?: string | null;
 }
 
-/** Shared with the authorization email, so both escape identically. */
-export function escapeHtml(value: string): string {
-  return value
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#39;");
-}
-
-/** `09-01-2025`, matching the reference ticket rather than the CRM's format. */
-export function formatTicketDate(value: Date | null | undefined): string {
-  if (!value) return "—";
-
-  const day = String(value.getUTCDate()).padStart(2, "0");
-  const month = String(value.getUTCMonth() + 1).padStart(2, "0");
-
-  return `${day}-${month}-${value.getUTCFullYear()}`;
-}
-
 /**
  * The carrier the traveller is actually flying or sailing with.
  *
@@ -59,10 +41,6 @@ export function formatTicketDate(value: Date | null | undefined): string {
 function carrierName(data: BookingEmailData): string | null {
   if (data.product === "CRUISE") return data.cruise?.cruiseLine ?? null;
   return data.segments[0]?.airline ?? null;
-}
-
-function sectionHeading(title: string): string {
-  return `<tr><td style="background:#0b1f44;padding:12px 20px;color:#ffffff;font-size:17px;font-weight:normal;">${escapeHtml(title)}</td></tr>`;
 }
 
 function travellerRows(
@@ -229,6 +207,16 @@ export function renderETicket(
       detail above needs correcting.
     </p>
   </td></tr>
+
+  <!-- The same terms the customer authorized, repeated at the foot of the
+       document they will actually keep. A customer who comes back months later
+       over a change fee has the e-ticket in their inbox, not the authorization
+       email, so the rules have to be on this one too. -->
+  ${renderPolicySections({
+    document: "eticket",
+    isCruise,
+    supportPhone: options.supportPhone ?? data.supportPhone ?? null,
+  })}
 
 </table>
 </body></html>`;

@@ -437,16 +437,31 @@ export function CruiseBookingForm({
             {(props) => <Input {...props} name="total" inputMode="decimal" placeholder="1800.00" defaultValue={value("total")} />}
           </Field>
 
-          <Field id="mcoSupplierId" label="MCO supplier" error={error("mcoSupplierId")}>
+          {/* Typed, not picked. The list below is a suggestion of the
+              suppliers already on file; a name that is not among them is
+              accepted and created with the booking. */}
+          <Field
+            id="mcoSupplierName"
+            label="Supplier"
+            hint="Suggestions come from the suppliers on file. A new name is added."
+            error={error("mcoSupplierName")}
+          >
             {(props) => (
-              <StickySelect {...props} name="mcoSupplierId" defaultValue={value("mcoSupplierId")}>
-                <option value="">— Select —</option>
-                {options.mcoSuppliers.map((supplier) => (
-                  <option key={supplier.id} value={supplier.id}>
-                    {supplier.name}
-                  </option>
-                ))}
-              </StickySelect>
+              <>
+                <Input
+                  {...props}
+                  name="mcoSupplierName"
+                  list="mco-supplier-names"
+                  autoComplete="off"
+                  placeholder="Skyhyplanners"
+                  defaultValue={value("mcoSupplierName")}
+                />
+                <datalist id="mco-supplier-names">
+                  {options.mcoSuppliers.map((supplier) => (
+                    <option key={supplier.id} value={supplier.name} />
+                  ))}
+                </datalist>
+              </>
             )}
           </Field>
 

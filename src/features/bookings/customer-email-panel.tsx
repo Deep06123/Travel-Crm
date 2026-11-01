@@ -1,14 +1,14 @@
 "use client";
 
-import { ExternalLink, Eye, Loader2, Send, X } from "lucide-react";
+import { ExternalLink, Eye, Loader2, Send } from "lucide-react";
 import { useActionState, useState } from "react";
 import { useFormStatus } from "react-dom";
 
 import { Button, buttonVariants } from "@/components/ui/button";
-import { Field, Input, Textarea } from "@/components/ui/field";
 import type {
   NotificationStatus as NotificationStatusEnum,
 } from "@/generated/prisma/enums";
+import { EmailEditor } from "./email-editor";
 import { bookingEmailAction, type BookingEmailState } from "./email-actions";
 
 /**
@@ -83,105 +83,6 @@ function EventButton({
       {pending ? <Loader2 className="size-4 animate-spin" /> : icon}
       {children}
     </Button>
-  );
-}
-
-/**
- * The email as it would be sent, open for correction.
- *
- * Shown only after the operator asks for a preview, and pre-filled with the
- * generated wording. Sending from here sends exactly what is on screen — the
- * point of the control is that what you read is what the customer gets.
- *
- * The body is plain text. A rich editor would imply the operator can control
- * the layout, which they cannot: the surrounding markup is supplied by the
- * server precisely so an edited email cannot arrive malformed.
- */
-function EmailEditor({
-  bookingId,
-  preview,
-  onClose,
-  formAction,
-}: {
-  bookingId: string;
-  preview: NonNullable<BookingEmailState["preview"]>;
-  onClose: () => void;
-  formAction: (payload: FormData) => void;
-}) {
-  const { pending } = useFormStatus();
-
-  return (
-    <form
-      action={formAction}
-      className="flex flex-col gap-3 rounded-md border border-line bg-surface-muted p-3"
-    >
-      <input type="hidden" name="bookingId" value={bookingId} />
-      <input type="hidden" name="event" value={preview.event} />
-      <input type="hidden" name="intent" value="send" />
-
-      <div className="flex items-center justify-between gap-2">
-        <span className="text-sm font-medium text-ink">
-          Preview — {label(preview.event).toLowerCase()}
-        </span>
-        <Button type="button" variant="ghost" size="sm" onClick={onClose}>
-          <X className="size-4" />
-          Close
-        </Button>
-      </div>
-
-      <p className="text-xs text-ink-muted">
-        To: {preview.recipient || "— no contact address on this booking —"}
-      </p>
-
-      {/* Keyed on the event so switching between the confirmation and the
-          ticket preview resets the fields instead of keeping the old text. */}
-      <Field id={`email-subject-${preview.event}`} label="Subject" required>
-        {(props) => (
-          <Input
-            {...props}
-            name="subject"
-            required
-            maxLength={200}
-            defaultValue={preview.subject}
-          />
-        )}
-      </Field>
-
-      <Field
-        id={`email-body-${preview.event}`}
-        label="Message"
-        required
-        hint="Plain text. Leave a blank line between paragraphs."
-      >
-        {(props) => (
-          <Textarea
-            {...props}
-            name="body"
-            rows={14}
-            required
-            className="font-mono text-xs"
-            defaultValue={preview.body}
-          />
-        )}
-      </Field>
-
-      <div className="flex items-center gap-2">
-        <Button type="submit" size="sm" disabled={pending || !preview.recipient}>
-          {pending ? (
-            <Loader2 className="size-4 animate-spin" />
-          ) : (
-            <Send className="size-4" />
-          )}
-          Send this version
-        </Button>
-
-        {preview.recipient ? null : (
-          <span className="text-xs text-status-warning">
-            Add a contact email to the booking before sending.
-          </span>
-        )}
-      </div>
-    </form>
   );
 }
 
@@ -280,8 +181,14 @@ export function CustomerEmailPanel({
 
       {canResend && editing ? (
         <EmailEditor
-          bookingId={bookingId}
-          preview={editing}
+          title={`Preview — ${label(editing.event).toLowerCase()}`}
+          /* Keyed on the event so switching between the confirmation and the
+             ticket preview resets the fields instead of keeping the old text. */
+          fieldKey={editing.event}
+          recipient={editing.recipient}
+          subject={editing.subject}
+          body={editing.body}
+          hidden={{ bookingId, event: editing.event, intent: "send" }}
           onClose={() => setDismissed(state.preview)}
           formAction={formAction}
         />

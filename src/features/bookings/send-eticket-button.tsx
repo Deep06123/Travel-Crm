@@ -1,11 +1,12 @@
 "use client";
 
-import { ExternalLink, Loader2, Send } from "lucide-react";
-import { useActionState } from "react";
+import { ExternalLink, Loader2, Pencil, Send } from "lucide-react";
+import { useActionState, useState } from "react";
 import { useFormStatus } from "react-dom";
 
 import { Button, buttonVariants } from "@/components/ui/button";
 
+import { EmailEditor } from "./email-editor";
 import { bookingEmailAction, type BookingEmailState } from "./email-actions";
 
 /**
@@ -16,9 +17,13 @@ import { bookingEmailAction, type BookingEmailState } from "./email-actions";
  * suppressed-transport handling live, and a parallel implementation would
  * drift from it.
  *
- * `subject` and `body` are deliberately not submitted. The action falls back
- * to the generated message when they are absent, which is what this page is
- * for — sending the document as rendered, not an edited version of it.
+ * The plain Send button submits no `subject` or `body`, so the action falls
+ * back to the generated message — the document as rendered. Edit asks the same
+ * action for a preview and sends whatever the operator leaves on screen.
+ *
+ * Both carry `intent` as their own name/value rather than sharing a hidden
+ * input: only the submitter's name and value are posted, which is exactly the
+ * "which one did they click" signal this needs.
  */
 function SubmitButton({ blockedReason }: { blockedReason?: string | undefined }) {
   const { pending } = useFormStatus();
@@ -26,12 +31,44 @@ function SubmitButton({ blockedReason }: { blockedReason?: string | undefined })
   return (
     <Button
       type="submit"
+      name="intent"
+      value="send"
       variant="destructive"
-      disabled={pending || blockedReason !== undefined}
+      // Clickable even while blocked — see `AuthorizationPanel`. The signature
+      // rule and the missing-recipient rule are both enforced in
+      // `bookingEmailAction`, which answers with the reason.
+      disabled={pending}
       title={blockedReason}
     >
       {pending ? <Loader2 className="animate-spin" /> : <Send />}
       {pending ? "Sending…" : "Click here Send E-Ticket Email"}
+    </Button>
+  );
+}
+
+/**
+ * Opens the e-ticket email for editing.
+ *
+ * Deliberately available even while the send is blocked — staff prepare the
+ * wording while they wait for the signature — and a preview sends nothing.
+ */
+function EditButton() {
+  const { pending } = useFormStatus();
+
+  return (
+    <Button
+      type="submit"
+      name="intent"
+      value="preview"
+      variant="secondary"
+      disabled={pending}
+    >
+      {pending ? (
+        <Loader2 className="size-4 animate-spin" />
+      ) : (
+        <Pencil className="size-4" />
+      )}
+      Edit email
     </Button>
   );
 }
@@ -66,6 +103,12 @@ export function SendETicketButton({
     {},
   );
 
+  /** Dismissed preview, compared by identity — see `CustomerEmailPanel`. */
+  const [dismissed, setDismissed] = useState<BookingEmailState["preview"]>();
+
+  const editing =
+    state.preview && state.preview !== dismissed ? state.preview : undefined;
+
   const blocked =
     recipient === ""
       ? "This booking has no contact address to send to."
@@ -76,8 +119,8 @@ export function SendETicketButton({
       <form action={formAction} className="flex flex-wrap gap-2">
         <input type="hidden" name="bookingId" value={bookingId} />
         <input type="hidden" name="event" value="BOOKING_TICKETED" />
-        <input type="hidden" name="intent" value="send" />
         <SubmitButton blockedReason={blocked} />
+        <EditButton />
 
         {/* Deliberately available even while the send is blocked: staff still
             need to check the document while they wait for the signature.
@@ -98,6 +141,34 @@ export function SendETicketButton({
           </a>
         ) : null}
       </form>
+
+      {editing ? (
+        <div className="mt-3">
+          <EmailEditor
+            title="E-ticket email"
+            fieldKey={`eticket-${bookingId}`}
+            recipient={editing.recipient}
+            subject={editing.subject}
+            body={editing.body}
+            hidden={{
+              bookingId,
+              event: editing.event,
+              intent: "send",
+            }}
+            {...(blocked
+              ? {
+                  note: (
+                    <p className="rounded-md bg-status-warning-bg px-3 py-2 text-xs text-status-warning">
+                      {blocked}
+                    </p>
+                  ),
+                }
+              : {})}
+            onClose={() => setDismissed(state.preview)}
+            formAction={formAction}
+          />
+        </div>
+      ) : null}
 
       {blocked ? (
         <p className="mt-2 text-xs text-ink-muted">{blocked}</p>

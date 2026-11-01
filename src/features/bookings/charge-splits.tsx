@@ -80,6 +80,7 @@ export function ChargeSplits({
   // own, so it is read where it lives. Reaching for the input directly keeps
   // one source of truth for the figure the splits must match.
   const root = useRef<HTMLDivElement>(null);
+  const totalInput = useRef<HTMLInputElement | null>(null);
   const [totalFare, setTotalFare] = useState(() => value("total"));
 
   useEffect(() => {
@@ -88,13 +89,35 @@ export function ChargeSplits({
     const input = root.current
       ?.closest("form")
       ?.elements.namedItem("total") as HTMLInputElement | null;
+    totalInput.current = input;
     if (!input) return;
 
     setTotalFare(input.value);
     const sync = () => setTotalFare(input.value);
     input.addEventListener("input", sync);
-    return () => input.removeEventListener("input", sync);
+    return () => {
+      input.removeEventListener("input", sync);
+      totalInput.current = null;
+    };
   }, [enabled]);
+
+  /**
+   * Typed into the copy of the total fare that sits under the splits.
+   *
+   * The figure still belongs to the field at the top of the panel — that is
+   * the one that submits — so this writes through to it and lets the listener
+   * above bring the displayed value back. There is no second `total` in the
+   * form data, and the two boxes cannot disagree.
+   */
+  const writeTotalFare = (next: string) => {
+    setTotalFare(next);
+
+    const input = totalInput.current;
+    if (input && input.value !== next) {
+      input.value = next;
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    }
+  };
 
   const update = (key: number, patch: Partial<Row>) =>
     setRows((current) =>
@@ -248,6 +271,29 @@ export function ChargeSplits({
                 : formatMoney(fareMinor, currency)}
               {matches ? " ✓" : null}
             </p>
+          </div>
+
+          {/* The same total fare as the top of the panel, repeated at the
+              foot of the splits so the figure they have to add up to is
+              under them rather than scrolled away. Unnamed: the field above
+              is what submits. */}
+          <div className="mt-4 border-t border-line pt-4 sm:max-w-sm">
+            <Field
+              id="totalFareAfterSplits"
+              label="Total fare"
+              hint="The same figure as above. The splits must add up to it."
+              error={error("total")}
+            >
+              {(props) => (
+                <Input
+                  {...props}
+                  inputMode="decimal"
+                  placeholder="1800.00"
+                  value={totalFare}
+                  onChange={(event) => writeTotalFare(event.target.value)}
+                />
+              )}
+            </Field>
           </div>
         </fieldset>
       ) : null}

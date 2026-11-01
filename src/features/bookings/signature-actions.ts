@@ -8,15 +8,39 @@ import { requirePermission } from "@/lib/auth/dal";
 import { getEnv } from "@/lib/env";
 import { loggerFor } from "@/lib/logging/logger";
 import { PERMISSIONS } from "@/lib/permissions";
-import { sendAuthorizationEmail } from "@/server/services/booking-authorization-service";
+import {
+  previewAuthorizationEmail,
+  sendAuthorizationEmail,
+} from "@/server/services/booking-authorization-service";
 
 const log = loggerFor("booking-signature-actions");
 
-const schema = z.object({ bookingId: z.string().min(1) });
+const schema = z.object({
+  bookingId: z.string().min(1),
+  intent: z.enum(["preview", "send"]).default("send"),
+  // Present only when the operator edited the message in the preview. Both
+  // must arrive together — a subject with no body, or the reverse, is a
+  // half-built message rather than an edit.
+  subject: z.string().trim().min(1).max(200).optional(),
+  body: z.string().trim().min(1).max(20_000).optional(),
+});
 
+/**
+ * One state for preview and send, as in `bookingEmailAction`.
+ *
+ * With two actions nothing on the page could tell which had run most recently,
+ * so the editor had to be mirrored into local state and cleared from an effect.
+ * Sharing the state makes the rule trivial: a result carrying `preview` opens
+ * the editor, and any other result closes it.
+ */
 export interface AuthorizationState {
   error?: string;
   success?: string;
+  preview?: {
+    recipient: string;
+    subject: string;
+    body: string;
+  };
 }
 
 /**
@@ -68,13 +92,42 @@ export async function sendAuthorizationEmailAction(
   const parsed = schema.safeParse(Object.fromEntries(formData.entries()));
   if (!parsed.success) return { error: "Invalid request." };
 
-  const { bookingId } = parsed.data;
+  const { bookingId, intent, subject, body } = parsed.data;
+
+  // Reading is not sending: no token is minted, nothing is written and nothing
+  // is transmitted. It takes the same permission because it exposes the exact
+  // wording, the card's last four and the billing address.
+  if (intent === "preview") {
+    try {
+      const preview = await previewAuthorizationEmail(bookingId, {
+        subject,
+        body,
+      });
+
+      if (!preview) return { error: "That booking no longer exists." };
+
+      const { recipient, subject: previewSubject, body: previewBody } = preview;
+      return {
+        preview: { recipient, subject: previewSubject, body: previewBody },
+      };
+    } catch (error) {
+      log.error({ err: error, bookingId }, "Authorization preview failed");
+      return { error: "The preview could not be built." };
+    }
+  }
+
+  // Both halves or neither. Sending a generated message under an edited
+  // subject would be an email nobody wrote.
+  if ((subject === undefined) !== (body === undefined)) {
+    return { error: "An edited email needs both a subject and a message." };
+  }
 
   try {
     const outcome = await sendAuthorizationEmail({
       bookingId,
       actorId: user.id,
       origin: await resolveOrigin(),
+      override: { subject, body },
     });
 
     revalidatePath(`/admin/bookings/${bookingId}`);

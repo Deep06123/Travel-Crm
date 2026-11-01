@@ -143,7 +143,9 @@ export const cruiseBookingSchema = z
     supplierCost: optionalText(30),
     grossMco: optionalText(30),
     netMco: optionalText(30),
-    mcoSupplierId: optionalText(40),
+    // Typed rather than picked: a name nobody has used before becomes a new
+    // supplier when the booking is written.
+    mcoSupplierName: optionalText(120),
     mcoStatus: z.enum(McoStatus).default(McoStatus.NOT_APPLICABLE),
     splitCharges: yesNo,
     financialNotes: optionalText(5_000),
