@@ -20,6 +20,24 @@ import { bulletList, escapeHtml, sectionHeading } from "./html";
 /** Which message the terms are being printed in. */
 export type PolicyDocument = "authorization" | "eticket";
 
+/** The three editable sections, keyed the way the settings page stores them. */
+export type PolicySection = "bookingPolicy" | "changeRules" | "travelRules";
+
+/**
+ * Operator-supplied replacements, per section, from Settings.
+ *
+ * A section is either overridden wholesale or left alone — there is no merging
+ * with the defaults below. Partial by design: overriding Change Rules is the
+ * common case and should not force an operator to re-type the other two.
+ *
+ * Note what an override costs. The defaults vary four lines by tense, because
+ * the authorization email is sent before the card is charged and the e-ticket
+ * after. One stored list cannot do that, so an overridden section prints
+ * identically in both messages and it falls to whoever wrote it to pick
+ * wording that is true of both. The settings page says so where it is edited.
+ */
+export type PolicyOverrides = Partial<Record<PolicySection, readonly string[]>>;
+
 function bookingPolicy(document: PolicyDocument): string[] {
   const beforeTheCharge = document === "authorization";
 
@@ -63,6 +81,43 @@ function travelRules(document: PolicyDocument): string[] {
   ];
 }
 
+/**
+ * The built-in wording for one section.
+ *
+ * Exported so the settings page can show an operator what they are replacing,
+ * and restore it, without keeping a second copy of these sentences.
+ */
+export function defaultPolicyLines(
+  section: PolicySection,
+  document: PolicyDocument,
+): readonly string[] {
+  switch (section) {
+    case "bookingPolicy":
+      return bookingPolicy(document);
+    case "changeRules":
+      return CHANGE_RULES;
+    case "travelRules":
+      return travelRules(document);
+  }
+}
+
+/** The heading each section is printed under. */
+export function policySectionHeading(
+  section: PolicySection,
+  isCruise: boolean,
+): string {
+  switch (section) {
+    case "bookingPolicy":
+      return "Booking Policy";
+    case "changeRules":
+      return "Change Rules";
+    case "travelRules":
+      return isCruise
+        ? "Cruise Rules and Restrictions"
+        : "Flight Rules and Restrictions";
+  }
+}
+
 export interface PolicyOptions {
   /**
    * Which message these terms are being printed in.
@@ -73,6 +128,15 @@ export interface PolicyOptions {
   document: PolicyDocument;
   /** Titles the last section, and nothing else — the rules themselves match. */
   isCruise: boolean;
+  /**
+   * What the operator has rewritten in Settings, if anything.
+   *
+   * Required rather than optional so every caller has to have fetched it. An
+   * email that silently printed the built-in terms because a service forgot to
+   * load the overrides is the failure worth making impossible here: the
+   * customer would be held to wording the business thinks it replaced.
+   */
+  overrides: PolicyOverrides;
   /**
    * Repeated in the closing line, as in the header.
    *
@@ -93,18 +157,29 @@ export function renderPolicySections({
   document,
   isCruise,
   supportPhone,
+  overrides,
 }: PolicyOptions): string {
   const phone = supportPhone?.trim();
 
+  // An override of `[]` means the operator emptied the box, which drops the
+  // section rather than falling back to the default: a business that deletes
+  // its change rules has said something, and quietly reprinting them would
+  // contradict it.
+  const section = (key: PolicySection): string => {
+    const lines = overrides[key] ?? defaultPolicyLines(key, document);
+    if (lines.length === 0) return "";
+
+    return `
+  ${sectionHeading(policySectionHeading(key, isCruise))}
+  <tr><td style="padding:16px 20px;">${bulletList(lines)}</td></tr>`;
+  };
+
   return `
-  ${sectionHeading("Booking Policy")}
-  <tr><td style="padding:16px 20px;">${bulletList(bookingPolicy(document))}</td></tr>
+  ${section("bookingPolicy")}
 
-  ${sectionHeading("Change Rules")}
-  <tr><td style="padding:16px 20px;">${bulletList(CHANGE_RULES)}</td></tr>
+  ${section("changeRules")}
 
-  ${sectionHeading(isCruise ? "Cruise Rules and Restrictions" : "Flight Rules and Restrictions")}
-  <tr><td style="padding:16px 20px;">${bulletList(travelRules(document))}</td></tr>
+  ${section("travelRules")}
 
   ${
     phone

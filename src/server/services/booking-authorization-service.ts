@@ -24,6 +24,9 @@ import {
   type AuthorizationOverride,
   type BookingAuthorizationData,
 } from "@/lib/mail/booking-authorization";
+import type { PolicyOverrides } from "@/lib/mail/policies";
+
+import { loadPolicyOverrides } from "./email-policy-service";
 
 import { createSignatureRequest } from "./booking-signature-service";
 
@@ -156,7 +159,10 @@ function storedItinerary(booking: AuthorizationRow): string | null {
     : (booking.flightDetail?.itineraryHtml ?? null);
 }
 
-function toAuthorizationData(booking: AuthorizationRow): BookingAuthorizationData {
+function toAuthorizationData(
+  booking: AuthorizationRow,
+  policyOverrides: PolicyOverrides,
+): BookingAuthorizationData {
   const customerName =
     booking.contactName?.trim() ||
     `${booking.customer.firstName} ${booking.customer.lastName}`.trim() ||
@@ -176,6 +182,7 @@ function toAuthorizationData(booking: AuthorizationRow): BookingAuthorizationDat
     customEmailSubject: booking.customEmailSubject,
     emailTopHeading: booking.emailTopHeading,
     supportPhone: booking.tfn?.number ?? null,
+    policyOverrides,
     bookedAt: booking.bookedAt,
     contactEmail: booking.contactEmail ?? booking.customer.email,
     contactPhone: booking.contactPhone,
@@ -250,7 +257,7 @@ export async function previewAuthorizationEmail(
   // preview renders in a sandboxed iframe where the stored path resolves to
   // nothing.
   const data: BookingAuthorizationData = {
-    ...toAuthorizationData(booking),
+    ...toAuthorizationData(booking, await loadPolicyOverrides()),
     itineraryHtml: await prepareItineraryForPreview(storedItinerary(booking)),
   };
 
@@ -398,7 +405,10 @@ export async function sendAuthorizationEmail({
   const itinerary = await prepareItineraryForEmail(storedItinerary(booking));
 
   const rendered = renderBookingAuthorization(
-    { ...toAuthorizationData(booking), itineraryHtml: itinerary.html },
+    {
+      ...toAuthorizationData(booking, await loadPolicyOverrides()),
+      itineraryHtml: itinerary.html,
+    },
     { signUrl, expiresAt },
     override,
   );

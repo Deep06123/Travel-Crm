@@ -143,7 +143,7 @@ export function renderETicket(
 
   return `<!doctype html>
 <html><body style="margin:0;padding:0;background:#ffffff;font-family:Arial,Helvetica,sans-serif;color:#333333;">
-<table role="presentation" cellpadding="0" cellspacing="0" style="width:100%;max-width:640px;margin:0 auto;border-collapse:collapse;">
+<table role="presentation" cellpadding="0" cellspacing="0" style="width:100%;max-width:720px;margin:0 auto;border-collapse:collapse;">
 
   <tr><td style="background:#0b1f44;padding:14px 20px;text-align:right;color:#ffffff;">
     <div style="font-size:13px;">Call us 24/7</div>
@@ -227,6 +227,7 @@ export function renderETicket(
     document: "eticket",
     isCruise,
     supportPhone: options.supportPhone ?? data.supportPhone ?? null,
+    overrides: data.policyOverrides,
   })}
 
 </table>

@@ -21,6 +21,7 @@ const BASE: BookingEmailData = {
   totalMinor: 248_000,
   travelStartDate: new Date("2027-01-10T00:00:00Z"),
   airlineConfirmation: "6QX4LM",
+  policyOverrides: {},
   segments: [],
   cruise: null,
   passengers: [

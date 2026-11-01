@@ -56,7 +56,9 @@ export default async function AuthorizationEmailPage({
 
   return (
     <div className="min-h-screen bg-surface-muted py-6">
-      <div className="mx-auto w-full max-w-[680px] px-4">
+      {/* A little wider than the email's own 720px cap, so the body is never
+          the thing being clipped. */}
+      <div className="mx-auto w-full max-w-[768px] px-4">
         <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
           <span className="text-sm font-semibold text-ink">
             {preview.subject}

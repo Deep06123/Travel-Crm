@@ -272,7 +272,7 @@ export function renderBookingAuthorization(
 
   const html = `<!doctype html>
 <html><body style="margin:0;padding:0;background:#ffffff;font-family:Arial,Helvetica,sans-serif;color:#333333;">
-<table role="presentation" cellpadding="0" cellspacing="0" style="width:100%;max-width:640px;margin:0 auto;border-collapse:collapse;">
+<table role="presentation" cellpadding="0" cellspacing="0" style="width:100%;max-width:720px;margin:0 auto;border-collapse:collapse;">
 
   <tr><td style="background:#0b1f44;padding:14px 20px;text-align:right;color:#ffffff;">
     <div style="font-size:13px;">Call us 24/7</div>
@@ -353,7 +353,12 @@ export function renderBookingAuthorization(
     <p style="margin:12px 0 0;font-size:12px;color:#777777;">This link is for you alone and stops working after ${escapeHtml(formatTicketDate(expiresAt))}.</p>
   </td></tr>
 
-  ${renderPolicySections({ document: "authorization", isCruise, supportPhone: data.supportPhone })}
+  ${renderPolicySections({
+    document: "authorization",
+    isCruise,
+    supportPhone: data.supportPhone,
+    overrides: data.policyOverrides,
+  })}
 
 </table>
 </body></html>`;

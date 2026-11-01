@@ -19,12 +19,17 @@ import {
   RefundStatus,
   TicketStatus,
 } from "@/generated/prisma/enums";
+import { PolicySectionForms } from "@/features/admin/policy-forms";
 import { currentUserCan, requirePermission } from "@/lib/auth/dal";
 import { allowedTransitionsFrom } from "@/lib/bookings/status";
 import { prisma } from "@/lib/db/prisma";
 import { allowedRefundTransitionsFrom } from "@/lib/financial/refund-rules";
 import { formatMoney } from "@/lib/financial/money";
 import { PERMISSIONS } from "@/lib/permissions";
+import {
+  listPolicySections,
+  POLICY_SETTING_KEYS,
+} from "@/server/services/email-policy-service";
 import { listBookingTypes } from "@/server/services/reference-data-service";
 
 export const metadata: Metadata = { title: "Settings · Travel CRM" };
@@ -53,9 +58,16 @@ export default async function SettingsPage() {
   await requirePermission(PERMISSIONS.SETTINGS_VIEW);
   const canManage = await currentUserCan(PERMISSIONS.SETTINGS_MANAGE);
 
-  const [settings, bookingTypes] = await Promise.all([
-    prisma.businessSetting.findMany({ orderBy: { key: "asc" } }),
+  const [settings, bookingTypes, policySections] = await Promise.all([
+    // The email policy rows are excluded: they hold lists of whole sentences,
+    // which the two-column table below would render as one unreadable line.
+    // They have their own panel.
+    prisma.businessSetting.findMany({
+      where: { key: { notIn: [...POLICY_SETTING_KEYS] } },
+      orderBy: { key: "asc" },
+    }),
     listBookingTypes(),
+    listPolicySections(),
   ]);
 
   return (
@@ -144,6 +156,44 @@ export default async function SettingsPage() {
             stable <code className="rounded bg-surface-sunken px-1">code</code>,
             not the label. Renaming a type is safe; its code never changes.
           </p>
+        </Panel>
+
+        <Panel
+          title="Customer email terms"
+          description="The policy blocks printed at the foot of every customer email"
+          collapsible={false}
+          className="lg:col-span-2"
+        >
+          <div className="mb-4 flex flex-col gap-2 rounded-md bg-surface-sunken px-3 py-2.5 text-xs leading-relaxed text-ink-muted">
+            <p>
+              These three blocks appear in both the authorization email and the
+              e-ticket. The third is headed{" "}
+              <strong className="text-ink">Cruise Rules and Restrictions</strong>{" "}
+              on a cruise booking and{" "}
+              <strong className="text-ink">Flight Rules and Restrictions</strong>{" "}
+              on a flight; the wording is the same either way.
+            </p>
+            <p>
+              The built-in wording changes tense between the two messages — the
+              authorization email is sent before the card is charged, the
+              e-ticket after. Your own wording cannot, so write lines that read
+              correctly in both, or leave a block on its default.
+            </p>
+            <p>
+              Changes apply to emails sent from now on. Messages already
+              delivered are unaffected, and the terms a customer has already
+              authorized are the ones they were shown.
+            </p>
+          </div>
+
+          <PolicySectionForms sections={policySections} canManage={canManage} />
+
+          {!canManage ? (
+            <p className="mt-3 flex items-start gap-2 text-xs text-ink-muted">
+              <Lock className="mt-0.5 size-3.5 shrink-0" />
+              Your role can read these but not change them.
+            </p>
+          ) : null}
         </Panel>
 
         <Panel title="Booking lifecycle" collapsible={false} className="lg:col-span-2">

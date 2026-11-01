@@ -5,6 +5,7 @@ import { formatMoney } from "@/lib/financial/money";
 
 import { renderETicket } from "./eticket";
 import { htmlToPlainText } from "./html";
+import type { PolicyOverrides } from "./policies";
 
 /**
  * Customer-facing email bodies.
@@ -82,6 +83,14 @@ export interface BookingEmailData {
    * section rather than as an empty one.
    */
   itineraryHtml?: string | null;
+  /**
+   * The policy wording an operator has rewritten in Settings.
+   *
+   * Required, not optional, so a service that builds this object cannot omit
+   * it and silently send the built-in terms after the business has replaced
+   * them. `{}` is the honest value for "nothing overridden".
+   */
+  policyOverrides: PolicyOverrides;
 }
 
 export interface RenderedEmail {

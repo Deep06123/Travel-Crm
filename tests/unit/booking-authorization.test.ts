@@ -29,6 +29,7 @@ const BASE: BookingAuthorizationData = {
   totalMinor: 12_300,
   travelStartDate: new Date("2027-01-10T00:00:00Z"),
   airlineConfirmation: "SDFDSFSD",
+  policyOverrides: {},
   supportPhone: "+1-888-480-7222",
   segments: [
     {

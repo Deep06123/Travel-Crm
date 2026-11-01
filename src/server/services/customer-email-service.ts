@@ -28,6 +28,9 @@ import {
   renderEditedEmail,
   type BookingEmailData,
 } from "@/lib/mail/templates";
+import type { PolicyOverrides } from "@/lib/mail/policies";
+
+import { loadPolicyOverrides } from "./email-policy-service";
 
 const log = loggerFor("customer-email");
 
@@ -186,7 +189,7 @@ export async function previewBookingEmail(
   // rather than read raw: `htmlToPlainText` names an image it cannot flatten,
   // and that count should match the images the sent message will carry.
   const data: BookingEmailData = {
-    ...toEmailData(booking),
+    ...toEmailData(booking, await loadPolicyOverrides()),
     itineraryHtml: await prepareItineraryForPreview(storedItinerary(booking)),
   };
 
@@ -237,7 +240,7 @@ export async function getETicketPreview(
   // relative path, so the image would be broken here for the same reason it
   // would be in a mailbox.
   const data: BookingEmailData = {
-    ...toEmailData(booking),
+    ...toEmailData(booking, await loadPolicyOverrides()),
     itineraryHtml: await prepareItineraryForPreview(storedItinerary(booking)),
   };
 
@@ -387,7 +390,7 @@ export async function sendBookingEmail({
     : await prepareItineraryForEmail(storedItinerary(booking));
 
   const data: BookingEmailData = {
-    ...toEmailData(booking),
+    ...toEmailData(booking, await loadPolicyOverrides()),
     itineraryHtml: itinerary.html,
   };
 
@@ -465,7 +468,10 @@ function storedItinerary(booking: BookingRow): string | null {
     : (booking.flightDetail?.itineraryHtml ?? null);
 }
 
-function toEmailData(booking: BookingRow): BookingEmailData {
+function toEmailData(
+  booking: BookingRow,
+  policyOverrides: PolicyOverrides,
+): BookingEmailData {
   const customerName =
     booking.contactName?.trim() ||
     `${booking.customer.firstName} ${booking.customer.lastName}`.trim() ||
@@ -486,6 +492,7 @@ function toEmailData(booking: BookingRow): BookingEmailData {
     customEmailSubject: booking.customEmailSubject,
     emailTopHeading: booking.emailTopHeading,
     supportPhone: booking.tfn?.number ?? null,
+    policyOverrides,
   };
 }
 
