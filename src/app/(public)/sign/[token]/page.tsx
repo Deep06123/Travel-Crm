@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 
 import { SignatureForm } from "@/features/signature/signature-form";
+import { maskedCard } from "@/lib/financial/card-display";
 import { formatMoney } from "@/lib/financial/money";
 import { findSignatureByToken } from "@/server/services/booking-signature-service";
 
@@ -54,8 +55,15 @@ function Notice({ title, body }: { title: string; body: string }) {
  * Two rules follow from that and both are load-bearing:
  *
  * Only this booking's own details are shown, and only the ones a customer
- * already knows — their name, their email, the reference and the total. No
- * passenger passport data, no supplier cost, no internal notes.
+ * already knows — their name, their email, the reference, the total and the
+ * card it was taken on. No passenger passport data, no supplier cost, no
+ * internal notes.
+ *
+ * The card is the cardholder name and the last four digits, which is the whole
+ * of the card that exists to show: `schema.prisma` keeps no PAN and no CVV, so
+ * there is nothing here to truncate and nothing a leak of this page could
+ * widen. It earns its place by letting the customer check we are about to
+ * charge the card they think we are, before they sign for it.
  *
  * A link that does not resolve says why in general terms and shows nothing
  * else. A wrong or expired token must not be able to confirm that a booking
@@ -73,6 +81,7 @@ export default async function SignBookingPage({
   }
 
   const { booking } = lookup;
+  const card = maskedCard(booking.cardType, booking.cardLast4);
 
   return (
     <main className="mx-auto max-w-[650px] px-4 py-8">
@@ -105,6 +114,10 @@ export default async function SignBookingPage({
               label="Total"
               value={formatMoney(booking.totalMinor, booking.currency)}
             />
+            {booking.cardHolderName ? (
+              <Row label="Card Holder" value={booking.cardHolderName} />
+            ) : null}
+            {card ? <Row label="Payment Method" value={card} /> : null}
           </dl>
         </section>
 

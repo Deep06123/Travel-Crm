@@ -1,3 +1,4 @@
+import { maskedCard } from "@/lib/financial/card-display";
 import { formatMoney } from "@/lib/financial/money";
 
 import {
@@ -79,6 +80,15 @@ function bookingDetailRows(data: BookingEmailData): string {
   <td style="padding:8px 10px;border:1px solid #d9dee5;font-size:13px;">${escapeHtml(value)}</td>
 </tr>`;
 
+  // The card follows the total everywhere it appears: the customer reads what
+  // was charged, then what it was charged to. Each row is omitted rather than
+  // emptied when the booking has no card — "Payment method —" on a receipt
+  // reads as a fault, where no row reads as nothing to say.
+  const card = maskedCard(data.cardType, data.cardLast4);
+  const paymentRows =
+    (data.cardHolderName ? cell("Card holder", data.cardHolderName) : "") +
+    (card ? cell("Payment method", card) : "");
+
   if (data.product === "CRUISE") {
     return [
       cell("Cruise line", data.cruise?.cruiseLine ?? "—"),
@@ -88,6 +98,7 @@ function bookingDetailRows(data: BookingEmailData): string {
       cell("Return date", formatTicketDate(data.cruise?.returnDate ?? null)),
       cell("Booking reference", data.bookingNumber),
       cell("Total", formatMoney(data.totalMinor, data.currency)),
+      paymentRows,
     ].join("");
   }
 
@@ -110,7 +121,8 @@ function bookingDetailRows(data: BookingEmailData): string {
   return (
     (legs || cell("Itinerary", "To be confirmed")) +
     cell("Booking reference", data.bookingNumber) +
-    cell("Total", formatMoney(data.totalMinor, data.currency))
+    cell("Total", formatMoney(data.totalMinor, data.currency)) +
+    paymentRows
   );
 }
 

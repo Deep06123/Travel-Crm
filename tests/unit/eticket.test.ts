@@ -25,6 +25,9 @@ const BASE: BookingEmailData = {
   airlineConfirmation: "6QX4LM",
   policyOverrides: {},
   supportPhone: "+1-888-480-7222",
+  cardHolderName: "GOPINDER KUMAR",
+  cardType: "VISA",
+  cardLast4: "1111",
   segments: [
     {
       airline: "Gopinder Airline",
@@ -199,6 +202,72 @@ describe("renderETicket", () => {
 
     expect(html).toContain("Booking Policy");
     expect(html).not.toContain("We are open 24x7");
+  });
+
+  it("names the card the booking was charged to, last four digits only", () => {
+    const html = renderETicket(BASE, CONFIRMED, "x");
+
+    expect(html).toContain("Card holder");
+    expect(html).toContain("GOPINDER KUMAR");
+    expect(html).toContain("Payment method");
+    expect(html).toContain("Visa (****1111)");
+  });
+
+  it("shows the card on a cruise document too", () => {
+    const html = renderETicket(
+      {
+        ...BASE,
+        product: "CRUISE",
+        segments: [],
+        cruise: {
+          cruiseLine: "Royal Caribbean",
+          ship: "Symphony",
+          departurePort: "Miami",
+          sailDate: new Date("2027-05-01T00:00:00Z"),
+          returnDate: new Date("2027-05-08T00:00:00Z"),
+          nights: 7,
+        },
+        cardHolderName: "A TRAVELLER",
+      },
+      CONFIRMED,
+      "x",
+    );
+
+    expect(html).toContain("A TRAVELLER");
+    expect(html).toContain("Visa (****1111)");
+  });
+
+  /**
+   * The database holds no PAN and no CVV (`schema.prisma`: the number is
+   * discarded in the browser and never submitted), so there is nothing for a
+   * renderer to leak by accident. This asserts the document carries no more of
+   * a card than the four digits — the check that would fail first if a full
+   * number were ever added to the model and then rendered here.
+   */
+  it("prints no card digits beyond the last four", () => {
+    const html = renderETicket(BASE, CONFIRMED, "x");
+
+    // Nothing PAN-shaped anywhere in the document. Deliberately 13-19 rather
+    // than "any long run": the markup is full of innocent digit runs — hex
+    // colours are six, the total is six — and a check that trips on those
+    // gets loosened by whoever hits it next until it means nothing.
+    expect(html).not.toMatch(/\d{13,19}/);
+    // The mask is the only form the card takes.
+    expect(html).toContain("Visa (****1111)");
+    expect(html).not.toContain("4111111111111111");
+  });
+
+  it("omits both card rows rather than emptying them when there is no card", () => {
+    const html = renderETicket(
+      { ...BASE, cardHolderName: null, cardType: null, cardLast4: null },
+      CONFIRMED,
+      "x",
+    );
+
+    expect(html).not.toContain("Card holder");
+    expect(html).not.toContain("Payment method");
+    // The rest of the booking block is untouched.
+    expect(html).toContain("Booking reference");
   });
 });
 

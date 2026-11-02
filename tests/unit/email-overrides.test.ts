@@ -22,6 +22,9 @@ const BASE: BookingEmailData = {
   travelStartDate: new Date("2027-01-10T00:00:00Z"),
   airlineConfirmation: "6QX4LM",
   policyOverrides: {},
+  cardHolderName: null,
+  cardType: null,
+  cardLast4: null,
   segments: [],
   cruise: null,
   passengers: [

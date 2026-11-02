@@ -90,6 +90,11 @@ const BOOKING_SELECT = {
   contactName: true,
   contactEmail: true,
   billingEmails: true,
+  // The cardholder name and last four digits, which is all of the card the
+  // database holds. No PAN and no CVV column exists to select.
+  cardHolderName: true,
+  cardType: true,
+  cardLast4: true,
   customer: { select: { firstName: true, lastName: true, email: true } },
   segments: {
     orderBy: { sequence: "asc" },
@@ -489,6 +494,9 @@ function toEmailData(
     segments: booking.segments,
     cruise: booking.cruiseDetail,
     passengers: booking.passengers,
+    cardHolderName: booking.cardHolderName,
+    cardType: booking.cardType,
+    cardLast4: booking.cardLast4,
     customEmailSubject: booking.customEmailSubject,
     emailTopHeading: booking.emailTopHeading,
     supportPhone: booking.tfn?.number ?? null,

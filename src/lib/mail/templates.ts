@@ -1,5 +1,6 @@
 import "server-only";
 
+import type { CardType } from "@/generated/prisma/enums";
 import { formatCalendarDate, formatDate } from "@/lib/format";
 import { formatMoney } from "@/lib/financial/money";
 
@@ -59,6 +60,22 @@ export interface BookingEmailData {
   segments: readonly SegmentSummary[];
   cruise: CruiseSummary | null;
   passengers: readonly TicketedPassenger[];
+  /**
+   * The card the booking was charged to, as the customer can recognise it.
+   *
+   * Required rather than optional, on the same reasoning as `policyOverrides`
+   * below: a service that builds this object cannot omit it and silently send
+   * an e-ticket that does not say what was charged. `null` is the honest value
+   * for a booking with no card on it, and the templates render no row for it
+   * rather than an empty one.
+   *
+   * There is no PAN or CVV in the database to expose (`schema.prisma`: the
+   * number is discarded in the browser and never submitted), so `cardLast4` is
+   * the whole of the number that exists anywhere.
+   */
+  cardHolderName: string | null;
+  cardType: CardType | null;
+  cardLast4: string | null;
   /**
    * Per-booking overrides, both optional.
    *

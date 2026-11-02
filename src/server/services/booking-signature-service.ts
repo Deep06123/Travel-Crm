@@ -3,6 +3,7 @@ import "server-only";
 import { createHash, randomBytes } from "node:crypto";
 
 import type { Prisma } from "@/generated/prisma/client";
+import type { CardType } from "@/generated/prisma/enums";
 import { AuditAction, BookingSignatureStatus } from "@/generated/prisma/enums";
 import { recordAudit } from "@/lib/audit";
 import { prisma } from "@/lib/db/prisma";
@@ -109,6 +110,15 @@ export interface SignableBooking {
   product: string;
   totalMinor: number;
   currency: string;
+  /**
+   * The card the booking was taken on, as the customer can recognise it and no
+   * further. There is no PAN in the database to expose (see `schema.prisma`:
+   * the number is discarded in the browser), so `cardLast4` is the whole of the
+   * number that exists anywhere, and the page may print it as-is.
+   */
+  cardHolderName: string | null;
+  cardType: CardType | null;
+  cardLast4: string | null;
   expiresAt: Date;
 }
 
@@ -146,6 +156,9 @@ export async function findSignatureByToken(token: string): Promise<SignatureLook
           contactName: true,
           contactEmail: true,
           contactPhone: true,
+          cardHolderName: true,
+          cardType: true,
+          cardLast4: true,
           customer: { select: { firstName: true, lastName: true, email: true, phone: true } },
         },
       },
@@ -195,6 +208,9 @@ export async function findSignatureByToken(token: string): Promise<SignatureLook
       product: booking.product,
       totalMinor: booking.totalMinor,
       currency: booking.currency,
+      cardHolderName: booking.cardHolderName,
+      cardType: booking.cardType,
+      cardLast4: booking.cardLast4,
       expiresAt: row.expiresAt,
     },
   };

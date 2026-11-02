@@ -1,7 +1,7 @@
 import "server-only";
 
 import type { CardType } from "@/generated/prisma/enums";
-import { CARD_BRAND_RULES } from "@/features/bookings/card-validation";
+import { maskedCard } from "@/lib/financial/card-display";
 import { formatMoney } from "@/lib/financial/money";
 
 import {
@@ -47,28 +47,6 @@ export interface BookingAuthorizationData extends BookingEmailData {
   billingAddress: string | null;
   /** Empty when the total is taken as a single charge. */
   chargeSplits: readonly AuthorizationChargeSplit[];
-}
-
-function cardBrandLabel(type: CardType | null): string | null {
-  if (!type) return null;
-  return CARD_BRAND_RULES.find((rule) => rule.type === type)?.label ?? "Card";
-}
-
-/**
- * `Visa (****1111)`, or as much of it as the booking knows.
- *
- * Returns `null` rather than a placeholder when there is no card on the
- * booking at all: an authorization block naming no card is misleading, so the
- * section is omitted instead.
- */
-function maskedCard(data: BookingAuthorizationData): string | null {
-  const brand = cardBrandLabel(data.cardType);
-  const last4 = data.cardLast4?.trim();
-
-  if (!brand && !last4) return null;
-  if (!last4) return brand;
-
-  return brand ? `${brand} (****${last4})` : `****${last4}`;
 }
 
 const CELL = "padding:8px 10px;border:1px solid #d9dee5;font-size:13px;";
@@ -235,7 +213,7 @@ export function renderBookingAuthorization(
   override: AuthorizationOverride = {},
 ): RenderedEmail {
   const total = formatMoney(data.totalMinor, data.currency);
-  const card = maskedCard(data);
+  const card = maskedCard(data.cardType, data.cardLast4);
   const confirmation = data.airlineConfirmation?.trim() || data.bookingNumber;
   const charges = chargeLines(data);
   const isCruise = data.product === "CRUISE";
