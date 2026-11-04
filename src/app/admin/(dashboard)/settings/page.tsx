@@ -19,6 +19,7 @@ import {
   RefundStatus,
   TicketStatus,
 } from "@/generated/prisma/enums";
+import { NotificationRecipientsForm } from "@/features/admin/notification-form";
 import { PolicySectionForms } from "@/features/admin/policy-forms";
 import { currentUserCan, requirePermission } from "@/lib/auth/dal";
 import { allowedTransitionsFrom } from "@/lib/bookings/status";
@@ -26,6 +27,10 @@ import { prisma } from "@/lib/db/prisma";
 import { allowedRefundTransitionsFrom } from "@/lib/financial/refund-rules";
 import { formatMoney } from "@/lib/financial/money";
 import { PERMISSIONS } from "@/lib/permissions";
+import {
+  ADMIN_NOTIFICATION_SETTING_KEY,
+  loadAdminNotificationEmails,
+} from "@/server/services/admin-notification-service";
 import {
   listPolicySections,
   POLICY_SETTING_KEYS,
@@ -58,17 +63,23 @@ export default async function SettingsPage() {
   await requirePermission(PERMISSIONS.SETTINGS_VIEW);
   const canManage = await currentUserCan(PERMISSIONS.SETTINGS_MANAGE);
 
-  const [settings, bookingTypes, policySections] = await Promise.all([
-    // The email policy rows are excluded: they hold lists of whole sentences,
-    // which the two-column table below would render as one unreadable line.
-    // They have their own panel.
-    prisma.businessSetting.findMany({
-      where: { key: { notIn: [...POLICY_SETTING_KEYS] } },
-      orderBy: { key: "asc" },
-    }),
-    listBookingTypes(),
-    listPolicySections(),
-  ]);
+  const [settings, bookingTypes, policySections, notificationEmails] =
+    await Promise.all([
+      // The email policy rows are excluded: they hold lists of whole sentences,
+      // which the two-column table below would render as one unreadable line.
+      // They have their own panel. The notification addresses are excluded for
+      // the plainer reason that they are editable below, and a value shown
+      // twice invites an administrator to wonder which one is live.
+      prisma.businessSetting.findMany({
+        where: {
+          key: { notIn: [...POLICY_SETTING_KEYS, ADMIN_NOTIFICATION_SETTING_KEY] },
+        },
+        orderBy: { key: "asc" },
+      }),
+      listBookingTypes(),
+      listPolicySections(),
+      loadAdminNotificationEmails(),
+    ]);
 
   return (
     <>
@@ -156,6 +167,56 @@ export default async function SettingsPage() {
             stable <code className="rounded bg-surface-sunken px-1">code</code>,
             not the label. Renaming a type is safe; its code never changes.
           </p>
+        </Panel>
+
+        <Panel
+          title="Internal email notifications"
+          description="Where the business is copied when a customer email goes out"
+          collapsible={false}
+          className="lg:col-span-2"
+        >
+          <div className="mb-4 flex flex-col gap-2 rounded-md bg-surface-sunken px-3 py-2.5 text-xs leading-relaxed text-ink-muted">
+            <p>These addresses receive a short internal notice when:</p>
+            <ul className="list-disc pl-5">
+              <li>an authorization email is sent to a customer;</li>
+              <li>a customer signs that authorization;</li>
+              <li>
+                a booking confirmation or an e-ticket is sent to a customer.
+              </li>
+            </ul>
+            <p>
+              The notice names the booking, who it went to and when. It is not a
+              copy of the customer&rsquo;s document — no itinerary, no passenger
+              list, no card detail — so it can be forwarded internally without
+              carrying a traveller&rsquo;s personal data with it.
+            </p>
+            <p>
+              Leave the box empty to turn notifications off. Nothing is sent to
+              a customer from this setting, and a notice that fails never
+              affects their email.
+            </p>
+          </div>
+
+          {canManage ? (
+            <NotificationRecipientsForm addresses={notificationEmails} />
+          ) : notificationEmails.length === 0 ? (
+            <p className="text-sm text-ink-muted">
+              No addresses are configured, so no internal copies are sent.
+            </p>
+          ) : (
+            <ul className="list-disc pl-5 text-sm text-ink-muted">
+              {notificationEmails.map((address) => (
+                <li key={address}>{address}</li>
+              ))}
+            </ul>
+          )}
+
+          {!canManage ? (
+            <p className="mt-3 flex items-start gap-2 text-xs text-ink-muted">
+              <Lock className="mt-0.5 size-3.5 shrink-0" />
+              Your role can read these but not change them.
+            </p>
+          ) : null}
         </Panel>
 
         <Panel

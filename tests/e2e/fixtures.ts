@@ -379,6 +379,46 @@ export async function countRefunds(bookingId: string): Promise<number> {
 }
 
 /**
+ * Reads a business setting, or `null` when the row does not exist.
+ *
+ * For the specs that drive a global setting through the UI. Those rows belong
+ * to the installation rather than to a fixture, so a spec that changes one has
+ * to put it back — including when it fails half-way, which is why this is a
+ * direct read rather than something scraped off the page.
+ */
+export async function readBusinessSetting(key: string): Promise<string | null> {
+  const rows = await query<{ value: string }>(
+    "SELECT `value` FROM `BusinessSetting` WHERE `key` = ?",
+    [key],
+  );
+
+  const value = rows[0]?.value;
+  if (value === undefined) return null;
+
+  // The driver hands back a parsed object for a JSON column on some versions
+  // and the raw text on others; the caller only ever round-trips it.
+  return typeof value === "string" ? value : JSON.stringify(value);
+}
+
+/** Writes a business setting back, or deletes it when given `null`. */
+export async function writeBusinessSetting(
+  key: string,
+  json: string | null,
+): Promise<void> {
+  if (json === null) {
+    await query("DELETE FROM `BusinessSetting` WHERE `key` = ?", [key]);
+    return;
+  }
+
+  await query(
+    `INSERT INTO \`BusinessSetting\` (\`id\`, \`key\`, \`value\`, \`createdAt\`, \`updatedAt\`)
+     VALUES (?, ?, ?, NOW(3), NOW(3))
+     ON DUPLICATE KEY UPDATE \`value\` = VALUES(\`value\`), \`updatedAt\` = NOW(3)`,
+    [newId(), key, json],
+  );
+}
+
+/**
  * Removes every fixture this suite created.
  *
  * Ordered innermost-first because financial rows use onDelete: Restrict — a

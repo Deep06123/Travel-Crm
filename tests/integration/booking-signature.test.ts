@@ -12,6 +12,7 @@ import { hashPassword } from "@/lib/auth/password";
 import { prisma } from "@/lib/db/prisma";
 import { resetEnvCache } from "@/lib/env";
 import { resetMailerCache } from "@/lib/mail";
+import { flushPendingAdminNotices } from "@/server/services/admin-notification-service";
 import { sendAuthorizationEmail } from "@/server/services/booking-authorization-service";
 import {
   createSignatureRequest,
@@ -21,6 +22,12 @@ import {
 } from "@/server/services/booking-signature-service";
 import { createFlightBooking } from "@/server/services/booking-service";
 
+import {
+  restoreAdminNoticeSetting,
+  setAdminNoticeEmails,
+  takeAdminNoticeSetting,
+  type SavedNoticeSetting,
+} from "../helpers/admin-notices";
 import { SmtpSink, decodeQuotedPrintable } from "../helpers/smtp-sink";
 
 /**
@@ -38,6 +45,7 @@ const sink = new SmtpSink();
 
 let actorId: string;
 let customerId: string;
+let savedNotices: SavedNoticeSetting = null;
 const bookingIds: string[] = [];
 
 const CLAIMS = {
@@ -125,6 +133,11 @@ beforeAll(async () => {
   resetEnvCache();
   resetMailerCache();
 
+  // Off for the file, so every assertion about what crossed the socket is
+  // about the customer's message. The one test that is *about* the internal
+  // notice switches it on for itself.
+  savedNotices = await takeAdminNoticeSetting();
+
   const actor = await prisma.adminUser.create({
     data: {
       email: `sign-test-${SUFFIX}@example.invalid`,
@@ -149,11 +162,15 @@ beforeAll(async () => {
   customerId = customer.id;
 });
 
-afterEach(() => {
+afterEach(async () => {
+  // A notice dispatched by the test that just ended is still in flight, and
+  // would otherwise land in the next test's sink.
+  await flushPendingAdminNotices();
   sink.reset();
 });
 
 afterAll(async () => {
+  await restoreAdminNoticeSetting(savedNotices);
   await prisma.auditLog.deleteMany({ where: { adminUserId: actorId } });
   await prisma.auditLog.deleteMany({ where: { entityType: "BookingSignature" } });
   await prisma.notification.deleteMany({
@@ -328,7 +345,9 @@ describe("recording a signature", () => {
       userAgent: "Mozilla/5.0 (Windows NT 10.0)",
     });
 
-    expect(outcome).toEqual({ ok: true, bookingId });
+    // The booking number comes back alongside the id because the internal
+    // notice is addressed to people who know bookings by number, not by cuid.
+    expect(outcome).toMatchObject({ ok: true, bookingId });
 
     const row = await prisma.bookingSignature.findUnique({
       where: { id },
@@ -462,5 +481,114 @@ describe("the e-ticket gate", () => {
     // A later send does not undo the signature already given.
     await createSignatureRequest(bookingId, "someone@example.invalid", actorId);
     await expect(hasSignedAuthorization(bookingId)).resolves.toBe(true);
+  });
+});
+
+describe("internal notifications", () => {
+  /**
+   * The office's copy of what the customer was sent.
+   *
+   * Asserted on the wire rather than on the Notification row, because the
+   * failure that matters is a notice that is recorded and never delivered —
+   * and because the one thing it must never become is a second copy of the
+   * customer's document. The passport number is the canary: it is not even
+   * loaded for the customer's email, and it must not appear here either.
+   */
+  const OFFICE = "ops@example.invalid";
+
+  it("copies the office when the authorization email is sent", async () => {
+    await setAdminNoticeEmails([OFFICE]);
+    const bookingId = await makeBooking();
+
+    await sendAuthorizationEmail({
+      bookingId,
+      actorId,
+      origin: "https://crm.example.invalid",
+    });
+
+    await flushPendingAdminNotices();
+
+    const notice = sink.messages.find((message) =>
+      message.recipients.includes(OFFICE),
+    );
+
+    expect(notice).toBeDefined();
+
+    const body = decodeQuotedPrintable(notice!.data);
+    expect(body).toContain("Authorization email sent");
+    expect(body).toContain("Signature Test Actor");
+    // A notice, not the document: no itinerary and no traveller data.
+    expect(body).not.toContain("X1234567");
+    expect(body).not.toContain("CLICK TO CONFIRM");
+
+    const row = await prisma.notification.findFirst({
+      where: { bookingId, eventType: "ADMIN_AUTHORIZATION_SENT" },
+      select: { status: true, recipient: true, dedupeKey: true },
+    });
+
+    expect(row?.status).toBe(NotificationStatus.SENT);
+    expect(row?.recipient).toBe(OFFICE);
+    // Null, so a second authorization email gets a second notice.
+    expect(row?.dedupeKey).toBeNull();
+
+    await setAdminNoticeEmails([]);
+  });
+
+  it("copies the office when the customer signs", async () => {
+    await setAdminNoticeEmails([OFFICE]);
+    const bookingId = await makeBooking();
+    const { token } = await createSignatureRequest(
+      bookingId,
+      "someone@example.invalid",
+      actorId,
+    );
+
+    sink.reset();
+
+    await recordSignature({
+      token,
+      claims: CLAIMS,
+      ipAddress: "203.0.113.5",
+      userAgent: "Mozilla/5.0 (Windows NT 10.0)",
+    });
+
+    await flushPendingAdminNotices();
+
+    const notice = sink.messages.find((message) =>
+      message.recipients.includes(OFFICE),
+    );
+
+    expect(notice).toBeDefined();
+
+    const body = decodeQuotedPrintable(notice!.data);
+    expect(body).toContain("Customer signed the authorization");
+    expect(body).toContain("Grace Hopper");
+    expect(body).toContain("203.0.113.5");
+
+    await setAdminNoticeEmails([]);
+  });
+
+  it("sends nothing and records nothing when no address is configured", async () => {
+    await setAdminNoticeEmails([]);
+    const bookingId = await makeBooking();
+
+    await sendAuthorizationEmail({
+      bookingId,
+      actorId,
+      origin: "https://crm.example.invalid",
+    });
+
+    await flushPendingAdminNotices();
+
+    // Only the customer's own message crossed the socket.
+    expect(sink.messages).toHaveLength(1);
+
+    const rows = await prisma.notification.count({
+      where: { bookingId, eventType: "ADMIN_AUTHORIZATION_SENT" },
+    });
+
+    // Deliberately not even a SUPPRESSED row: a deployment that wants no
+    // internal copies must not accumulate one per customer email saying so.
+    expect(rows).toBe(0);
   });
 });

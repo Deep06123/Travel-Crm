@@ -12,6 +12,10 @@ import { hashPassword } from "@/lib/auth/password";
 import { prisma } from "@/lib/db/prisma";
 import { resetEnvCache } from "@/lib/env";
 import { resetMailerCache } from "@/lib/mail";
+import {
+  flushPendingAdminNotices,
+  sendAdminNotice,
+} from "@/server/services/admin-notification-service";
 import { createFlightBooking } from "@/server/services/booking-service";
 import { transitionBooking } from "@/server/services/booking-status-service";
 import {
@@ -21,6 +25,12 @@ import {
   sendBookingEmail,
 } from "@/server/services/customer-email-service";
 
+import {
+  restoreAdminNoticeSetting,
+  setAdminNoticeEmails,
+  takeAdminNoticeSetting,
+  type SavedNoticeSetting,
+} from "../helpers/admin-notices";
 import { SmtpSink, decodeQuotedPrintable } from "../helpers/smtp-sink";
 
 /**
@@ -36,6 +46,7 @@ const sink = new SmtpSink();
 
 let actorId: string;
 let customerId: string;
+let savedNotices: SavedNoticeSetting = null;
 const bookingIds: string[] = [];
 
 /** The whole decoded message, headers and body, as readable text. */
@@ -138,6 +149,12 @@ beforeAll(async () => {
   resetEnvCache();
   resetMailerCache();
 
+  // Off for the file. An operator who has configured internal copies in the
+  // development database would otherwise put a second message on the wire for
+  // every send here, and every assertion about what was emailed is about the
+  // customer's message.
+  savedNotices = await takeAdminNoticeSetting();
+
   const actor = await prisma.adminUser.create({
     data: {
       email: `mail-test-${SUFFIX}@example.invalid`,
@@ -162,7 +179,10 @@ beforeAll(async () => {
   customerId = customer.id;
 });
 
-afterEach(() => {
+afterEach(async () => {
+  // A notice dispatched by the test that just ended is still in flight, and
+  // would otherwise land in the next test's sink.
+  await flushPendingAdminNotices();
   sink.reset();
 });
 
@@ -170,6 +190,7 @@ afterAll(async () => {
   // A dispatch still in flight would otherwise write to rows this block is
   // deleting, and fail against a closed connection.
   await flushPendingBookingEmails();
+  await restoreAdminNoticeSetting(savedNotices);
   await prisma.notification.deleteMany({
     where: { bookingId: { in: bookingIds } },
   });
@@ -427,5 +448,107 @@ describe("when the email cannot be sent", () => {
     await prisma.booking.deleteMany({ where: { id } });
     bookingIds.splice(bookingIds.indexOf(id), 1);
     await prisma.customer.delete({ where: { id: orphan.id } });
+  });
+});
+
+describe("internal notifications", () => {
+  const OFFICE = "ops@example.invalid";
+
+  it("copies the office when a confirmation reaches the customer", async () => {
+    await setAdminNoticeEmails([OFFICE]);
+    const id = await makeBooking();
+
+    await transitionBooking({
+      bookingId: id,
+      toStatus: BookingStatus.CONFIRMED,
+      actorId,
+    });
+
+    await flushPendingBookingEmails();
+    await flushPendingAdminNotices();
+
+    const notice = sink.messages.find((message) =>
+      message.recipients.includes(OFFICE),
+    );
+
+    expect(notice).toBeDefined();
+
+    const body = decodeQuotedPrintable(notice!.data);
+    expect(body).toContain("Booking confirmation sent to the customer");
+    expect(body).toContain(`mail-customer-${SUFFIX}@example.invalid`);
+    // A notice, not a second copy of the customer's document.
+    expect(body).not.toContain("YOUR RESERVATION IS CONFIRMED!!");
+
+    const row = await prisma.notification.findFirst({
+      where: { bookingId: id, eventType: "ADMIN_CUSTOMER_EMAIL_SENT" },
+      select: { status: true, recipient: true },
+    });
+
+    expect(row?.status).toBe(NotificationStatus.SENT);
+    expect(row?.recipient).toBe(OFFICE);
+
+    await setAdminNoticeEmails([]);
+  });
+
+  it("names the e-ticket rather than the confirmation when that is what went", async () => {
+    await setAdminNoticeEmails([OFFICE]);
+    const id = await makeBooking({
+      status: BookingStatus.CONFIRMED,
+      ticketStatus: TicketStatus.ISSUED,
+      airlineConfirmation: "ABC123",
+      ticketNumber: "0062345678901",
+    });
+
+    await transitionBooking({
+      bookingId: id,
+      toStatus: BookingStatus.TICKETED,
+      actorId,
+    });
+
+    await flushPendingBookingEmails();
+    await flushPendingAdminNotices();
+
+    const notice = sink.messages.find((message) =>
+      message.recipients.includes(OFFICE),
+    );
+
+    const body = decodeQuotedPrintable(notice!.data);
+    expect(body).toContain("E-ticket sent to the customer");
+    expect(body).not.toContain("Booking confirmation sent");
+    // The ticket number is the customer's document, not the office's notice.
+    expect(body).not.toContain("0062345678901");
+
+    await setAdminNoticeEmails([]);
+  });
+
+  it("records FAILED when the transport rejects the notice", async () => {
+    await setAdminNoticeEmails([OFFICE]);
+    const id = await makeBooking();
+
+    sink.rejectRecipients = true;
+
+    // Called directly rather than through a customer send: the two share one
+    // sink, and the case worth proving is a notice that fails on its own.
+    const outcome = await sendAdminNotice({
+      bookingId: id,
+      bookingNumber: "BK-TEST",
+      event: "ADMIN_CUSTOMER_EMAIL_SENT",
+      headline: "Booking confirmation sent to the customer",
+      rows: [{ label: "Sent to", value: "someone@example.invalid" }],
+    });
+
+    expect(outcome.result).toBe("failed");
+
+    const row = await prisma.notification.findFirstOrThrow({
+      where: { bookingId: id, eventType: "ADMIN_CUSTOMER_EMAIL_SENT" },
+    });
+
+    // The row says what happened: attempted, rejected, never sent.
+    expect(row.status).toBe(NotificationStatus.FAILED);
+    expect(row.lastError).toBeTruthy();
+    expect(row.sentAt).toBeNull();
+    expect(row.attemptCount).toBeGreaterThan(0);
+
+    await setAdminNoticeEmails([]);
   });
 });

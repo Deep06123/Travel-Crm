@@ -29,6 +29,12 @@ import {
   type BookingEmailData,
 } from "@/lib/mail/templates";
 import type { PolicyOverrides } from "@/lib/mail/policies";
+import { formatMoney } from "@/lib/financial/money";
+
+import {
+  ADMIN_CUSTOMER_EMAIL_SENT,
+  dispatchAdminNotice,
+} from "./admin-notification-service";
 
 import { loadPolicyOverrides } from "./email-policy-service";
 
@@ -435,6 +441,30 @@ export async function sendBookingEmail({
       "Customer email sent",
     );
 
+    // The office's copy of what the customer just received. Dispatched, never
+    // awaited: this path already runs behind `after()` for an automatic send
+    // and in front of an operator for a manual one, and neither may be failed
+    // by an internal notice.
+    dispatchAdminNotice({
+      bookingId,
+      bookingNumber: booking.bookingNumber,
+      event: ADMIN_CUSTOMER_EMAIL_SENT,
+      headline:
+        event === BOOKING_CONFIRMED
+          ? "Booking confirmation sent to the customer"
+          : "E-ticket sent to the customer",
+      rows: [
+        { label: "Customer", value: customerNameOf(booking) },
+        { label: "Sent to", value: recipient },
+        { label: "Subject", value: rendered.subject },
+        {
+          label: "Amount",
+          value: formatMoney(booking.totalMinor, booking.currency),
+        },
+        { label: "Edited before sending", value: override ? "Yes" : null },
+      ],
+    });
+
     return { result: "sent", notificationId: row.id };
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error);
@@ -473,14 +503,20 @@ function storedItinerary(booking: BookingRow): string | null {
     : (booking.flightDetail?.itineraryHtml ?? null);
 }
 
+/** The booking's own contact name, falling back to the customer record. */
+function customerNameOf(booking: BookingRow): string {
+  return (
+    booking.contactName?.trim() ||
+    `${booking.customer.firstName} ${booking.customer.lastName}`.trim() ||
+    "traveller"
+  );
+}
+
 function toEmailData(
   booking: BookingRow,
   policyOverrides: PolicyOverrides,
 ): BookingEmailData {
-  const customerName =
-    booking.contactName?.trim() ||
-    `${booking.customer.firstName} ${booking.customer.lastName}`.trim() ||
-    "traveller";
+  const customerName = customerNameOf(booking);
 
   return {
     bookingNumber: booking.bookingNumber,

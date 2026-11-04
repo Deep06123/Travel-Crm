@@ -25,6 +25,14 @@ import {
   type BookingAuthorizationData,
 } from "@/lib/mail/booking-authorization";
 import type { PolicyOverrides } from "@/lib/mail/policies";
+import { formatDate } from "@/lib/format";
+import { formatMoney } from "@/lib/financial/money";
+
+import {
+  actorName,
+  ADMIN_AUTHORIZATION_SENT,
+  dispatchAdminNotice,
+} from "./admin-notification-service";
 
 import { loadPolicyOverrides } from "./email-policy-service";
 
@@ -159,14 +167,20 @@ function storedItinerary(booking: AuthorizationRow): string | null {
     : (booking.flightDetail?.itineraryHtml ?? null);
 }
 
+/** The booking's own contact name, falling back to the customer record. */
+function customerNameOf(booking: AuthorizationRow): string {
+  return (
+    booking.contactName?.trim() ||
+    `${booking.customer.firstName} ${booking.customer.lastName}`.trim() ||
+    "traveller"
+  );
+}
+
 function toAuthorizationData(
   booking: AuthorizationRow,
   policyOverrides: PolicyOverrides,
 ): BookingAuthorizationData {
-  const customerName =
-    booking.contactName?.trim() ||
-    `${booking.customer.firstName} ${booking.customer.lastName}`.trim() ||
-    "traveller";
+  const customerName = customerNameOf(booking);
 
   return {
     bookingNumber: booking.bookingNumber,
@@ -428,6 +442,27 @@ export async function sendAuthorizationEmail({
     });
 
     log.info({ bookingId, signatureId, actorId }, "Authorization email sent");
+
+    // Dispatched, not awaited: the customer's email has left and the agent is
+    // waiting on this call. Whether the office got its copy is recorded on its
+    // own Notification row and must not turn a successful send into an error
+    // on the agent's screen.
+    dispatchAdminNotice({
+      bookingId,
+      bookingNumber: booking.bookingNumber,
+      event: ADMIN_AUTHORIZATION_SENT,
+      headline: "Authorization email sent",
+      rows: [
+        { label: "Customer", value: customerNameOf(booking) },
+        { label: "Sent to", value: recipient },
+        { label: "Sent by", value: await actorName(actorId) },
+        { label: "Amount", value: formatMoney(booking.totalMinor, booking.currency) },
+        { label: "Link expires", value: formatDate(expiresAt) },
+        { label: "Edited before sending", value: override.body ? "Yes" : null },
+      ],
+      footnote:
+        "The customer has not signed yet. A second notice follows when they do.",
+    });
 
     return { result: "sent", signatureId, recipient, expiresAt };
   } catch (error) {

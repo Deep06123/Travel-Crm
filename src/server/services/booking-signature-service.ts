@@ -7,8 +7,14 @@ import type { CardType } from "@/generated/prisma/enums";
 import { AuditAction, BookingSignatureStatus } from "@/generated/prisma/enums";
 import { recordAudit } from "@/lib/audit";
 import { prisma } from "@/lib/db/prisma";
+import { formatDateTime } from "@/lib/format";
 import { lookupIp } from "@/lib/geo/ip-lookup";
 import { loggerFor } from "@/lib/logging/logger";
+
+import {
+  ADMIN_AUTHORIZATION_SIGNED,
+  dispatchAdminNotice,
+} from "./admin-notification-service";
 
 /**
  * Customer authorization links, and the e-signature evidence they return.
@@ -237,7 +243,7 @@ export interface RecordSignatureInput {
 }
 
 export type RecordSignatureResult =
-  | { ok: true; bookingId: string }
+  | { ok: true; bookingId: string; bookingNumber: string }
   | { ok: false; reason: "unknown" | "expired" | "revoked" | "signed" };
 
 /**
@@ -335,11 +341,48 @@ export async function recordSignature({
       tx,
     );
 
-    return { ok: true as const, bookingId: row.bookingId };
+    return {
+      ok: true as const,
+      bookingId: row.bookingId,
+      bookingNumber: row.booking.bookingNumber,
+    };
   });
 
   if (outcome.ok) {
     log.info({ bookingId: outcome.bookingId, ipAddress }, "Booking authorization signed");
+
+    // The one moment in this flow nobody in the office is watching: the
+    // customer signs from their own device, at their own time, and the only
+    // trace until now was a row the booking page shows if somebody opens it.
+    //
+    // Dispatched rather than awaited, as everywhere else, so the customer's
+    // "thank you" is never held up by — or failed by — the office's copy.
+    dispatchAdminNotice({
+      bookingId: outcome.bookingId,
+      bookingNumber: outcome.bookingNumber,
+      event: ADMIN_AUTHORIZATION_SIGNED,
+      headline: "Customer signed the authorization",
+      rows: [
+        { label: "Signed as", value: claims.signatureName },
+        { label: "Mobile number", value: claims.signedPhone },
+        { label: "Signed at", value: formatDateTime(new Date()) },
+        { label: "IP address", value: ipAddress },
+        {
+          label: "Location",
+          value: location
+            ? [location.city, location.region, location.country]
+                .filter(Boolean)
+                .join(", ") || null
+            : null,
+        },
+        { label: "Device", value: claims.device ?? null },
+        { label: "Operating system", value: claims.operatingSystem ?? null },
+        { label: "Browser", value: claims.browser ?? null },
+        { label: "Browser timezone", value: claims.clientTimezone ?? null },
+      ],
+      footnote:
+        "The e-ticket can now be sent. The full signature evidence is on the booking.",
+    });
   }
 
   return outcome;
