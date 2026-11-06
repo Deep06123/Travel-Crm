@@ -14,6 +14,7 @@ import {
 import { Card, Panel } from "@/components/ui/panel";
 import { Badge } from "@/components/ui/status-badge";
 import { SupplierForm } from "@/features/admin/reference-forms";
+import { SupplierRowActions } from "@/features/admin/reference-row-actions";
 import { currentUserCan, requirePermission } from "@/lib/auth/dal";
 import { formatDate } from "@/lib/format";
 import { PERMISSIONS } from "@/lib/permissions";
@@ -61,11 +62,15 @@ export default async function SuppliersPage() {
                   <Th align="right">Bookings</Th>
                   <Th>Status</Th>
                   <Th>Added</Th>
+                  {canManage ? <Th align="right">Actions</Th> : null}
                 </Tr>
               </Thead>
               <Tbody>
                 {suppliers.length === 0 ? (
-                  <EmptyState colSpan={7} title="No suppliers yet" />
+                  <EmptyState
+                    colSpan={canManage ? 8 : 7}
+                    title="No suppliers yet"
+                  />
                 ) : (
                   suppliers.map((supplier) => (
                     <Tr key={supplier.id}>
@@ -110,6 +115,25 @@ export default async function SuppliersPage() {
                       <Td className="whitespace-nowrap text-ink-muted">
                         {formatDate(supplier.createdAt)}
                       </Td>
+                      {canManage ? (
+                        <Td align="right">
+                          <SupplierRowActions
+                            record={{
+                              id: supplier.id,
+                              name: supplier.name,
+                              type: supplier.type,
+                              externalId: supplier.externalId,
+                              contactName: supplier.contactName,
+                              contactEmail: supplier.contactEmail,
+                              contactPhone: supplier.contactPhone,
+                              supportedProducts: supplier.supportedProducts,
+                              isActive: supplier.isActive,
+                              notes: supplier.notes,
+                            }}
+                            usageCount={supplier._count.bookings}
+                          />
+                        </Td>
+                      ) : null}
                     </Tr>
                   ))
                 )}

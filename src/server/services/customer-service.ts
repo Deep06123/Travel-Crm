@@ -346,3 +346,109 @@ export async function getCustomerProfile(id: string) {
     },
   });
 }
+
+// --- Removal ----------------------------------------------------------------
+
+/** Thrown when a customer has history that must not disappear with them. */
+export class CustomerInUseError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "CustomerInUseError";
+  }
+}
+
+/**
+ * Deletes a customer, or refuses and says what is holding them.
+ *
+ * `Booking.customerId` is `onDelete: Restrict`, as are payments, documents and
+ * service cases, so a customer with any history cannot be removed — nor should
+ * they be: the booking that references them is a financial record. The real
+ * use for this is the duplicate created on a bad phone line five minutes ago,
+ * which is exactly the record with nothing attached.
+ *
+ * Deactivating is the answer for everyone else, and `setCustomerStatus` is
+ * what the UI offers in place of this when the count is non-zero.
+ */
+export async function deleteCustomer(
+  id: string,
+  actorId: string,
+): Promise<void> {
+  const customer = await prisma.customer.findUnique({
+    where: { id },
+    select: {
+      reference: true,
+      firstName: true,
+      lastName: true,
+      _count: {
+        select: {
+          bookings: true,
+          payments: true,
+          documents: true,
+          serviceCases: true,
+        },
+      },
+    },
+  });
+
+  // Already gone: the operator wanted them absent and they are.
+  if (!customer) return;
+
+  const holders = [
+    customer._count.bookings > 0 ? `${customer._count.bookings} booking(s)` : null,
+    customer._count.payments > 0 ? `${customer._count.payments} payment(s)` : null,
+    customer._count.documents > 0 ? `${customer._count.documents} document(s)` : null,
+    customer._count.serviceCases > 0
+      ? `${customer._count.serviceCases} service case(s)`
+      : null,
+  ].filter((part): part is string => part !== null);
+
+  if (holders.length > 0) {
+    throw new CustomerInUseError(
+      `${customer.firstName} ${customer.lastName} has ${holders.join(", ")} against them and cannot be deleted. Mark them inactive instead — the history stays readable and they stop appearing as a current customer.`,
+    );
+  }
+
+  // Notes are the customer's own and have no meaning without them, so they go
+  // too rather than blocking the delete.
+  await prisma.$transaction(async (tx) => {
+    await tx.customerNote.deleteMany({ where: { customerId: id } });
+    await tx.customer.delete({ where: { id } });
+  });
+
+  await recordAudit({
+    action: AuditAction.DELETE,
+    entityType: "Customer",
+    entityId: id,
+    adminUserId: actorId,
+    summary: `Deleted customer ${customer.reference} (${customer.firstName} ${customer.lastName})`,
+  });
+}
+
+/** Marks a customer active, inactive or blocked. Always available. */
+export async function setCustomerStatus(
+  id: string,
+  status: CustomerStatus,
+  actorId: string,
+): Promise<void> {
+  const before = await prisma.customer.findUnique({
+    where: { id },
+    select: { status: true, reference: true },
+  });
+
+  if (!before) throw new CustomerInUseError("That customer no longer exists.");
+
+  // A no-op write would still produce an audit entry, which is how a trail
+  // fills with changes that changed nothing.
+  if (before.status === status) return;
+
+  await prisma.customer.update({ where: { id }, data: { status } });
+
+  await recordAudit({
+    action: AuditAction.UPDATE,
+    entityType: "Customer",
+    entityId: id,
+    adminUserId: actorId,
+    summary: `Set customer ${before.reference} to ${status.toLowerCase()}`,
+    changes: { status: { before: before.status, after: status } },
+  });
+}

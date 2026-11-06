@@ -20,6 +20,7 @@ import {
   TicketStatus,
 } from "@/generated/prisma/enums";
 import { MailAccountsManager } from "@/features/admin/mail-account-forms";
+import { SettingRowActions } from "@/features/admin/setting-row-actions";
 import { NotificationRecipientsForm } from "@/features/admin/notification-form";
 import { PolicySectionForms } from "@/features/admin/policy-forms";
 import { currentUserCan, requirePermission } from "@/lib/auth/dal";
@@ -33,6 +34,11 @@ import {
   ADMIN_NOTIFICATION_SETTING_KEY,
   loadAdminNotificationEmails,
 } from "@/server/services/admin-notification-service";
+import {
+  EDITABLE_SETTINGS,
+  isEditableSetting,
+  toInputValue,
+} from "@/server/services/business-settings-service";
 import {
   listMailAccounts,
   loadPurposeDefaults,
@@ -136,11 +142,15 @@ export default async function SettingsPage() {
               <Tr>
                 <Th>Setting</Th>
                 <Th>Value</Th>
+                {canManage ? <Th align="right">Actions</Th> : null}
               </Tr>
             </Thead>
             <Tbody>
               {settings.length === 0 ? (
-                <EmptyState colSpan={2} title="No settings stored" />
+                <EmptyState
+                  colSpan={canManage ? 3 : 2}
+                  title="No settings stored"
+                />
               ) : (
                 settings.map((setting) => (
                   <Tr key={setting.id}>
@@ -157,6 +167,29 @@ export default async function SettingsPage() {
                     <Td className="tabular">
                       {renderValue(setting.key, setting.value)}
                     </Td>
+                    {canManage ? (
+                      <Td align="right">
+                        {/* A row nobody declared a shape for is shown but not
+                            edited: a form cannot guess whether it wants a
+                            number, a string or a list. */}
+                        {isEditableSetting(setting.key) ? (
+                          <SettingRowActions
+                            setting={{
+                              key: setting.key,
+                              label: EDITABLE_SETTINGS[setting.key]!.label,
+                              hint: EDITABLE_SETTINGS[setting.key]!.hint,
+                              kind: EDITABLE_SETTINGS[setting.key]!.kind,
+                              inputValue: toInputValue(setting.value),
+                              isStored: true,
+                            }}
+                          />
+                        ) : (
+                          <span className="text-xs text-ink-subtle">
+                            Not editable here
+                          </span>
+                        )}
+                      </Td>
+                    ) : null}
                   </Tr>
                 ))
               )}

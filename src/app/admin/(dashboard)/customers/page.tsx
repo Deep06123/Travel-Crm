@@ -21,6 +21,7 @@ import { currentUserCan, requirePermission } from "@/lib/auth/dal";
 import { formatDate } from "@/lib/format";
 import { paginationSchema } from "@/lib/pagination";
 import { PERMISSIONS } from "@/lib/permissions";
+import { CustomerRowActions } from "@/features/customers/row-actions";
 import { customerSearchSchema } from "@/features/customers/schemas";
 import { listCustomers } from "@/server/services/customer-service";
 
@@ -36,7 +37,10 @@ export default async function CustomersPage({
   searchParams,
 }: PageProps<"/admin/customers">) {
   await requirePermission(PERMISSIONS.CUSTOMER_VIEW);
-  const canCreate = await currentUserCan(PERMISSIONS.CUSTOMER_CREATE);
+  const [canCreate, canRemove] = await Promise.all([
+    currentUserCan(PERMISSIONS.CUSTOMER_CREATE),
+    currentUserCan(PERMISSIONS.CUSTOMER_DELETE),
+  ]);
 
   const params = await searchParams;
 
@@ -131,13 +135,14 @@ export default async function CustomersPage({
               <Th align="right">Bookings</Th>
               <Th>Status</Th>
               <Th>Created</Th>
+              {canRemove ? <Th align="right">Actions</Th> : null}
             </Tr>
           </Thead>
 
           <Tbody>
             {result.rows.length === 0 ? (
               <EmptyState
-                colSpan={7}
+                colSpan={canRemove ? 8 : 7}
                 title={filters.q || filters.status ? "No matching customers" : "No customers yet"}
                 description={
                   filters.q || filters.status
@@ -180,6 +185,16 @@ export default async function CustomersPage({
                   <Td className="text-ink-muted whitespace-nowrap">
                     {formatDate(row.createdAt)}
                   </Td>
+                  {canRemove ? (
+                    <Td align="right">
+                      <CustomerRowActions
+                        customerId={row.id}
+                        name={`${row.firstName} ${row.lastName}`}
+                        status={row.status}
+                        bookingCount={row.bookingCount}
+                      />
+                    </Td>
+                  ) : null}
                 </Tr>
               ))
             )}

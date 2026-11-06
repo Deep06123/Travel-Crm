@@ -450,3 +450,188 @@ export async function upsertBookingType(
     summary: `Created booking type ${input.label}`,
   });
 }
+
+// --- Removal ----------------------------------------------------------------
+
+/**
+ * Deleting reference data, and why it is usually refused.
+ *
+ * Bookings point at suppliers, MCO suppliers and TFNs with `onDelete:
+ * Restrict`, so the database will not let a row that is in use disappear from
+ * underneath a booking's history. Rather than letting the operator press a
+ * button that comes back with a foreign-key error, every delete below checks
+ * first and says what is holding the record — the UI offers Deactivate in its
+ * place, which removes it from the pickers while the history stays readable.
+ *
+ * Deactivating is the common case and the right default. An outright delete is
+ * for the row created by a typo five minutes ago, which is exactly the row
+ * nothing references yet.
+ */
+
+/** Thrown when something still points at the record. Carries a usable reason. */
+export class ReferenceInUseError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ReferenceInUseError";
+  }
+}
+
+function plural(count: number, noun: string): string {
+  return `${count} ${noun}${count === 1 ? "" : "s"}`;
+}
+
+export async function deleteSupplier(id: string, actorId: string): Promise<void> {
+  const supplier = await prisma.supplier.findUnique({
+    where: { id },
+    select: { name: true, _count: { select: { bookings: true } } },
+  });
+
+  // Already gone. Silence rather than an error: the operator wanted it absent
+  // and it is, and a second click on a stale page should not read as a fault.
+  if (!supplier) return;
+
+  if (supplier._count.bookings > 0) {
+    throw new ReferenceInUseError(
+      `${supplier.name} is used by ${plural(supplier._count.bookings, "booking")} and cannot be deleted. Deactivate it instead to take it out of the pickers.`,
+    );
+  }
+
+  await prisma.supplier.delete({ where: { id } });
+
+  await recordAudit({
+    action: AuditAction.DELETE,
+    entityType: "Supplier",
+    entityId: id,
+    adminUserId: actorId,
+    summary: `Deleted supplier ${supplier.name}`,
+  });
+}
+
+export async function deleteMcoSupplier(
+  id: string,
+  actorId: string,
+): Promise<void> {
+  const supplier = await prisma.mcoSupplier.findUnique({
+    where: { id },
+    select: { name: true, _count: { select: { bookings: true } } },
+  });
+
+  if (!supplier) return;
+
+  if (supplier._count.bookings > 0) {
+    throw new ReferenceInUseError(
+      `${supplier.name} is used by ${plural(supplier._count.bookings, "booking")} and cannot be deleted. Deactivate it instead to take it out of the pickers.`,
+    );
+  }
+
+  await prisma.mcoSupplier.delete({ where: { id } });
+
+  await recordAudit({
+    action: AuditAction.DELETE,
+    entityType: "McoSupplier",
+    entityId: id,
+    adminUserId: actorId,
+    summary: `Deleted MCO supplier ${supplier.name}`,
+  });
+}
+
+export async function deleteTfn(id: string, actorId: string): Promise<void> {
+  const tfn = await prisma.tfn.findUnique({
+    where: { id },
+    select: {
+      number: true,
+      label: true,
+      _count: { select: { bookings: true } },
+    },
+  });
+
+  if (!tfn) return;
+
+  if (tfn._count.bookings > 0) {
+    throw new ReferenceInUseError(
+      `${tfn.label} is used by ${plural(tfn._count.bookings, "booking")} and cannot be deleted. Deactivate it instead so it stops being offered.`,
+    );
+  }
+
+  await prisma.tfn.delete({ where: { id } });
+
+  await recordAudit({
+    action: AuditAction.DELETE,
+    entityType: "Tfn",
+    entityId: id,
+    adminUserId: actorId,
+    summary: `Deleted toll-free number ${tfn.label} (${tfn.number})`,
+  });
+}
+
+/**
+ * Takes a record out of circulation without deleting it.
+ *
+ * The counterpart to the guards above: when bookings hold a record, this is
+ * what the operator actually wanted — it stops being offered on anything new
+ * and every existing reference still resolves.
+ *
+ * Deliberately not folded into the three `update*` functions. Those take a
+ * whole input object, so flipping one flag through them would mean the caller
+ * reconstructing every other field and risking a stale overwrite of a value
+ * somebody changed in between.
+ */
+export async function setReferenceActive(
+  kind: "supplier" | "mcoSupplier" | "tfn",
+  id: string,
+  isActive: boolean,
+  actorId: string,
+): Promise<void> {
+  const verb = isActive ? "Reactivated" : "Deactivated";
+
+  if (kind === "supplier") {
+    const row = await prisma.supplier.update({
+      where: { id },
+      data: { isActive },
+      select: { name: true },
+    });
+
+    await recordAudit({
+      action: AuditAction.UPDATE,
+      entityType: "Supplier",
+      entityId: id,
+      adminUserId: actorId,
+      summary: `${verb} supplier ${row.name}`,
+      changes: { isActive: { before: !isActive, after: isActive } },
+    });
+    return;
+  }
+
+  if (kind === "mcoSupplier") {
+    const row = await prisma.mcoSupplier.update({
+      where: { id },
+      data: { isActive },
+      select: { name: true },
+    });
+
+    await recordAudit({
+      action: AuditAction.UPDATE,
+      entityType: "McoSupplier",
+      entityId: id,
+      adminUserId: actorId,
+      summary: `${verb} MCO supplier ${row.name}`,
+      changes: { isActive: { before: !isActive, after: isActive } },
+    });
+    return;
+  }
+
+  const row = await prisma.tfn.update({
+    where: { id },
+    data: { isActive },
+    select: { label: true, number: true },
+  });
+
+  await recordAudit({
+    action: AuditAction.UPDATE,
+    entityType: "Tfn",
+    entityId: id,
+    adminUserId: actorId,
+    summary: `${verb} toll-free number ${row.label} (${row.number})`,
+    changes: { isActive: { before: !isActive, after: isActive } },
+  });
+}

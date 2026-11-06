@@ -11,6 +11,11 @@ import {
   createMcoSupplier,
   createSupplier,
   createTfn,
+  deleteMcoSupplier,
+  deleteSupplier,
+  deleteTfn,
+  ReferenceInUseError,
+  setReferenceActive,
   updateMcoSupplier,
   updateSupplier,
   updateTfn,
@@ -38,6 +43,24 @@ function collectFieldErrors(
   return fieldErrors;
 }
 
+/**
+ * A select or checkbox value, read as the boolean it means.
+ *
+ * `z.coerce.boolean()` cannot do this: it is `Boolean(value)`, and the string
+ * "false" is truthy — so an Active dropdown set to No silently saved as Yes.
+ * Only the literal strings a form actually posts are treated as true; an
+ * absent checkbox arrives as `undefined` and falls to the default.
+ */
+const formBoolean = (fallback: boolean) =>
+  z
+    .union([z.string(), z.boolean()])
+    .optional()
+    .transform((value) => {
+      if (value === undefined || value === "") return fallback;
+      if (typeof value === "boolean") return value;
+      return value === "true" || value === "on" || value === "1";
+    });
+
 const optionalEmail = z
   .string()
   .trim()
@@ -59,9 +82,9 @@ const supplierSchema = z.object({
   contactName: z.string().trim().max(120).optional(),
   contactEmail: optionalEmail,
   contactPhone: z.string().trim().max(40).optional(),
-  supportsFlight: z.coerce.boolean().default(false),
-  supportsCruise: z.coerce.boolean().default(false),
-  isActive: z.coerce.boolean().default(true),
+  supportsFlight: formBoolean(false),
+  supportsCruise: formBoolean(false),
+  isActive: formBoolean(true),
   notes: z.string().trim().max(2_000).optional(),
 });
 
@@ -115,7 +138,7 @@ const mcoSchema = z.object({
   mailFrom: optionalEmail,
   contactEmail: optionalEmail,
   contactPhone: z.string().trim().max(40).optional(),
-  isActive: z.coerce.boolean().default(true),
+  isActive: formBoolean(true),
   notes: z.string().trim().max(2_000).optional(),
 });
 
@@ -161,7 +184,7 @@ const tfnSchema = z.object({
   number: z.string().trim().min(1, "Enter a number.").max(40),
   label: z.string().trim().min(1, "Enter a label.").max(120),
   category: z.string().trim().max(60).optional(),
-  isActive: z.coerce.boolean().default(true),
+  isActive: formBoolean(true),
   notes: z.string().trim().max(2_000).optional(),
 });
 
@@ -205,7 +228,7 @@ const bookingTypeSchema = z.object({
   id: z.string().trim().optional(),
   code: z.string().trim().min(1, "Enter a code.").max(40),
   label: z.string().trim().min(1, "Enter a label.").max(80),
-  isActive: z.coerce.boolean().default(true),
+  isActive: formBoolean(true),
   sortOrder: z.coerce.number().int().min(0).max(9_999).default(0),
 });
 
@@ -238,4 +261,82 @@ export async function saveBookingTypeAction(
 
   revalidatePath("/admin/settings");
   return { success: parsed.data.id ? "Booking type updated." : "Booking type added." };
+}
+
+// --- Removal ----------------------------------------------------------------
+
+/**
+ * One action for all three, keyed by what is being removed.
+ *
+ * Three near-identical actions would differ only in which service function and
+ * which permission they name, and a copy-pasted permission check is exactly the
+ * one that eventually gets the wrong constant.
+ *
+ * `ReferenceInUseError` is reported as written rather than flattened into a
+ * generic failure: it already explains which bookings are holding the record
+ * and what to do instead, which is the whole reason it exists.
+ */
+const KINDS = {
+  supplier: {
+    permission: PERMISSIONS.SUPPLIER_MANAGE,
+    remove: deleteSupplier,
+    path: "/admin/suppliers",
+    noun: "Supplier",
+  },
+  mcoSupplier: {
+    permission: PERMISSIONS.SUPPLIER_MANAGE,
+    remove: deleteMcoSupplier,
+    path: "/admin/mco-suppliers",
+    noun: "MCO supplier",
+  },
+  tfn: {
+    permission: PERMISSIONS.TFN_MANAGE,
+    remove: deleteTfn,
+    path: "/admin/tfn",
+    noun: "Number",
+  },
+} as const;
+
+type ReferenceKind = keyof typeof KINDS;
+
+function isKind(value: string): value is ReferenceKind {
+  return value in KINDS;
+}
+
+export async function deleteReferenceAction(
+  _previous: ReferenceFormState,
+  formData: FormData,
+): Promise<ReferenceFormState> {
+  const kind = String(formData.get("kind") ?? "");
+  const id = String(formData.get("id") ?? "").trim();
+
+  if (!isKind(kind) || id === "") return { error: "Invalid request." };
+
+  const { permission, remove, path, noun } = KINDS[kind];
+  const user = await requirePermission(permission);
+
+  // The same control, because they occupy the same slot in the row: which one
+  // it is depends on whether anything references the record, and the UI
+  // already knows that from the count it renders.
+  const deactivating = formData.get("deactivate") === "true";
+
+  try {
+    if (deactivating) {
+      await setReferenceActive(kind, id, false, user.id);
+      revalidatePath(path);
+      return { success: `${noun} deactivated. It no longer appears in pickers.` };
+    }
+
+    await remove(id, user.id);
+  } catch (error) {
+    if (error instanceof ReferenceInUseError) {
+      return { error: error.message };
+    }
+
+    log.error({ err: error, kind, id }, "Failed to delete reference record");
+    return { error: `The ${noun.toLowerCase()} could not be deleted.` };
+  }
+
+  revalidatePath(path);
+  return { success: `${noun} deleted.` };
 }

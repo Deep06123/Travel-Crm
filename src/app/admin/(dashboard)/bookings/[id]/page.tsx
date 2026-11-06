@@ -25,6 +25,7 @@ import {
 } from "@/components/ui/status-badge";
 import { CommentVisibility, DocumentOrigin } from "@/generated/prisma/enums";
 import { CommentForm, FollowUpForm } from "@/features/bookings/comment-form";
+import { CommentRowActions } from "@/features/bookings/comment-row-actions";
 import { DOCUMENTS_FAILED_PARAM } from "@/features/bookings/document-attachments.constants";
 import { DocumentUploadForm } from "@/features/documents/upload-form";
 import { bookingRecipientLine } from "@/lib/bookings/recipients";
@@ -114,7 +115,7 @@ export default async function BookingDetailPage({
   params,
   searchParams,
 }: PageProps<"/admin/bookings/[id]">) {
-  await requirePermission(PERMISSIONS.BOOKING_VIEW);
+  const viewer = await requirePermission(PERMISSIONS.BOOKING_VIEW);
 
   // Set by the create action when a file chosen on the booking form failed to
   // store; see `features/bookings/document-attachments.ts`.
@@ -137,6 +138,7 @@ export default async function BookingDetailPage({
     canUpdateMco,
     canSendAuthorization,
     canManageSettings,
+    canManageComments,
   ] = await Promise.all([
     currentUserCan(PERMISSIONS.BOOKING_CHANGE_STATUS),
     currentUserCan(PERMISSIONS.PASSENGER_VIEW_SENSITIVE),
@@ -152,6 +154,7 @@ export default async function BookingDetailPage({
     // Only so the sender picker can offer a way out when no account is
     // configured. A role that cannot reach Settings is shown nothing.
     currentUserCan(PERMISSIONS.SETTINGS_MANAGE),
+    currentUserCan(PERMISSIONS.COMMENT_MANAGE),
   ]);
 
   const { id } = await params;
@@ -1203,6 +1206,19 @@ export default async function BookingDetailPage({
                       {comment.author?.name ?? "Unknown"} ·{" "}
                       {formatDateTime(comment.createdAt)}
                     </p>
+
+                    {canManageComments || comment.author?.id === viewer.id ? (
+                      <div className="mt-2">
+                        <CommentRowActions
+                          comment={{
+                            id: comment.id,
+                            body: comment.body,
+                            category: comment.category,
+                            visibility: comment.visibility,
+                          }}
+                        />
+                      </div>
+                    ) : null}
                   </li>
                 ))}
               </ul>

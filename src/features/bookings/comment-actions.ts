@@ -10,7 +10,7 @@ import {
   FollowUpStatus,
 } from "@/generated/prisma/enums";
 import { recordAudit } from "@/lib/audit";
-import { requirePermission } from "@/lib/auth/dal";
+import { currentUserCan, requirePermission } from "@/lib/auth/dal";
 import { prisma } from "@/lib/db/prisma";
 import { loggerFor } from "@/lib/logging/logger";
 import { PERMISSIONS } from "@/lib/permissions";
@@ -199,4 +199,132 @@ export async function resolveFollowUpAction(
   revalidatePath(`/admin/bookings/${bookingId}`);
   revalidatePath("/admin");
   return { success: "Follow-up updated." };
+}
+
+// --- Editing and removing a comment -----------------------------------------
+
+/**
+ * Who may change a comment after it is written.
+ *
+ * The author, because a typo in your own note is yours to fix, and anyone
+ * holding `comment.manage`, which exists for the case the author has left or
+ * wrote something that should not stand. Nobody else, including other agents
+ * with `comment.create`: a booking's comment thread is a record of who said
+ * what, and it stops being one the moment any colleague can rewrite a line.
+ *
+ * Both are re-checked here rather than only hidden in the UI.
+ */
+async function authoriseCommentChange(
+  commentId: string,
+): Promise<
+  | {
+      ok: true;
+      actorId: string;
+      comment: { bookingId: string; body: string; authorId: string | null };
+    }
+  | { ok: false; error: string }
+> {
+  const user = await requirePermission(PERMISSIONS.COMMENT_VIEW);
+
+  const comment = await prisma.bookingComment.findUnique({
+    where: { id: commentId },
+    select: { bookingId: true, body: true, authorId: true },
+  });
+
+  if (!comment) return { ok: false, error: "That comment no longer exists." };
+
+  if (comment.authorId === user.id) {
+    return { ok: true, actorId: user.id, comment };
+  }
+
+  if (await currentUserCan(PERMISSIONS.COMMENT_MANAGE)) {
+    return { ok: true, actorId: user.id, comment };
+  }
+
+  return {
+    ok: false,
+    error: "You can only change comments you wrote yourself.",
+  };
+}
+
+const editSchema = z.object({
+  commentId: z.string().trim().min(1),
+  body: z.string().trim().min(1, "A comment cannot be empty.").max(5_000),
+  category: z.string().trim().max(80).optional(),
+  visibility: z.enum(CommentVisibility),
+});
+
+export async function updateBookingCommentAction(
+  _previous: CommentState,
+  formData: FormData,
+): Promise<CommentState> {
+  const parsed = editSchema.safeParse(Object.fromEntries(formData.entries()));
+
+  if (!parsed.success) {
+    return { error: parsed.error.issues[0]?.message ?? "Invalid comment." };
+  }
+
+  const { commentId, body, category, visibility } = parsed.data;
+
+  const allowed = await authoriseCommentChange(commentId);
+  if (!allowed.ok) return { error: allowed.error };
+
+  try {
+    await prisma.bookingComment.update({
+      where: { id: commentId },
+      data: { body, category: category || null, visibility },
+    });
+
+    await recordAudit({
+      action: AuditAction.UPDATE,
+      entityType: "BookingComment",
+      entityId: commentId,
+      adminUserId: allowed.actorId,
+      summary: "Edited a booking comment",
+      // The previous wording is kept, because "what did it say before" is the
+      // only question anyone asks about an edited comment.
+      changes: { body: { before: allowed.comment.body, after: body } },
+    });
+  } catch (error) {
+    log.error({ err: error, commentId }, "Failed to edit comment");
+    return { error: "The comment could not be saved. Try again." };
+  }
+
+  revalidatePath(`/admin/bookings/${allowed.comment.bookingId}`);
+  revalidatePath("/admin/comments");
+  return { success: "Comment updated." };
+}
+
+export async function deleteBookingCommentAction(
+  _previous: CommentState,
+  formData: FormData,
+): Promise<CommentState> {
+  const commentId = String(formData.get("commentId") ?? "").trim();
+  if (commentId === "") return { error: "Invalid request." };
+
+  const allowed = await authoriseCommentChange(commentId);
+  if (!allowed.ok) return { error: allowed.error };
+
+  try {
+    await prisma.bookingComment.delete({ where: { id: commentId } });
+
+    // The body goes into the audit entry rather than vanishing with the row:
+    // a deleted comment leaving no trace of what it said is indistinguishable
+    // from one that was never written.
+    await recordAudit({
+      action: AuditAction.DELETE,
+      entityType: "BookingComment",
+      entityId: commentId,
+      adminUserId: allowed.actorId,
+      summary: "Deleted a booking comment",
+      changes: { body: { before: allowed.comment.body, after: null } },
+    });
+  } catch (error) {
+    log.error({ err: error, commentId }, "Failed to delete comment");
+    return { error: "The comment could not be deleted. Try again." };
+  }
+
+  revalidatePath(`/admin/bookings/${allowed.comment.bookingId}`);
+  revalidatePath("/admin/comments");
+  return { success: "Comment deleted." };
 }

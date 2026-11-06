@@ -3,12 +3,13 @@ import Link from "next/link";
 import { Search } from "lucide-react";
 
 import { PageHeader } from "@/components/layout/admin-shell";
+import { CommentRowActions } from "@/features/bookings/comment-row-actions";
 import { PaginationControls } from "@/components/tables/pagination-controls";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Input, Select } from "@/components/ui/field";
 import { Badge, BookingStatusBadge } from "@/components/ui/status-badge";
 import { CommentVisibility } from "@/generated/prisma/enums";
-import { requirePermission } from "@/lib/auth/dal";
+import { currentUserCan, requirePermission } from "@/lib/auth/dal";
 import {
   formatCalendarDate,
   formatDateTime,
@@ -26,7 +27,11 @@ export const metadata: Metadata = { title: "Latest comments · Travel CRM" };
 export default async function CommentsPage({
   searchParams,
 }: PageProps<"/admin/comments">) {
-  await requirePermission(PERMISSIONS.COMMENT_VIEW);
+  const viewer = await requirePermission(PERMISSIONS.COMMENT_VIEW);
+
+  // The author may change their own; `comment.manage` may change anyone's.
+  // Both are enforced again in the actions — this only decides what is drawn.
+  const canManageAny = await currentUserCan(PERMISSIONS.COMMENT_MANAGE);
 
   const params = await searchParams;
   const pick = (key: string): string | undefined => {
@@ -174,6 +179,19 @@ export default async function CommentsPage({
                     </span>
                   ) : null}
                 </div>
+
+                {canManageAny || comment.author?.id === viewer.id ? (
+                  <div className="mt-2">
+                    <CommentRowActions
+                      comment={{
+                        id: comment.id,
+                        body: comment.body,
+                        category: comment.category,
+                        visibility: comment.visibility,
+                      }}
+                    />
+                  </div>
+                ) : null}
               </li>
             ))}
           </ul>

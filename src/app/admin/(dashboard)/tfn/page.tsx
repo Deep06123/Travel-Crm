@@ -14,6 +14,7 @@ import {
 import { Card, Panel } from "@/components/ui/panel";
 import { Badge } from "@/components/ui/status-badge";
 import { TfnForm } from "@/features/admin/reference-forms";
+import { TfnRowActions } from "@/features/admin/reference-row-actions";
 import { currentUserCan, requirePermission } from "@/lib/auth/dal";
 import { formatMoney } from "@/lib/financial/money";
 import { formatDate } from "@/lib/format";
@@ -71,12 +72,13 @@ export default async function TfnPage() {
                   <Th align="right">All time</Th>
                   <Th>Status</Th>
                   <Th>Added</Th>
+                  {canManage ? <Th align="right">Actions</Th> : null}
                 </Tr>
               </Thead>
               <Tbody>
                 {tfns.length === 0 ? (
                   <EmptyState
-                    colSpan={8}
+                    colSpan={canManage ? 9 : 8}
                     title="No numbers configured"
                     description="Add a toll-free number to attribute bookings to it."
                   />
@@ -112,6 +114,21 @@ export default async function TfnPage() {
                         <Td className="whitespace-nowrap text-ink-muted">
                           {formatDate(tfn.createdAt)}
                         </Td>
+                        {canManage ? (
+                          <Td align="right">
+                            <TfnRowActions
+                              record={{
+                                id: tfn.id,
+                                number: tfn.number,
+                                label: tfn.label,
+                                category: tfn.category,
+                                isActive: tfn.isActive,
+                                notes: tfn.notes,
+                              }}
+                              usageCount={tfn._count.bookings}
+                            />
+                          </Td>
+                        ) : null}
                       </Tr>
                     );
                   })

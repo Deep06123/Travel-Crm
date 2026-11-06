@@ -58,6 +58,7 @@ export const PERMISSIONS = {
 
   COMMENT_VIEW: "comment.view",
   COMMENT_CREATE: "comment.create",
+  COMMENT_MANAGE: "comment.manage",
 
   FOLLOW_UP_VIEW: "followUp.view",
   FOLLOW_UP_MANAGE: "followUp.manage",
@@ -67,6 +68,7 @@ export const PERMISSIONS = {
   CUSTOMER_CREATE: "customer.create",
   CUSTOMER_UPDATE: "customer.update",
   CUSTOMER_EXPORT: "customer.export",
+  CUSTOMER_DELETE: "customer.delete",
 
   // --- Documents ------------------------------------------------------------
   DOCUMENT_VIEW: "document.view",
@@ -125,6 +127,7 @@ export const PERMISSIONS = {
   SETTINGS_VIEW: "settings.view",
   SETTINGS_MANAGE: "settings.manage",
   AUDIT_LOG_VIEW: "auditLog.view",
+  AUDIT_LOG_DELETE: "auditLog.delete",
   BOOKING_TYPE_MANAGE: "bookingType.manage",
 } as const;
 
@@ -147,6 +150,7 @@ export const PERMISSION_DEFINITIONS: readonly PermissionDefinition[] = [
   { key: PERMISSIONS.PASSENGER_MANAGE, description: "Add and edit passengers", category: BOOKINGS },
   { key: PERMISSIONS.COMMENT_VIEW, description: "Read booking comments", category: BOOKINGS },
   { key: PERMISSIONS.COMMENT_CREATE, description: "Add booking comments", category: BOOKINGS },
+  { key: PERMISSIONS.COMMENT_MANAGE, description: "Edit and delete anyone's booking comments", category: BOOKINGS },
   { key: PERMISSIONS.FOLLOW_UP_VIEW, description: "View follow-up tasks", category: BOOKINGS },
   { key: PERMISSIONS.FOLLOW_UP_MANAGE, description: "Create, assign and resolve follow-ups", category: BOOKINGS },
 
@@ -154,6 +158,7 @@ export const PERMISSION_DEFINITIONS: readonly PermissionDefinition[] = [
   { key: PERMISSIONS.CUSTOMER_CREATE, description: "Create customers", category: CUSTOMERS },
   { key: PERMISSIONS.CUSTOMER_UPDATE, description: "Edit customer details", category: CUSTOMERS },
   { key: PERMISSIONS.CUSTOMER_EXPORT, description: "Export customer records to CSV", category: CUSTOMERS },
+  { key: PERMISSIONS.CUSTOMER_DELETE, description: "Delete a customer created in error, or deactivate one", category: CUSTOMERS },
 
   { key: PERMISSIONS.DOCUMENT_VIEW, description: "View and download documents", category: DOCUMENTS },
   { key: PERMISSIONS.DOCUMENT_UPLOAD, description: "Upload documents", category: DOCUMENTS },
@@ -199,6 +204,7 @@ export const PERMISSION_DEFINITIONS: readonly PermissionDefinition[] = [
   { key: PERMISSIONS.SETTINGS_VIEW, description: "View business settings", category: ADMINISTRATION },
   { key: PERMISSIONS.SETTINGS_MANAGE, description: "Change business settings", category: ADMINISTRATION },
   { key: PERMISSIONS.AUDIT_LOG_VIEW, description: "Read the audit log", category: ADMINISTRATION },
+  { key: PERMISSIONS.AUDIT_LOG_DELETE, description: "Delete individual audit entries — removes evidence; SUPER_ADMIN only", category: ADMINISTRATION },
   { key: PERMISSIONS.BOOKING_TYPE_MANAGE, description: "Manage booking types", category: ADMINISTRATION },
 ];
 

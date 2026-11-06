@@ -87,3 +87,40 @@ test("a read-only account sees its own, narrower list", async ({ page }) => {
     page.getByText("Create flight and cruise bookings"),
   ).toHaveCount(0);
 });
+
+test("an administrator edits their own name and phone, but not their role", async ({
+  page,
+}) => {
+  await signIn(page, operations);
+  await page.goto("/admin/profile");
+
+  await page.getByRole("button", { name: "Edit" }).click();
+
+  const dialog = page.getByRole("dialog");
+  await expect(dialog.getByLabel("Name")).toHaveValue(operations.name);
+
+  // Role, status, email and username are deliberately absent: an account that
+  // can change its own role is not access control, and changing your own
+  // email is a password-reset path.
+  await expect(dialog.getByLabel("Role")).toHaveCount(0);
+  await expect(dialog.getByLabel("Status")).toHaveCount(0);
+  await expect(dialog.getByLabel("Email")).toHaveCount(0);
+  await expect(dialog.getByLabel("Username")).toHaveCount(0);
+
+  const renamed = `${operations.name} Renamed`;
+  await dialog.getByLabel("Name").fill(renamed);
+  await dialog.getByLabel("Phone").fill("+1 555 0133");
+  await dialog.getByRole("button", { name: "Save" }).click();
+
+  // The dialog closes itself once the save is accepted, which is the signal
+  // the action finished — reloading on the click alone races it.
+  await expect(dialog).toBeHidden();
+
+  await page.reload();
+
+  // Stored, not merely echoed: both the panel and the page heading redraw.
+  await expect(
+    page.getByRole("heading", { name: renamed, level: 1 }),
+  ).toBeVisible();
+  await expect(page.getByText("+1 555 0133", { exact: true })).toBeVisible();
+});

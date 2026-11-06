@@ -12,7 +12,14 @@ import { defineConfig, devices } from "@playwright/test";
  *
  * `reuseExistingServer` means a dev server already running is used as-is,
  * which keeps the local loop fast; CI starts its own.
+ *
+ * `E2E_PORT` moves the whole thing off 3000. Needed on a machine running
+ * another project's dev server there: Next quietly starts on 3001 instead,
+ * and the run then waits on a 3000 that will never be this application.
  */
+const PORT = process.env["E2E_PORT"] ?? "3000";
+const ORIGIN = `http://localhost:${PORT}`;
+
 export default defineConfig({
   testDir: "./tests/e2e",
   globalTeardown: "./tests/e2e/global-teardown.ts",
@@ -28,7 +35,7 @@ export default defineConfig({
   expect: { timeout: 10_000 },
 
   use: {
-    baseURL: process.env["E2E_BASE_URL"] ?? "http://localhost:3000",
+    baseURL: process.env["E2E_BASE_URL"] ?? ORIGIN,
     trace: "retain-on-failure",
     screenshot: "only-on-failure",
   },
@@ -38,8 +45,8 @@ export default defineConfig({
   ],
 
   webServer: {
-    command: "npm run dev",
-    url: "http://localhost:3000/admin/login",
+    command: `npm run dev -- --port ${PORT}`,
+    url: `${ORIGIN}/admin/login`,
     reuseExistingServer: true,
     timeout: 180_000,
   },

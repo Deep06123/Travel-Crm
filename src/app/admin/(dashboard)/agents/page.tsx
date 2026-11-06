@@ -19,6 +19,7 @@ import { Panel } from "@/components/ui/panel";
 import { Badge } from "@/components/ui/status-badge";
 import { AdminRole, AdminUserStatus } from "@/generated/prisma/enums";
 import { CreateAgentForm } from "@/features/admin/agent-forms";
+import { AgentRowActions } from "@/features/admin/agent-row-actions";
 import { currentUserCan, requirePermission } from "@/lib/auth/dal";
 import { formatDate, formatDateTime } from "@/lib/format";
 import { paginationSchema } from "@/lib/pagination";
@@ -41,7 +42,7 @@ const STATUS_TONES = {
 export default async function AgentsPage({
   searchParams,
 }: PageProps<"/admin/agents">) {
-  await requirePermission(PERMISSIONS.AGENT_VIEW);
+  const viewer = await requirePermission(PERMISSIONS.AGENT_VIEW);
   const canManage = await currentUserCan(PERMISSIONS.AGENT_MANAGE);
 
   const params = await searchParams;
@@ -156,13 +157,14 @@ export default async function AgentsPage({
                   {canManage ? <Th>Pending password</Th> : null}
                   <Th>Last sign-in</Th>
                   <Th>Created</Th>
+                  {canManage ? <Th align="right">Actions</Th> : null}
                 </Tr>
               </Thead>
 
               <Tbody>
                 {result.rows.length === 0 ? (
                   <EmptyState
-                    colSpan={8}
+                    colSpan={canManage ? 10 : 8}
                     title="No agents"
                     description={
                       canManage
@@ -229,6 +231,21 @@ export default async function AgentsPage({
                       <Td className="whitespace-nowrap text-ink-muted">
                         {formatDate(agent.adminUser.createdAt)}
                       </Td>
+                      {canManage ? (
+                        <Td align="right">
+                          <AgentRowActions
+                            agentId={agent.id}
+                            name={agent.adminUser.name}
+                            status={agent.adminUser.status}
+                            hasActivity={
+                              agent.adminUser.lastLoginAt !== null ||
+                              agent.adminUser._count.createdBookings > 0 ||
+                              agent.adminUser._count.auditLogs > 0
+                            }
+                            isSelf={agent.adminUser.id === viewer.id}
+                          />
+                        </Td>
+                      ) : null}
                     </Tr>
                   ))
                 )}

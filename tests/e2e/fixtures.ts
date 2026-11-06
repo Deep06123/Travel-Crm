@@ -535,6 +535,55 @@ export async function cleanupFixtures(): Promise<void> {
   await inList((l) => `DELETE FROM \`AdminUser\` WHERE \`id\` IN (${l})`, userIds);
 
   await deleteTestMailAccounts();
+  await deleteTestReferenceData();
+}
+
+/**
+ * Removes the reference rows this suite created.
+ *
+ * Matched on the tag in the name, because these are created through the form
+ * in the browser and the spec never learns their ids. Exposed so a spec can
+ * also call it on the way *in*: a run that failed half-way leaves a row
+ * behind, and the next run then finds two where it expected one.
+ *
+ * Only rows nothing points at are removable, which is exactly what a fixture
+ * row is — the suite never attaches a booking to one.
+ */
+/**
+ * Disables every active sending account and returns the ids.
+ *
+ * The development database is somebody's working copy: an operator trying the
+ * settings screen leaves real accounts in it, and a spec that asserts "no
+ * picker is drawn" would fail on their data rather than on the code. Disabling
+ * rather than deleting, because those rows hold credentials a test is not
+ * entitled to destroy.
+ */
+export async function suspendMailAccounts(): Promise<string[]> {
+  const rows = await query<{ id: string }>(
+    "SELECT `id` FROM `MailAccount` WHERE `isActive` = true",
+  );
+
+  if (rows.length > 0) {
+    await query("UPDATE `MailAccount` SET `isActive` = false WHERE `isActive` = true");
+  }
+
+  return rows.map((row) => row.id);
+}
+
+/** Puts back exactly what `suspendMailAccounts` switched off. */
+export async function restoreMailAccounts(ids: readonly string[]): Promise<void> {
+  if (ids.length === 0) return;
+
+  await query(
+    `UPDATE \`MailAccount\` SET \`isActive\` = true WHERE \`id\` IN (${placeholders(ids.length)})`,
+    [...ids],
+  );
+}
+
+export async function deleteTestReferenceData(): Promise<void> {
+  await query("DELETE FROM `McoSupplier` WHERE `name` LIKE ?", [`%${E2E_TAG}%`]);
+  await query("DELETE FROM `Supplier` WHERE `name` LIKE ?", [`%${E2E_TAG}%`]);
+  await query("DELETE FROM `Tfn` WHERE `label` LIKE ?", [`%${E2E_TAG}%`]);
 }
 
 /**

@@ -62,6 +62,11 @@ const AGENT_SELECT = {
       // against `agent.manage` — selecting it is not the same as showing it.
       pendingPassword: true,
       createdAt: true,
+      // Whether the account has acted, which decides whether the list offers
+      // Delete or Deactivate. Two counts rather than the seven `deleteAgent`
+      // checks: audit entries cover almost everything consequential, and the
+      // server re-counts properly before it removes anything.
+      _count: { select: { createdBookings: true, auditLogs: true } },
     },
   },
 } satisfies Prisma.AgentSelect;
@@ -487,4 +492,145 @@ export async function getAgentActivity(
       amountMinor: row._sum.totalMinor ?? 0,
     })),
   };
+}
+
+// --- Removal ----------------------------------------------------------------
+
+/** Thrown when an account has acted and so must be deactivated, not deleted. */
+export class AgentInUseError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "AgentInUseError";
+  }
+}
+
+/**
+ * Deletes an agent account, or refuses because it has done things.
+ *
+ * Every foreign key pointing at `AdminUser` is `SetNull`, so the database
+ * would happily delete one — and that is exactly the danger. The row would go
+ * and every booking they created, refund they approved and authorization they
+ * sent would quietly become "Unknown". An account that has acted is part of
+ * the audit trail, and the trail is the reason half this application exists.
+ *
+ * So the guard here is not a foreign key, it is a judgement: has this account
+ * done anything? If yes, deactivating is the operation — it ends their
+ * sessions and stops them signing in while every attribution survives.
+ *
+ * Deleting is for the account created with a typo in the email that nobody
+ * ever signed in to.
+ */
+export async function deleteAgent(
+  agentId: string,
+  actorId: string,
+): Promise<void> {
+  const agent = await prisma.agent.findUnique({
+    where: { id: agentId },
+    select: {
+      adminUserId: true,
+      adminUser: {
+        select: {
+          name: true,
+          email: true,
+          lastLoginAt: true,
+          _count: {
+            select: {
+              createdBookings: true,
+              assignedBookings: true,
+              auditLogs: true,
+              paymentsRecorded: true,
+              refundsApproved: true,
+              signaturesSent: true,
+              comments: true,
+            },
+          },
+        },
+      },
+    },
+  });
+
+  if (!agent) return;
+
+  const { adminUser } = agent;
+  const counts = adminUser._count;
+
+  const footprint = [
+    counts.createdBookings > 0 ? `${counts.createdBookings} booking(s) created` : null,
+    counts.assignedBookings > 0 ? `${counts.assignedBookings} booking(s) assigned` : null,
+    counts.paymentsRecorded > 0 ? `${counts.paymentsRecorded} payment(s)` : null,
+    counts.refundsApproved > 0 ? `${counts.refundsApproved} refund approval(s)` : null,
+    counts.signaturesSent > 0 ? `${counts.signaturesSent} authorization(s) sent` : null,
+    counts.comments > 0 ? `${counts.comments} comment(s)` : null,
+    counts.auditLogs > 0 ? `${counts.auditLogs} audit entries` : null,
+  ].filter((part): part is string => part !== null);
+
+  if (footprint.length > 0) {
+    throw new AgentInUseError(
+      `${adminUser.name} has ${footprint.join(", ")} against their name. Deleting the account would leave all of it attributed to nobody. Deactivate them instead — they lose access immediately and the record stays intact.`,
+    );
+  }
+
+  // The Agent row cascades from AdminUser, so one delete removes both.
+  await prisma.adminUser.delete({ where: { id: agent.adminUserId } });
+
+  await recordAudit({
+    action: AuditAction.DELETE,
+    entityType: "AdminUser",
+    entityId: agent.adminUserId,
+    adminUserId: actorId,
+    summary: `Deleted the unused account ${adminUser.name} <${adminUser.email}>`,
+  });
+}
+
+/**
+ * Suspends or restores an account, revoking live sessions on the way out.
+ *
+ * The revocation is the point: sessions are database-backed precisely so
+ * access ends now rather than whenever a token would have expired.
+ */
+export async function setAgentAccountStatus(
+  agentId: string,
+  status: "ACTIVE" | "SUSPENDED" | "DEACTIVATED",
+  actorId: string,
+): Promise<void> {
+  const agent = await prisma.agent.findUnique({
+    where: { id: agentId },
+    select: {
+      adminUserId: true,
+      adminUser: { select: { name: true, status: true } },
+    },
+  });
+
+  if (!agent) throw new AgentInUseError("That agent no longer exists.");
+  if (agent.adminUser.status === status) return;
+
+  await prisma.$transaction(async (tx) => {
+    await tx.adminUser.update({
+      where: { id: agent.adminUserId },
+      data: { status },
+    });
+
+    // Only on the way out. Restoring an account should not punish whoever is
+    // already signed in elsewhere.
+    if (status !== "ACTIVE") {
+      await tx.adminSession.updateMany({
+        where: { adminUserId: agent.adminUserId, revokedAt: null },
+        data: { revokedAt: new Date() },
+      });
+    }
+
+    await tx.agent.update({
+      where: { id: agentId },
+      data: { isActive: status === "ACTIVE" },
+    });
+  });
+
+  await recordAudit({
+    action: AuditAction.UPDATE,
+    entityType: "AdminUser",
+    entityId: agent.adminUserId,
+    adminUserId: actorId,
+    summary: `Set ${agent.adminUser.name}'s account to ${status.toLowerCase()}`,
+    changes: { status: { before: agent.adminUser.status, after: status } },
+  });
 }

@@ -8,8 +8,11 @@ import { retainedFormValues } from "@/lib/forms";
 import { loggerFor } from "@/lib/logging/logger";
 import { PERMISSIONS } from "@/lib/permissions";
 import {
+  CustomerInUseError,
   DuplicateCustomerError,
   createCustomer,
+  deleteCustomer,
+  setCustomerStatus,
   updateCustomer,
   type DuplicateMatch,
 } from "@/server/services/customer-service";
@@ -125,4 +128,79 @@ export async function updateCustomerAction(
   revalidatePath(`/admin/customers/${customerId}`);
   revalidatePath("/admin/customers");
   redirect(`/admin/customers/${customerId}?saved=1`);
+}
+
+// --- Removal ----------------------------------------------------------------
+
+export interface CustomerRemovalState {
+  error?: string;
+  success?: string;
+}
+
+/**
+ * Deletes a customer, or marks them inactive where deleting is refused.
+ *
+ * One action for both because they are one control in the list: which it is
+ * depends on whether anything references the record, and the row already
+ * knows that from the booking count it renders.
+ *
+ * `customer.delete` rather than `customer.update`: taking a customer off the
+ * books is a different decision from correcting their phone number, and the
+ * default grants give it to SUPER_ADMIN alone.
+ */
+export async function removeCustomerAction(
+  _previous: CustomerRemovalState,
+  formData: FormData,
+): Promise<CustomerRemovalState> {
+  const user = await requirePermission(PERMISSIONS.CUSTOMER_DELETE);
+
+  const customerId = String(formData.get("customerId") ?? "").trim();
+  if (customerId === "") return { error: "Invalid request." };
+
+  const deactivating = formData.get("deactivate") === "true";
+
+  try {
+    if (deactivating) {
+      await setCustomerStatus(customerId, "INACTIVE", user.id);
+      revalidatePath("/admin/customers");
+      revalidatePath(`/admin/customers/${customerId}`);
+      return {
+        success:
+          "Customer marked inactive. Their bookings and history are unchanged.",
+      };
+    }
+
+    await deleteCustomer(customerId, user.id);
+  } catch (error) {
+    // Already explains what is holding the record and what to do instead.
+    if (error instanceof CustomerInUseError) return { error: error.message };
+
+    log.error({ err: error, customerId }, "Failed to remove customer");
+    return { error: "The customer could not be removed. Try again." };
+  }
+
+  revalidatePath("/admin/customers");
+  return { success: "Customer deleted." };
+}
+
+/** Puts an inactive or blocked customer back in circulation. */
+export async function reactivateCustomerAction(
+  _previous: CustomerRemovalState,
+  formData: FormData,
+): Promise<CustomerRemovalState> {
+  const user = await requirePermission(PERMISSIONS.CUSTOMER_DELETE);
+
+  const customerId = String(formData.get("customerId") ?? "").trim();
+  if (customerId === "") return { error: "Invalid request." };
+
+  try {
+    await setCustomerStatus(customerId, "ACTIVE", user.id);
+  } catch (error) {
+    log.error({ err: error, customerId }, "Failed to reactivate customer");
+    return { error: "The customer could not be reactivated. Try again." };
+  }
+
+  revalidatePath("/admin/customers");
+  revalidatePath(`/admin/customers/${customerId}`);
+  return { success: "Customer is active again." };
 }

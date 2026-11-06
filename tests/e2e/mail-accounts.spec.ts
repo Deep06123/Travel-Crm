@@ -7,6 +7,8 @@ import {
   createTestUser,
   deleteTestMailAccounts,
   E2E_TAG,
+  restoreMailAccounts,
+  suspendMailAccounts,
   readBusinessSetting,
   signIn,
   writeBusinessSetting,
@@ -35,9 +37,15 @@ const LABEL = `Reservations ${E2E_TAG}`;
 let superAdmin: TestUser;
 let readOnly: TestUser;
 let originalDefaults: string | null = null;
+let suspendedAccounts: string[] = [];
 
 test.beforeAll(async () => {
   originalDefaults = await readBusinessSetting(DEFAULTS_KEY);
+
+  // The development database is somebody's working copy and may already hold
+  // real sending accounts. Taking them out of circulation for the run keeps
+  // these assertions about this spec's own row.
+  suspendedAccounts = await suspendMailAccounts();
   superAdmin = await createTestUser("SUPER_ADMIN", "mail-admin");
   readOnly = await createTestUser("READ_ONLY", "mail-readonly");
 });
@@ -45,6 +53,7 @@ test.beforeAll(async () => {
 test.afterAll(async () => {
   await writeBusinessSetting(DEFAULTS_KEY, originalDefaults);
   await cleanupFixtures();
+  await restoreMailAccounts(suspendedAccounts);
 });
 
 /**
@@ -66,6 +75,10 @@ async function fillField(page: Page, label: string, value: string) {
 test("a super admin adds a sending account, edits it and sets the defaults", async ({
   page,
 }) => {
+  // A run that failed between creating the account and deleting it would
+  // otherwise leave a second row matching the label.
+  await deleteTestMailAccounts();
+
   await signIn(page, superAdmin);
   await page.goto("/admin/settings");
 
@@ -96,10 +109,13 @@ test("a super admin adds a sending account, edits it and sets the defaults", asy
   ).toBeVisible();
 
   // Never tested yet, and the page says so instead of implying it works.
-  await expect(page.getByText("Never tested")).toBeVisible();
+  // Scoped to this spec's own card: a disabled account left by an operator is
+  // still listed, and it has never been tested either.
+  const card = page.locator("li").filter({ hasText: LABEL });
+  await expect(card.getByText("Never tested")).toBeVisible();
 
   // The password is not sent to the page — only the fact that one is stored.
-  await page.getByRole("button", { name: "Edit" }).first().click();
+  await card.getByRole("button", { name: "Edit" }).click();
   const password = page.getByLabel("Password", { exact: true });
   await expect(password).toHaveValue("");
   await expect(page.getByText("Stored. Leave empty to keep it.")).toBeVisible();
@@ -115,7 +131,7 @@ test("a super admin adds a sending account, edits it and sets the defaults", asy
   await expect(
     page.getByText("Reservations Team <reservations@example.invalid>"),
   ).toBeVisible();
-  await page.getByRole("button", { name: "Edit" }).first().click();
+  await page.locator("li").filter({ hasText: LABEL }).getByRole("button", { name: "Edit" }).click();
   await expect(page.getByText("Stored. Leave empty to keep it.")).toBeVisible();
 
   // Point the authorization email at it and prove the choice survives a

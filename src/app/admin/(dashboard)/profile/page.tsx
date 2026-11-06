@@ -7,6 +7,7 @@ import { buttonVariants } from "@/components/ui/button";
 import { Panel } from "@/components/ui/panel";
 import { Badge } from "@/components/ui/status-badge";
 import { AdminUserStatus } from "@/generated/prisma/enums";
+import { EditProfileButton } from "@/features/admin/profile-form";
 import { getCurrentUserPermissions, requireAuth } from "@/lib/auth/dal";
 import { prisma } from "@/lib/db/prisma";
 import { formatDateTime } from "@/lib/format";
@@ -141,7 +142,16 @@ export default async function ProfilePage() {
 
       <div className="grid gap-4 xl:grid-cols-3">
         <div className="flex flex-col gap-4 xl:col-span-2">
-          <Panel title="Account" collapsible={false}>
+          <Panel
+            title="Account"
+            collapsible={false}
+            actions={
+              <EditProfileButton
+                name={user.name}
+                phone={account?.phone ?? null}
+              />
+            }
+          >
             <dl className="grid gap-x-6 sm:grid-cols-2 lg:grid-cols-3">
               <DetailRow label="Name" value={user.name} />
               <DetailRow label="Email" value={user.email} />
@@ -171,8 +181,9 @@ export default async function ProfilePage() {
             </dl>
 
             <p className="mt-3 text-xs text-ink-subtle">
-              Your name, role and status are set by an administrator on the
-              agents screen. Ask one of them if any of this is wrong.
+              Edit changes your name and phone number. Your role, status, email
+              and username are set by an administrator on the agents screen —
+              ask one of them if any of those are wrong.
             </p>
           </Panel>
 

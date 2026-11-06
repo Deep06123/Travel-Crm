@@ -9,9 +9,12 @@ import { retainedFormValues } from "@/lib/forms";
 import { loggerFor } from "@/lib/logging/logger";
 import { PERMISSIONS } from "@/lib/permissions";
 import {
+  AgentInUseError,
   DuplicateAgentError,
   createAgent,
+  deleteAgent,
   resetAgentPassword,
+  setAgentAccountStatus,
   unlockAgent,
   updateAgent,
 } from "@/server/services/agent-service";
@@ -204,4 +207,73 @@ export async function unlockAgentAction(
 
   revalidatePath(`/admin/agents/${parsed.data.agentId}`);
   return { success: "Lockout cleared." };
+}
+
+/**
+ * Deletes an account, or suspends it where deleting would erase attribution.
+ *
+ * One control, two outcomes, as everywhere else in the admin: the row knows
+ * whether the account has done anything, and the server decides for real.
+ */
+export async function removeAgentAction(
+  _previous: AgentFormState,
+  formData: FormData,
+): Promise<AgentFormState> {
+  const user = await requirePermission(PERMISSIONS.AGENT_MANAGE);
+
+  const parsed = agentIdSchema.safeParse(Object.fromEntries(formData.entries()));
+  if (!parsed.success) return { error: "Invalid request." };
+
+  const { agentId } = parsed.data;
+  const deactivating = formData.get("deactivate") === "true";
+
+  // Deleting your own account signs you out mid-request and leaves the
+  // session pointing at a row that no longer exists.
+  if (formData.get("selfId") === user.id) {
+    return { error: "You cannot remove your own account." };
+  }
+
+  try {
+    if (deactivating) {
+      await setAgentAccountStatus(agentId, AdminUserStatus.DEACTIVATED, user.id);
+      revalidatePath("/admin/agents");
+      revalidatePath(`/admin/agents/${agentId}`);
+      return {
+        success:
+          "Account deactivated. They are signed out and cannot sign back in.",
+      };
+    }
+
+    await deleteAgent(agentId, user.id);
+  } catch (error) {
+    if (error instanceof AgentInUseError) return { error: error.message };
+
+    log.error({ err: error, agentId }, "Failed to remove agent");
+    return { error: "The account could not be removed. Try again." };
+  }
+
+  revalidatePath("/admin/agents");
+  return { success: "Account deleted." };
+}
+
+/** Restores a suspended or deactivated account. */
+export async function reactivateAgentAction(
+  _previous: AgentFormState,
+  formData: FormData,
+): Promise<AgentFormState> {
+  const user = await requirePermission(PERMISSIONS.AGENT_MANAGE);
+
+  const parsed = agentIdSchema.safeParse(Object.fromEntries(formData.entries()));
+  if (!parsed.success) return { error: "Invalid request." };
+
+  try {
+    await setAgentAccountStatus(parsed.data.agentId, AdminUserStatus.ACTIVE, user.id);
+  } catch (error) {
+    log.error({ err: error }, "Failed to reactivate agent");
+    return { error: "The account could not be reactivated. Try again." };
+  }
+
+  revalidatePath("/admin/agents");
+  revalidatePath(`/admin/agents/${parsed.data.agentId}`);
+  return { success: "Account is active again." };
 }

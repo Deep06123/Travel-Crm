@@ -13,6 +13,7 @@ import {
 import { Panel } from "@/components/ui/panel";
 import { Badge } from "@/components/ui/status-badge";
 import { McoSupplierForm } from "@/features/admin/reference-forms";
+import { McoSupplierRowActions } from "@/features/admin/reference-row-actions";
 import { currentUserCan, requirePermission } from "@/lib/auth/dal";
 import { formatDate } from "@/lib/format";
 import { PERMISSIONS } from "@/lib/permissions";
@@ -45,11 +46,15 @@ export default async function McoSuppliersPage() {
                   <Th align="right">Bookings</Th>
                   <Th>Status</Th>
                   <Th>Added</Th>
+                  {canManage ? <Th align="right">Actions</Th> : null}
                 </Tr>
               </Thead>
               <Tbody>
                 {suppliers.length === 0 ? (
-                  <EmptyState colSpan={6} title="No MCO suppliers yet" />
+                  <EmptyState
+                    colSpan={canManage ? 7 : 6}
+                    title="No MCO suppliers yet"
+                  />
                 ) : (
                   suppliers.map((supplier) => (
                     <Tr key={supplier.id}>
@@ -74,6 +79,22 @@ export default async function McoSuppliersPage() {
                       <Td className="whitespace-nowrap text-ink-muted">
                         {formatDate(supplier.createdAt)}
                       </Td>
+                      {canManage ? (
+                        <Td align="right">
+                          <McoSupplierRowActions
+                            record={{
+                              id: supplier.id,
+                              name: supplier.name,
+                              mailFrom: supplier.mailFrom,
+                              contactEmail: supplier.contactEmail,
+                              contactPhone: supplier.contactPhone,
+                              isActive: supplier.isActive,
+                              notes: supplier.notes,
+                            }}
+                            usageCount={supplier._count.bookings}
+                          />
+                        </Td>
+                      ) : null}
                     </Tr>
                   ))
                 )}

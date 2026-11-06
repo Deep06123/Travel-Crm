@@ -19,7 +19,8 @@ import { Card } from "@/components/ui/panel";
 import { Badge } from "@/components/ui/status-badge";
 import { AuditAction } from "@/generated/prisma/enums";
 import type { Prisma } from "@/generated/prisma/client";
-import { requirePermission } from "@/lib/auth/dal";
+import { AuditRowActions } from "@/features/admin/audit-row-actions";
+import { currentUserCan, requirePermission } from "@/lib/auth/dal";
 import { prisma } from "@/lib/db/prisma";
 import { formatDateTime } from "@/lib/format";
 import { paginationSchema, toPageRequest } from "@/lib/pagination";
@@ -74,6 +75,9 @@ export default async function AuditLogsPage({
   searchParams,
 }: PageProps<"/admin/audit-logs">) {
   await requirePermission(PERMISSIONS.AUDIT_LOG_VIEW);
+
+  // Its own permission, held by SUPER_ADMIN alone under the default grants.
+  const canDelete = await currentUserCan(PERMISSIONS.AUDIT_LOG_DELETE);
 
   const params = await searchParams;
   const pick = (key: string): string | undefined => {
@@ -248,12 +252,16 @@ export default async function AuditLogsPage({
               <Th>Summary</Th>
               <Th>Actor</Th>
               <Th>IP</Th>
+              {canDelete ? <Th align="right">Actions</Th> : null}
             </Tr>
           </Thead>
 
           <Tbody>
             {rows.length === 0 ? (
-              <EmptyState colSpan={6} title="No matching entries" />
+              <EmptyState
+                colSpan={canDelete ? 7 : 6}
+                title="No matching entries"
+              />
             ) : (
               rows.map((entry) => (
                 <Tr key={entry.id}>
@@ -281,6 +289,14 @@ export default async function AuditLogsPage({
                   <Td className="font-mono text-xs text-ink-subtle">
                     {entry.ipAddress ?? "—"}
                   </Td>
+                  {canDelete ? (
+                    <Td align="right">
+                      <AuditRowActions
+                        entryId={entry.id}
+                        summary={entry.summary}
+                      />
+                    </Td>
+                  ) : null}
                 </Tr>
               ))
             )}
