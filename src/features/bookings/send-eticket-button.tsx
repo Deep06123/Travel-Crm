@@ -7,6 +7,7 @@ import { useFormStatus } from "react-dom";
 import { Button, buttonVariants } from "@/components/ui/button";
 
 import { EmailEditor } from "./email-editor";
+import { SenderSelect, type SenderOption } from "./sender-select";
 import { bookingEmailAction, type BookingEmailState } from "./email-actions";
 
 /**
@@ -78,6 +79,7 @@ export function SendETicketButton({
   recipient,
   blockedReason,
   viewHref,
+  senders = [],
 }: {
   bookingId: string;
   /** Empty when the booking has no contact address; nothing could be sent. */
@@ -97,6 +99,8 @@ export function SendETicketButton({
    * a link from a page back to itself is noise.
    */
   viewHref?: string | undefined;
+  /** Active sending accounts. Empty or single: no picker is drawn. */
+  senders?: readonly SenderOption[];
 }) {
   const [state, formAction] = useActionState<BookingEmailState, FormData>(
     bookingEmailAction,
@@ -105,6 +109,10 @@ export function SendETicketButton({
 
   /** Dismissed preview, compared by identity — see `CustomerEmailPanel`. */
   const [dismissed, setDismissed] = useState<BookingEmailState["preview"]>();
+
+  // Held here, not in either form: the editor below is a second form and must
+  // send from whatever was picked before Edit was clicked.
+  const [senderId, setSenderId] = useState("");
 
   const editing =
     state.preview && state.preview !== dismissed ? state.preview : undefined;
@@ -116,30 +124,43 @@ export function SendETicketButton({
 
   return (
     <div>
-      <form action={formAction} className="flex flex-wrap gap-2">
+      <form action={formAction} className="flex flex-col items-start gap-2">
         <input type="hidden" name="bookingId" value={bookingId} />
         <input type="hidden" name="event" value="BOOKING_TICKETED" />
-        <SubmitButton blockedReason={blocked} />
-        <EditButton />
 
-        {/* Deliberately available even while the send is blocked: staff still
-            need to check the document while they wait for the signature.
-            An anchor cannot submit the form, so reading is never a send.
+        {/* Inside the form, so it posts itself rather than through a mirror
+            input. The editor below is a second form and reads the same state
+            from `hidden`. */}
+        <SenderSelect
+          id={`eticket-sender-${bookingId}`}
+          options={senders}
+          value={senderId}
+          onChange={setSenderId}
+        />
 
-            Named for what it opens rather than a bare "View", because the
-            authorization panel carries two of these side by side and two
-            links reading "View" are indistinguishable to a screen reader. */}
-        {viewHref ? (
-          <a
-            href={viewHref}
-            target="_blank"
-            rel="noopener noreferrer"
-            className={buttonVariants({ variant: "secondary" })}
-          >
-            <ExternalLink className="size-4" />
-            View e-ticket
-          </a>
-        ) : null}
+        <div className="flex flex-wrap gap-2">
+          <SubmitButton blockedReason={blocked} />
+          <EditButton />
+
+          {/* Deliberately available even while the send is blocked: staff still
+              need to check the document while they wait for the signature.
+              An anchor cannot submit the form, so reading is never a send.
+
+              Named for what it opens rather than a bare "View", because the
+              authorization panel carries two of these side by side and two
+              links reading "View" are indistinguishable to a screen reader. */}
+          {viewHref ? (
+            <a
+              href={viewHref}
+              target="_blank"
+              rel="noopener noreferrer"
+              className={buttonVariants({ variant: "secondary" })}
+            >
+              <ExternalLink className="size-4" />
+              View e-ticket
+            </a>
+          ) : null}
+        </div>
       </form>
 
       {editing ? (
@@ -154,6 +175,7 @@ export function SendETicketButton({
               bookingId,
               event: editing.event,
               intent: "send",
+              ...(senderId ? { mailAccountId: senderId } : {}),
             }}
             {...(blocked
               ? {

@@ -70,6 +70,7 @@ import {
   BOOKING_TICKETED,
   getBookingNotifications,
 } from "@/server/services/customer-email-service";
+import { listSendableAccounts } from "@/server/services/mail-account-service";
 import { IN_FLIGHT_REFUND_STATUSES } from "@/lib/financial/refund-rules";
 
 export const metadata: Metadata = { title: "Booking · Travel CRM" };
@@ -240,6 +241,10 @@ export default async function BookingDetailPage({
   }));
 
   const hasSignature = signatures.some((row) => row.status === "SIGNED");
+
+  // The addresses this booking's email may be sent from. With fewer than two
+  // the pickers draw nothing and every send takes the configured default.
+  const senders = await listSendableAccounts();
 
   const emailRecipient = bookingRecipientLine(booking);
 
@@ -1089,6 +1094,7 @@ export default async function BookingDetailPage({
               rows={signatures}
               canSend={canSendAuthorization}
               recipient={emailRecipient}
+              senders={senders}
             />
 
             <div className="mt-4 border-t border-line pt-4">
@@ -1096,6 +1102,7 @@ export default async function BookingDetailPage({
                 <SendETicketButton
                   bookingId={booking.id}
                   recipient={emailRecipient}
+                  senders={senders}
                   viewHref={`/admin/bookings/${booking.id}/eticket`}
                   blockedReason={
                     hasSignature

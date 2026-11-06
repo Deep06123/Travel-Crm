@@ -13,7 +13,6 @@ import {
 import { prisma } from "@/lib/db/prisma";
 import { isProduction } from "@/lib/env";
 import { loggerFor } from "@/lib/logging/logger";
-import { getMailer } from "@/lib/mail";
 import {
   prepareItineraryForEmail,
   prepareItineraryForPreview,
@@ -35,6 +34,8 @@ import {
 } from "./admin-notification-service";
 
 import { loadPolicyOverrides } from "./email-policy-service";
+
+import { resolveMailer } from "./mail-account-service";
 
 import { createSignatureRequest } from "./booking-signature-service";
 
@@ -59,7 +60,14 @@ const log = loggerFor("booking-authorization");
 export const BOOKING_AUTHORIZATION = "BOOKING_AUTHORIZATION";
 
 export type AuthorizationSendResult =
-  | { result: "sent"; signatureId: string; recipient: string; expiresAt: Date }
+  | {
+      result: "sent";
+      signatureId: string;
+      recipient: string;
+      expiresAt: Date;
+      /** Which identity it went from, so the agent is told rather than assuming. */
+      sentFrom: string;
+    }
   | { result: "suppressed"; reason: string }
   | { result: "failed"; reason: string };
 
@@ -220,6 +228,14 @@ export interface SendAuthorizationInput {
    * button does.
    */
   override?: AuthorizationOverride | undefined;
+  /**
+   * The sending identity the operator picked, where they picked one.
+   *
+   * Absent means "use the configured default for an authorization" — see
+   * `resolveMailer`. An id that no longer resolves falls back the same way
+   * rather than failing the send.
+   */
+  mailAccountId?: string | undefined;
 }
 
 export interface AuthorizationPreview {
@@ -329,6 +345,7 @@ export async function sendAuthorizationEmail({
   actorId,
   origin,
   override = {},
+  mailAccountId,
 }: SendAuthorizationInput): Promise<AuthorizationSendResult> {
   const booking = await prisma.booking.findUnique({
     where: { id: bookingId },
@@ -341,6 +358,12 @@ export async function sendAuthorizationEmail({
 
   const recipients = bookingRecipients(booking);
   const recipient = recipients.length > 0 ? recipients.join(", ") : null;
+
+  // Resolved before the first row is written so every Notification — sent,
+  // failed or suppressed — can say which identity it was going to use. A
+  // suppressed row with no account is then unambiguous: there was no transport
+  // at all, rather than one that was never recorded.
+  const mailer = await resolveMailer("authorization", mailAccountId);
 
   const record = async (
     status: NotificationStatus,
@@ -357,7 +380,11 @@ export async function sendAuthorizationEmail({
         recipient: recipient ?? "",
         status,
         attemptCount: status === NotificationStatus.SUPPRESSED ? 0 : 1,
-        provider: status === NotificationStatus.SUPPRESSED ? null : "smtp",
+        provider:
+          status === NotificationStatus.SUPPRESSED
+            ? null
+            : (mailer?.adapter.provider ?? "smtp"),
+        ...(mailer?.accountId ? { mailAccountId: mailer.accountId } : {}),
         payload: { bookingNumber: booking.bookingNumber },
         ...extra,
       },
@@ -372,11 +399,9 @@ export async function sendAuthorizationEmail({
     return { result: "suppressed", reason };
   }
 
-  const mailer = getMailer();
-
   if (!mailer && isProduction()) {
     const reason =
-      'No mail transport is configured (MAIL_DRIVER="none"), so no email was attempted.';
+      "No sending account is configured, so no email was attempted. Add one under Settings → Sending accounts.";
     await record(NotificationStatus.SUPPRESSED, { lastError: reason });
     log.warn({ bookingId }, "Authorization email suppressed: no transport");
     return { result: "suppressed", reason };
@@ -409,7 +434,7 @@ export async function sendAuthorizationEmail({
   // customer could never have received.
   if (!mailer) {
     const reason =
-      'No mail transport is configured (MAIL_DRIVER="none"). A signing link was issued and written to the server log, so the signing page can be opened directly. Nothing was emailed.';
+      "No sending account is configured. A signing link was issued and written to the server log, so the signing page can be opened directly. Nothing was emailed.";
     await record(NotificationStatus.SUPPRESSED, { lastError: reason });
     return { result: "suppressed", reason };
   }
@@ -428,7 +453,7 @@ export async function sendAuthorizationEmail({
   );
 
   try {
-    const { providerReference } = await mailer.send({
+    const { providerReference } = await mailer.adapter.send({
       to: recipient,
       subject: rendered.subject,
       text: rendered.text,
@@ -455,6 +480,7 @@ export async function sendAuthorizationEmail({
       rows: [
         { label: "Customer", value: customerNameOf(booking) },
         { label: "Sent to", value: recipient },
+        { label: "Sent from", value: mailer.label },
         { label: "Sent by", value: await actorName(actorId) },
         { label: "Amount", value: formatMoney(booking.totalMinor, booking.currency) },
         { label: "Link expires", value: formatDate(expiresAt) },
@@ -464,7 +490,13 @@ export async function sendAuthorizationEmail({
         "The customer has not signed yet. A second notice follows when they do.",
     });
 
-    return { result: "sent", signatureId, recipient, expiresAt };
+    return {
+      result: "sent",
+      signatureId,
+      recipient,
+      expiresAt,
+      sentFrom: mailer.label,
+    };
   } catch (error) {
     const reason = error instanceof Error ? error.message : "Unknown transport error";
     await record(NotificationStatus.FAILED, { lastError: reason });

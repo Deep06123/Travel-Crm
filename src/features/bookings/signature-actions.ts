@@ -18,6 +18,9 @@ const log = loggerFor("booking-signature-actions");
 const schema = z.object({
   bookingId: z.string().min(1),
   intent: z.enum(["preview", "send"]).default("send"),
+  // Which configured identity to send from. Empty means "whatever the
+  // settings say for an authorization" — the select's first option.
+  mailAccountId: z.string().trim().min(1).optional(),
   // Present only when the operator edited the message in the preview. Both
   // must arrive together — a subject with no body, or the reverse, is a
   // half-built message rather than an edit.
@@ -92,7 +95,7 @@ export async function sendAuthorizationEmailAction(
   const parsed = schema.safeParse(Object.fromEntries(formData.entries()));
   if (!parsed.success) return { error: "Invalid request." };
 
-  const { bookingId, intent, subject, body } = parsed.data;
+  const { bookingId, intent, subject, body, mailAccountId } = parsed.data;
 
   // Reading is not sending: no token is minted, nothing is written and nothing
   // is transmitted. It takes the same permission because it exposes the exact
@@ -128,6 +131,7 @@ export async function sendAuthorizationEmailAction(
       actorId: user.id,
       origin: await resolveOrigin(),
       override: { subject, body },
+      ...(mailAccountId ? { mailAccountId } : {}),
     });
 
     revalidatePath(`/admin/bookings/${bookingId}`);
@@ -135,7 +139,7 @@ export async function sendAuthorizationEmailAction(
     switch (outcome.result) {
       case "sent":
         return {
-          success: `Authorization email sent to ${outcome.recipient}. The link works until ${outcome.expiresAt.toLocaleDateString("en-GB")}.`,
+          success: `Authorization email sent to ${outcome.recipient} from ${outcome.sentFrom}. The link works until ${outcome.expiresAt.toLocaleDateString("en-GB")}.`,
         };
       case "suppressed":
         return { error: outcome.reason };

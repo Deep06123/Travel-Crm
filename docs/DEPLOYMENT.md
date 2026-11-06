@@ -47,6 +47,12 @@ reaches the browser bundle.
 | `SMTP_USER` / `SMTP_PASSWORD` | no | Omit both for a relay that authorises by network |
 | `MAIL_FROM` | if smtp | Envelope sender, e.g. `Travel CRM <bookings@example.com>` |
 | `MAIL_REPLY_TO` | no | Where customer replies land, if not `MAIL_FROM` |
+
+The `SMTP_*` block above is the fallback, not the only answer. Once an
+administrator adds a sending account under **Settings → Sending accounts**,
+that account sends instead, and several can be configured with a different one
+per kind of message. See [Sending accounts](#sending-accounts) below.
+
 | `GEOIP_PROVIDER` | no | `none` (default) or `ipapi`. Resolves an approximate city and country for the IP a customer signed a booking from. The IP itself is recorded either way; without a provider those columns stay null. A failed lookup never fails a signature |
 | `GEOIP_API_KEY` | no | Raises ipapi.co's keyless rate limit |
 
@@ -68,6 +74,34 @@ Keep them in the platform's secret store, not in a file in the repository.
 `.env` is gitignored; `.env.example` is the committed template and holds no
 real values. Rotating `AUTH_SECRET` invalidates nothing on its own — sessions
 are database-backed — but rotating database credentials requires a redeploy.
+
+One exception to that first sentence, and it is worth knowing before you
+rotate: the SMTP passwords on sending accounts are encrypted with a key
+derived from `AUTH_SECRET`. Change it and those passwords can no longer be
+decrypted — each account has to be re-entered in the settings screen. Email
+stops going out until it is, and the settings page says so against each
+account rather than failing silently.
+
+## Sending accounts
+
+The `SMTP_*` variables are the fallback. An administrator with
+`settings.manage` can add mailboxes under **Settings → Sending accounts**,
+which is where this belongs: which address a customer sees is a business
+decision, and it should not take a server login and a redeploy.
+
+- Several accounts can be configured, and each kind of message — authorization,
+  e-ticket, confirmation, internal copies — can default to a different one.
+- Staff can override the sender for a single message from the booking page,
+  where a picker appears beside Send once more than one account exists.
+- **Test connection** opens the connection and authenticates without sending
+  anything. Use it after adding an account; the alternative way to discover a
+  wrong password is a customer not receiving their authorization.
+- Passwords are stored as AES-256-GCM ciphertext and are never shown again.
+- Which account sent a given message is recorded on the notification row, so
+  the delivery history survives the account being deleted.
+
+With no account configured nothing changes: every send uses `SMTP_*` exactly as
+it did before.
 
 ## Deployment sequence
 

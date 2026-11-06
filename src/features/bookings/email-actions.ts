@@ -20,6 +20,9 @@ const resendSchema = z.object({
   bookingId: z.string().min(1),
   event: z.enum([BOOKING_CONFIRMED, BOOKING_TICKETED]),
   intent: z.enum(["preview", "send"]).default("send"),
+  // Which configured identity to send from; empty means the default for this
+  // kind of message. Ignored by a preview, which transmits nothing.
+  mailAccountId: z.string().trim().min(1).optional(),
   // Present only when the operator edited the message in the preview. Both
   // must arrive together — a subject with no body, or the reverse, is a
   // half-built message rather than an edit.
@@ -93,7 +96,8 @@ export async function bookingEmailAction(
     return { error: "Invalid request." };
   }
 
-  const { bookingId, event, intent, subject, body } = parsed.data;
+  const { bookingId, event, intent, subject, body, mailAccountId } =
+    parsed.data;
 
   // Reading is not sending: nothing is written and nothing is transmitted.
   if (intent === "preview") return buildPreview(bookingId, event);
@@ -126,6 +130,7 @@ export async function bookingEmailAction(
       event,
       force: true,
       override,
+      ...(mailAccountId ? { mailAccountId } : {}),
     });
 
     revalidatePath(`/admin/bookings/${bookingId}`);

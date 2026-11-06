@@ -21,6 +21,10 @@ const log = loggerFor("audit");
 const REDACTED_FIELDS = new Set([
   "password",
   "passwordHash",
+  // The SMTP credential on a MailAccount, under both the name the form uses
+  // and the name the column has.
+  "smtpPassword",
+  "passwordCipher",
   "passportNumber",
   "dateOfBirth",
   "cardNumber",

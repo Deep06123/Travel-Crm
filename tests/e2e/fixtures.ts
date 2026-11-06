@@ -533,6 +533,13 @@ export async function cleanupFixtures(): Promise<void> {
   await inList((l) => `DELETE FROM \`AdminSession\` WHERE \`adminUserId\` IN (${l})`, userIds);
   await inList((l) => `DELETE FROM \`Agent\` WHERE \`adminUserId\` IN (${l})`, userIds);
   await inList((l) => `DELETE FROM \`AdminUser\` WHERE \`id\` IN (${l})`, userIds);
+
+  // Named rather than id-matched, because a sending account is created through
+  // the form in the browser and the spec never learns its id. The tag is in
+  // the label, which is unique.
+  await query("DELETE FROM `MailAccount` WHERE `label` LIKE ?", [
+    `%${E2E_TAG}%`,
+  ]);
 }
 
 /** Closes the shared pool so the test process can exit. */

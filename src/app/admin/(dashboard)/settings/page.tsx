@@ -19,18 +19,27 @@ import {
   RefundStatus,
   TicketStatus,
 } from "@/generated/prisma/enums";
+import { MailAccountsManager } from "@/features/admin/mail-account-forms";
 import { NotificationRecipientsForm } from "@/features/admin/notification-form";
 import { PolicySectionForms } from "@/features/admin/policy-forms";
 import { currentUserCan, requirePermission } from "@/lib/auth/dal";
 import { allowedTransitionsFrom } from "@/lib/bookings/status";
 import { prisma } from "@/lib/db/prisma";
 import { allowedRefundTransitionsFrom } from "@/lib/financial/refund-rules";
+import { formatDateTime } from "@/lib/format";
 import { formatMoney } from "@/lib/financial/money";
 import { PERMISSIONS } from "@/lib/permissions";
 import {
   ADMIN_NOTIFICATION_SETTING_KEY,
   loadAdminNotificationEmails,
 } from "@/server/services/admin-notification-service";
+import {
+  listMailAccounts,
+  loadPurposeDefaults,
+  MAIL_DEFAULTS_SETTING_KEY,
+  MAIL_PURPOSE_LABELS,
+  MAIL_PURPOSES,
+} from "@/server/services/mail-account-service";
 import {
   listPolicySections,
   POLICY_SETTING_KEYS,
@@ -63,8 +72,14 @@ export default async function SettingsPage() {
   await requirePermission(PERMISSIONS.SETTINGS_VIEW);
   const canManage = await currentUserCan(PERMISSIONS.SETTINGS_MANAGE);
 
-  const [settings, bookingTypes, policySections, notificationEmails] =
-    await Promise.all([
+  const [
+    settings,
+    bookingTypes,
+    policySections,
+    notificationEmails,
+    mailAccounts,
+    mailDefaults,
+  ] = await Promise.all([
       // The email policy rows are excluded: they hold lists of whole sentences,
       // which the two-column table below would render as one unreadable line.
       // They have their own panel. The notification addresses are excluded for
@@ -72,14 +87,40 @@ export default async function SettingsPage() {
       // twice invites an administrator to wonder which one is live.
       prisma.businessSetting.findMany({
         where: {
-          key: { notIn: [...POLICY_SETTING_KEYS, ADMIN_NOTIFICATION_SETTING_KEY] },
+          key: {
+            notIn: [
+              ...POLICY_SETTING_KEYS,
+              ADMIN_NOTIFICATION_SETTING_KEY,
+              // Ids of mail accounts, which mean nothing in a two-column
+              // table. The panel below shows them by name.
+              MAIL_DEFAULTS_SETTING_KEY,
+            ],
+          },
         },
         orderBy: { key: "asc" },
       }),
       listBookingTypes(),
       listPolicySections(),
       loadAdminNotificationEmails(),
+      listMailAccounts(),
+      loadPurposeDefaults(),
     ]);
+
+  // Formatted here: the manager is a Client Component and `@/lib/format`
+  // reaches `@/lib/env`, which is server-only.
+  const mailAccountRows = mailAccounts.map((account) => {
+    const { verifiedAt, ...rest } = account;
+    return {
+      ...rest,
+      verifiedAtLabel: verifiedAt ? formatDateTime(verifiedAt) : null,
+    };
+  });
+
+  const mailPurposes = MAIL_PURPOSES.map((purpose) => ({
+    purpose,
+    label: MAIL_PURPOSE_LABELS[purpose],
+    selectedId: mailDefaults[purpose] ?? "",
+  }));
 
   return (
     <>
@@ -167,6 +208,60 @@ export default async function SettingsPage() {
             stable <code className="rounded bg-surface-sunken px-1">code</code>,
             not the label. Renaming a type is safe; its code never changes.
           </p>
+        </Panel>
+
+        <Panel
+          title="Sending accounts"
+          description="The mailboxes customer email goes out from"
+          collapsible={false}
+          className="lg:col-span-2"
+        >
+          <div className="mb-4 flex flex-col gap-2 rounded-md bg-surface-sunken px-3 py-2.5 text-xs leading-relaxed text-ink-muted">
+            <p>
+              Each account is one SMTP mailbox. Add as many as the business
+              uses, then choose which one sends each kind of message — an
+              authorization and an e-ticket can come from different addresses.
+              Staff can override the choice on a single send from the booking
+              page.
+            </p>
+            <p>
+              Passwords are stored encrypted and are never shown again, here or
+              anywhere else. <strong>Test connection</strong> proves the
+              credentials work without sending anything to anyone.
+            </p>
+            <p>
+              With no account configured, email goes out using the server&rsquo;s{" "}
+              <code className="rounded bg-surface px-1">SMTP_*</code>{" "}
+              environment variables exactly as before.
+            </p>
+          </div>
+
+          {canManage ? (
+            <MailAccountsManager
+              accounts={mailAccountRows}
+              purposes={mailPurposes}
+            />
+          ) : mailAccountRows.length === 0 ? (
+            <p className="text-sm text-ink-muted">
+              No sending accounts are configured.
+            </p>
+          ) : (
+            <ul className="list-disc pl-5 text-sm text-ink-muted">
+              {mailAccountRows.map((account) => (
+                <li key={account.id}>
+                  {account.label} — {account.fromEmail}
+                  {account.isActive ? "" : " (disabled)"}
+                </li>
+              ))}
+            </ul>
+          )}
+
+          {!canManage ? (
+            <p className="mt-3 flex items-start gap-2 text-xs text-ink-muted">
+              <Lock className="mt-0.5 size-3.5 shrink-0" />
+              Your role can read these but not change them.
+            </p>
+          ) : null}
         </Panel>
 
         <Panel

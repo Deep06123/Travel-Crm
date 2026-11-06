@@ -23,6 +23,11 @@ import {
 import { createFlightBooking } from "@/server/services/booking-service";
 
 import {
+  restoreMailAccounts,
+  suspendMailAccounts,
+  type SuspendedAccounts,
+} from "../helpers/mail-accounts";
+import {
   restoreAdminNoticeSetting,
   setAdminNoticeEmails,
   takeAdminNoticeSetting,
@@ -46,6 +51,7 @@ const sink = new SmtpSink();
 let actorId: string;
 let customerId: string;
 let savedNotices: SavedNoticeSetting = null;
+let suspendedAccounts: SuspendedAccounts = [];
 const bookingIds: string[] = [];
 
 const CLAIMS = {
@@ -138,6 +144,11 @@ beforeAll(async () => {
   // notice switches it on for itself.
   savedNotices = await takeAdminNoticeSetting();
 
+  // And likewise any sending account configured in Settings: `resolveMailer`
+  // prefers one over the SMTP_* variables set above, which would send this
+  // file's assertions through somebody else's mailbox.
+  suspendedAccounts = await suspendMailAccounts();
+
   const actor = await prisma.adminUser.create({
     data: {
       email: `sign-test-${SUFFIX}@example.invalid`,
@@ -171,6 +182,7 @@ afterEach(async () => {
 
 afterAll(async () => {
   await restoreAdminNoticeSetting(savedNotices);
+  await restoreMailAccounts(suspendedAccounts);
   await prisma.auditLog.deleteMany({ where: { adminUserId: actorId } });
   await prisma.auditLog.deleteMany({ where: { entityType: "BookingSignature" } });
   await prisma.notification.deleteMany({

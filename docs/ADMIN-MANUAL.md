@@ -308,6 +308,11 @@ history.
 **Administration → Settings** shows:
 
 - **Business settings** — supported currencies, refund approval threshold, etc.
+- **Internal email notifications** — the addresses that get a short notice each
+  time an authorization email is sent, a customer signs it, or a confirmation
+  or e-ticket goes out. One per line; leave the box empty to turn them off.
+  The notice names the booking, who it went to and when — it is not a copy of
+  the customer's document, so it carries no itinerary or passenger details.
 - **Booking types** — your own categories (New Booking, Re-Booking, Changes…)
 - **Fixed vocabularies** — the booking and refund stages, shown for reference.
   These cannot be edited, because reports and rules depend on them.

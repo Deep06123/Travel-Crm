@@ -6,6 +6,7 @@ import { currentUserCan, requirePermission } from "@/lib/auth/dal";
 import { PERMISSIONS } from "@/lib/permissions";
 import { hasSignedAuthorization } from "@/server/services/booking-signature-service";
 import { getETicketPreview } from "@/server/services/customer-email-service";
+import { listSendableAccounts } from "@/server/services/mail-account-service";
 
 /** Mirrors the gate in `bookingEmailAction`, which is where it is enforced. */
 export const AWAITING_SIGNATURE =
@@ -41,9 +42,12 @@ export default async function ETicketPage({
 
   const { id } = await params;
 
-  const [preview, signed] = await Promise.all([
+  const [preview, signed, senders] = await Promise.all([
     getETicketPreview(id, { redactDateOfBirth: !canViewSensitive }),
     hasSignedAuthorization(id),
+    // Only to populate the picker. With fewer than two the control draws
+    // nothing and the send takes the configured default.
+    listSendableAccounts(),
   ]);
 
   if (!preview) notFound();
@@ -58,6 +62,7 @@ export default async function ETicketPage({
             <SendETicketButton
               bookingId={id}
               recipient={preview.recipient}
+              senders={senders}
               blockedReason={signed ? undefined : AWAITING_SIGNATURE}
             />
           ) : (

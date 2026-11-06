@@ -9,6 +9,7 @@ import { Badge } from "@/components/ui/status-badge";
 import type { BookingSignatureStatus } from "@/generated/prisma/enums";
 
 import { EmailEditor } from "./email-editor";
+import { SenderSelect, type SenderOption } from "./sender-select";
 import {
   sendAuthorizationEmailAction,
   type AuthorizationState,
@@ -137,6 +138,7 @@ export function AuthorizationPanel({
   rows,
   canSend,
   recipient,
+  senders = [],
 }: {
   bookingId: string;
   /** Newest first. */
@@ -144,6 +146,8 @@ export function AuthorizationPanel({
   canSend: boolean;
   /** Empty when the booking has no contact address; nothing could be sent. */
   recipient: string;
+  /** Active sending accounts. Empty or single: no picker is drawn. */
+  senders?: readonly SenderOption[];
 }) {
   const [state, formAction] = useActionState<AuthorizationState, FormData>(
     sendAuthorizationEmailAction,
@@ -159,6 +163,16 @@ export function AuthorizationPanel({
    * result with no `preview`, which closes the editor on its own.
    */
   const [dismissed, setDismissed] = useState<AuthorizationState["preview"]>();
+
+  /**
+   * The sender, held here rather than in each form.
+   *
+   * The send form and the editor are two separate forms — nesting them would
+   * be invalid HTML — so a select living in one of them could not speak for
+   * the other. Lifting it means a choice made before clicking Edit is still
+   * the choice when the edited version is sent.
+   */
+  const [senderId, setSenderId] = useState("");
 
   const editing =
     state.preview && state.preview !== dismissed ? state.preview : undefined;
@@ -244,6 +258,13 @@ export function AuthorizationPanel({
         <form action={formAction} className="flex flex-col items-start gap-2">
           <input type="hidden" name="bookingId" value={bookingId} />
 
+          <SenderSelect
+            id={`authorization-sender-${bookingId}`}
+            options={senders}
+            value={senderId}
+            onChange={setSenderId}
+          />
+
           <div className="flex flex-wrap gap-2">
             <SubmitButton
               label={
@@ -301,7 +322,13 @@ export function AuthorizationPanel({
           recipient={editing.recipient}
           subject={editing.subject}
           body={editing.body}
-          hidden={{ bookingId, intent: "send" }}
+          hidden={{
+            bookingId,
+            intent: "send",
+            // Carried across from the picker above: the editor is its own
+            // form and would otherwise post no sender at all.
+            ...(senderId ? { mailAccountId: senderId } : {}),
+          }}
           bodyHint="Plain text, shown at the top of the email. Leave a blank line between paragraphs."
           note={
             <p className="rounded-md bg-surface-sunken px-3 py-2 text-xs text-ink-muted">

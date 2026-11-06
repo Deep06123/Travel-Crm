@@ -13,6 +13,11 @@ import {
 } from "@/server/services/admin-notification-service";
 
 import {
+  restoreMailAccounts,
+  suspendMailAccounts,
+  type SuspendedAccounts,
+} from "../helpers/mail-accounts";
+import {
   restoreAdminNoticeSetting,
   takeAdminNoticeSetting,
   type SavedNoticeSetting,
@@ -33,9 +38,15 @@ const SUFFIX = Date.now();
 
 let actorId: string;
 let savedNotices: SavedNoticeSetting = null;
+let suspendedAccounts: SuspendedAccounts = [];
 
 beforeAll(async () => {
   savedNotices = await takeAdminNoticeSetting();
+
+  // And likewise any sending account configured in Settings: `resolveMailer`
+  // prefers one over the SMTP_* variables set above, which would send this
+  // file's assertions through somebody else's mailbox.
+  suspendedAccounts = await suspendMailAccounts();
 
   const actor = await prisma.adminUser.create({
     data: {
@@ -60,6 +71,7 @@ afterEach(async () => {
 
 afterAll(async () => {
   await restoreAdminNoticeSetting(savedNotices);
+  await restoreMailAccounts(suspendedAccounts);
   await prisma.auditLog.deleteMany({ where: { adminUserId: actorId } });
   await prisma.adminUser.deleteMany({ where: { id: actorId } });
   await prisma.$disconnect();

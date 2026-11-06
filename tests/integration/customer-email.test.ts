@@ -26,6 +26,11 @@ import {
 } from "@/server/services/customer-email-service";
 
 import {
+  restoreMailAccounts,
+  suspendMailAccounts,
+  type SuspendedAccounts,
+} from "../helpers/mail-accounts";
+import {
   restoreAdminNoticeSetting,
   setAdminNoticeEmails,
   takeAdminNoticeSetting,
@@ -47,6 +52,7 @@ const sink = new SmtpSink();
 let actorId: string;
 let customerId: string;
 let savedNotices: SavedNoticeSetting = null;
+let suspendedAccounts: SuspendedAccounts = [];
 const bookingIds: string[] = [];
 
 /** The whole decoded message, headers and body, as readable text. */
@@ -155,6 +161,11 @@ beforeAll(async () => {
   // customer's message.
   savedNotices = await takeAdminNoticeSetting();
 
+  // And likewise any sending account configured in Settings: `resolveMailer`
+  // prefers one over the SMTP_* variables set above, which would send this
+  // file's assertions through somebody else's mailbox.
+  suspendedAccounts = await suspendMailAccounts();
+
   const actor = await prisma.adminUser.create({
     data: {
       email: `mail-test-${SUFFIX}@example.invalid`,
@@ -191,6 +202,7 @@ afterAll(async () => {
   // deleting, and fail against a closed connection.
   await flushPendingBookingEmails();
   await restoreAdminNoticeSetting(savedNotices);
+  await restoreMailAccounts(suspendedAccounts);
   await prisma.notification.deleteMany({
     where: { bookingId: { in: bookingIds } },
   });

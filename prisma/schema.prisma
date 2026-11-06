@@ -1478,6 +1478,14 @@ model Notification {
 
   provider          String?
   providerReference String?
+
+  /// Which configured identity sent this, where one was used. Null for a send
+  /// that fell back to the `SMTP_*` environment variables, and for every row
+  /// written before mail accounts existed. `SetNull` on delete: removing an
+  /// account must not take the delivery history with it.
+  mailAccountId String?
+  mailAccount   MailAccount? @relation(fields: [mailAccountId], references: [id], onDelete: SetNull)
+
   attemptCount      Int     @default(0)
   lastError         String? @db.Text
   sentAt    DateTime?
@@ -1542,6 +1550,54 @@ model ReferenceSequence {
   kind      String   @id
   value     BigInt   @default(0)
   updatedAt DateTime @updatedAt
+}
+
+/// An SMTP identity customer email can be sent from.
+///
+/// The one deliberate exception to "credentials live in environment variables":
+/// which address a customer sees is a business decision, and an operator who
+/// adds a mailbox should not need a redeploy and a server login to use it. The
+/// password is therefore stored, but only as ciphertext — see
+/// `src/lib/crypto/secret-box.ts`, which keys the box from `AUTH_SECRET`.
+///
+/// The `SMTP_*` environment variables still work and are used when this table
+/// is empty, so an existing deployment keeps sending exactly as it did.
+model MailAccount {
+  id    String @id @default(cuid())
+  /// What operators pick from, e.g. "Cruise Confirmations". Distinct from the
+  /// address, because two mailboxes on one domain are told apart by purpose.
+  label String @unique
+
+  /// Envelope sender. Split from the display name so the name can be edited
+  /// without anyone having to get RFC 5322 quoting right in a text field.
+  fromEmail String
+  fromName  String?
+  replyTo   String?
+
+  host     String
+  port     Int     @default(587)
+  /// True for implicit TLS on 465; false for STARTTLS on 587.
+  secure   Boolean @default(false)
+  username String?
+  /// AES-256-GCM ciphertext, never the password itself. Null for a relay that
+  /// authorises by network rather than by credentials.
+  passwordCipher String? @db.Text
+
+  /// An account kept for its history but no longer offered when sending.
+  isActive Boolean @default(true)
+
+  /// Last connection check, so the settings page can show whether these
+  /// credentials have ever been proven to work rather than only that they
+  /// were typed in.
+  verifiedAt    DateTime?
+  lastError     String?   @db.Text
+
+  notifications Notification[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([isActive, label])
 }
 
 /// Key-value business settings editable at runtime, e.g. supported currencies

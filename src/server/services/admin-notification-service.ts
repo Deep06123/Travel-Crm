@@ -11,11 +11,12 @@ import { recordAudit } from "@/lib/audit";
 import { prisma } from "@/lib/db/prisma";
 import { getEnv } from "@/lib/env";
 import { loggerFor } from "@/lib/logging/logger";
-import { getMailer } from "@/lib/mail";
 import {
   renderAdminNotice,
   type AdminNoticeRow,
 } from "@/lib/mail/admin-notice";
+
+import { resolveMailer } from "./mail-account-service";
 
 /**
  * The internal copy of a customer email.
@@ -278,6 +279,12 @@ export async function sendAdminNotice({
 
   const recipient = recipients.join(", ");
 
+  // Resolved before the first row is written, so a suppressed notice can
+  // still record which identity it would have used. Internal notices have a
+  // purpose of their own: an office copy may legitimately come from a
+  // no-reply mailbox that no customer ever sees.
+  const mailer = await resolveMailer("internal");
+
   const record = async (
     status: NotificationStatus,
     extra: { lastError?: string; sentAt?: Date; providerReference?: string } = {},
@@ -293,18 +300,20 @@ export async function sendAdminNotice({
         recipient,
         status,
         attemptCount: status === NotificationStatus.SUPPRESSED ? 0 : 1,
-        provider: status === NotificationStatus.SUPPRESSED ? null : "smtp",
+        provider:
+          status === NotificationStatus.SUPPRESSED
+            ? null
+            : (mailer?.adapter.provider ?? "smtp"),
+        ...(mailer?.accountId ? { mailAccountId: mailer.accountId } : {}),
         payload: { bookingNumber, headline },
         ...extra,
       },
       select: { id: true },
     });
 
-  const mailer = getMailer();
-
   if (!mailer) {
     const reason =
-      'No mail transport is configured (MAIL_DRIVER="none"), so no internal notice was attempted.';
+      "No sending account is configured, so no internal notice was attempted.";
     await record(NotificationStatus.SUPPRESSED, { lastError: reason });
     return { result: "suppressed", reason };
   }
@@ -318,7 +327,7 @@ export async function sendAdminNotice({
   });
 
   try {
-    const { providerReference } = await mailer.send({
+    const { providerReference } = await mailer.adapter.send({
       to: recipient,
       subject: rendered.subject,
       text: rendered.text,

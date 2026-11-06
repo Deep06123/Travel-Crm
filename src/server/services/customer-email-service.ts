@@ -17,7 +17,6 @@ import {
 import { prisma } from "@/lib/db/prisma";
 import { withUpsertRetry } from "@/lib/db/upsert-retry";
 import { loggerFor } from "@/lib/logging/logger";
-import { getMailer } from "@/lib/mail";
 import {
   prepareItineraryForEmail,
   prepareItineraryForPreview,
@@ -37,6 +36,8 @@ import {
 } from "./admin-notification-service";
 
 import { loadPolicyOverrides } from "./email-policy-service";
+
+import { resolveMailer } from "./mail-account-service";
 
 const log = loggerFor("customer-email");
 
@@ -166,6 +167,14 @@ export interface SendBookingEmailInput {
    * `body` is plain text. See `renderEditedEmail` for why it is not HTML.
    */
   override?: { subject: string; body: string } | undefined;
+  /**
+   * The sending identity the operator picked, where they picked one.
+   *
+   * Absent on every automatic send, which is correct: those are triggered by a
+   * status change with nobody at a keyboard, so they take the default for the
+   * kind of message. See `resolveMailer`.
+   */
+  mailAccountId?: string | undefined;
 }
 
 /** Subject and body as they would be sent, without sending or recording. */
@@ -291,6 +300,7 @@ export async function sendBookingEmail({
   event,
   override,
   force = false,
+  mailAccountId,
 }: SendBookingEmailInput): Promise<EmailOutcome> {
   const dedupeKey = dedupeKeyFor(bookingId, event);
   const template = TEMPLATES[event];
@@ -373,11 +383,17 @@ export async function sendBookingEmail({
     return { result: "suppressed", notificationId: row.id, reason };
   }
 
-  const mailer = getMailer();
+  // An e-ticket and a confirmation are different documents to a customer and
+  // may legitimately come from different mailboxes, so the purpose follows the
+  // event rather than being one "customer email" bucket.
+  const mailer = await resolveMailer(
+    event === BOOKING_TICKETED ? "eticket" : "confirmation",
+    mailAccountId,
+  );
 
   if (!mailer) {
     const reason =
-      'No mail transport is configured (MAIL_DRIVER="none"), so no email was attempted.';
+      "No sending account is configured, so no email was attempted. Add one under Settings → Sending accounts.";
     const row = await upsert(
       { status: NotificationStatus.SUPPRESSED, lastError: reason },
       false,
@@ -417,7 +433,7 @@ export async function sendBookingEmail({
   const row = await upsert({ status: NotificationStatus.PENDING }, true);
 
   try {
-    const { providerReference } = await mailer.send({
+    const { providerReference } = await mailer.adapter.send({
       to: recipient,
       subject: rendered.subject,
       text: rendered.text,
@@ -430,7 +446,8 @@ export async function sendBookingEmail({
       data: {
         status: NotificationStatus.SENT,
         sentAt: new Date(),
-        provider: mailer.provider,
+        provider: mailer.adapter.provider,
+        mailAccountId: mailer.accountId,
         providerReference: providerReference ?? null,
         lastError: null,
       },
@@ -456,6 +473,7 @@ export async function sendBookingEmail({
       rows: [
         { label: "Customer", value: customerNameOf(booking) },
         { label: "Sent to", value: recipient },
+        { label: "Sent from", value: mailer.label },
         { label: "Subject", value: rendered.subject },
         {
           label: "Amount",
@@ -473,7 +491,8 @@ export async function sendBookingEmail({
       where: { id: row.id },
       data: {
         status: NotificationStatus.FAILED,
-        provider: mailer.provider,
+        provider: mailer.adapter.provider,
+        mailAccountId: mailer.accountId,
         lastError: reason.slice(0, 1_000),
       },
     });
