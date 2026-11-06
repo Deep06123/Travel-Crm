@@ -35,9 +35,10 @@ export default async function ETicketPage({
 }: PageProps<"/admin/bookings/[id]/eticket">) {
   await requirePermission(PERMISSIONS.BOOKING_VIEW);
 
-  const [canViewSensitive, canSend] = await Promise.all([
+  const [canViewSensitive, canSend, canManageSettings] = await Promise.all([
     currentUserCan(PERMISSIONS.PASSENGER_VIEW_SENSITIVE),
     currentUserCan(PERMISSIONS.MESSAGE_SEND),
+    currentUserCan(PERMISSIONS.SETTINGS_MANAGE),
   ]);
 
   const { id } = await params;
@@ -63,6 +64,7 @@ export default async function ETicketPage({
               bookingId={id}
               recipient={preview.recipient}
               senders={senders}
+              canManageSettings={canManageSettings}
               blockedReason={signed ? undefined : AWAITING_SIGNATURE}
             />
           ) : (

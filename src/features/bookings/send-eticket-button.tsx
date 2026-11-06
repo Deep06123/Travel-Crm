@@ -80,6 +80,7 @@ export function SendETicketButton({
   blockedReason,
   viewHref,
   senders = [],
+  canManageSettings = false,
 }: {
   bookingId: string;
   /** Empty when the booking has no contact address; nothing could be sent. */
@@ -99,8 +100,10 @@ export function SendETicketButton({
    * a link from a page back to itself is noise.
    */
   viewHref?: string | undefined;
-  /** Active sending accounts. Empty or single: no picker is drawn. */
+  /** Active sending accounts. Empty: no picker, only a pointer to Settings. */
   senders?: readonly SenderOption[];
+  /** Whether this user could act on "no accounts configured". */
+  canManageSettings?: boolean;
 }) {
   const [state, formAction] = useActionState<BookingEmailState, FormData>(
     bookingEmailAction,
@@ -136,6 +139,7 @@ export function SendETicketButton({
           options={senders}
           value={senderId}
           onChange={setSenderId}
+          canManageSettings={canManageSettings}
         />
 
         <div className="flex flex-wrap gap-2">

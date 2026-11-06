@@ -136,6 +136,7 @@ export default async function BookingDetailPage({
     canUpdateBooking,
     canUpdateMco,
     canSendAuthorization,
+    canManageSettings,
   ] = await Promise.all([
     currentUserCan(PERMISSIONS.BOOKING_CHANGE_STATUS),
     currentUserCan(PERMISSIONS.PASSENGER_VIEW_SENSITIVE),
@@ -148,6 +149,9 @@ export default async function BookingDetailPage({
     currentUserCan(PERMISSIONS.BOOKING_UPDATE),
     currentUserCan(PERMISSIONS.BOOKING_MCO_UPDATE),
     currentUserCan(PERMISSIONS.BOOKING_SIGNATURE_SEND),
+    // Only so the sender picker can offer a way out when no account is
+    // configured. A role that cannot reach Settings is shown nothing.
+    currentUserCan(PERMISSIONS.SETTINGS_MANAGE),
   ]);
 
   const { id } = await params;
@@ -1095,6 +1099,7 @@ export default async function BookingDetailPage({
               canSend={canSendAuthorization}
               recipient={emailRecipient}
               senders={senders}
+              canManageSettings={canManageSettings}
             />
 
             <div className="mt-4 border-t border-line pt-4">
@@ -1103,6 +1108,7 @@ export default async function BookingDetailPage({
                   bookingId={booking.id}
                   recipient={emailRecipient}
                   senders={senders}
+                  canManageSettings={canManageSettings}
                   viewHref={`/admin/bookings/${booking.id}/eticket`}
                   blockedReason={
                     hasSignature

@@ -139,6 +139,7 @@ export function AuthorizationPanel({
   canSend,
   recipient,
   senders = [],
+  canManageSettings = false,
 }: {
   bookingId: string;
   /** Newest first. */
@@ -146,8 +147,10 @@ export function AuthorizationPanel({
   canSend: boolean;
   /** Empty when the booking has no contact address; nothing could be sent. */
   recipient: string;
-  /** Active sending accounts. Empty or single: no picker is drawn. */
+  /** Active sending accounts. Empty: no picker, only a pointer to Settings. */
   senders?: readonly SenderOption[];
+  /** Whether this user could act on "no accounts configured". */
+  canManageSettings?: boolean;
 }) {
   const [state, formAction] = useActionState<AuthorizationState, FormData>(
     sendAuthorizationEmailAction,
@@ -263,6 +266,7 @@ export function AuthorizationPanel({
             options={senders}
             value={senderId}
             onChange={setSenderId}
+            canManageSettings={canManageSettings}
           />
 
           <div className="flex flex-wrap gap-2">

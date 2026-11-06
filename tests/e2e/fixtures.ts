@@ -534,9 +534,19 @@ export async function cleanupFixtures(): Promise<void> {
   await inList((l) => `DELETE FROM \`Agent\` WHERE \`adminUserId\` IN (${l})`, userIds);
   await inList((l) => `DELETE FROM \`AdminUser\` WHERE \`id\` IN (${l})`, userIds);
 
-  // Named rather than id-matched, because a sending account is created through
-  // the form in the browser and the spec never learns its id. The tag is in
-  // the label, which is unique.
+  await deleteTestMailAccounts();
+}
+
+/**
+ * Removes the sending accounts this suite created.
+ *
+ * Named rather than id-matched, because an account is created through the form
+ * in the browser and the spec never learns its id. The tag is in the label,
+ * which is unique — so a test that needs to start from "none configured" can
+ * call this directly rather than depending on the order tests happen to run
+ * in.
+ */
+export async function deleteTestMailAccounts(): Promise<void> {
   await query("DELETE FROM `MailAccount` WHERE `label` LIKE ?", [
     `%${E2E_TAG}%`,
   ]);
