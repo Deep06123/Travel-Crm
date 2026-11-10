@@ -19,6 +19,12 @@ import { Card } from "@/components/ui/panel";
 import { Badge } from "@/components/ui/status-badge";
 import { AuditAction } from "@/generated/prisma/enums";
 import type { Prisma } from "@/generated/prisma/client";
+import {
+  AuditBulkBar,
+  AuditRowCheckbox,
+  AuditSelectAll,
+  AuditSelection,
+} from "@/features/admin/audit-bulk-select";
 import { AuditRowActions } from "@/features/admin/audit-row-actions";
 import { currentUserCan, requirePermission } from "@/lib/auth/dal";
 import { prisma } from "@/lib/db/prisma";
@@ -168,149 +174,169 @@ export default async function AuditLogsPage({
       <Card className="mb-4">
         <p className="flex items-start gap-2 text-xs text-ink-muted">
           <ShieldCheck className="mt-0.5 size-3.5 shrink-0" />
-          Entries are append-only — nothing here can be edited or deleted, and a
-          correction is a new entry. Passwords, passport numbers and card
+          Entries cannot be edited — a correction is a new entry. Deleting one,
+          or a selection of them, is restricted and writes its own entry
+          recording what was removed. Passwords, passport numbers and card
           details are redacted before an entry is written, so the trail records
           that a field changed without recording its value.
         </p>
       </Card>
 
-      <div className="overflow-hidden rounded-lg border border-line bg-white shadow-sm">
-        <form method="get" className="flex flex-wrap items-end gap-3 border-b border-line p-4">
-          <div className="min-w-56 flex-1">
-            <label htmlFor="q" className="mb-1.5 block text-sm font-medium text-ink">
-              Search
-            </label>
-            <Input
-              id="q"
-              name="q"
-              defaultValue={filters.q ?? ""}
-              placeholder="Summary or record id"
-            />
-          </div>
-
-          <div className="w-48">
-            <label htmlFor="action" className="mb-1.5 block text-sm font-medium text-ink">
-              Action
-            </label>
-            <Select id="action" name="action" defaultValue={filters.action ?? ""}>
-              <option value="">All</option>
-              {Object.values(AuditAction).map((value) => (
-                <option key={value} value={value}>
-                  {humanise(value)}
-                </option>
-              ))}
-            </Select>
-          </div>
-
-          <div className="w-48">
-            <label htmlFor="entityType" className="mb-1.5 block text-sm font-medium text-ink">
-              Record type
-            </label>
-            <Select id="entityType" name="entityType" defaultValue={filters.entityType ?? ""}>
-              <option value="">All</option>
-              {entityTypes.map((row) => (
-                <option key={row.entityType} value={row.entityType}>
-                  {row.entityType}
-                </option>
-              ))}
-            </Select>
-          </div>
-
-          <div className="w-48">
-            <label htmlFor="adminUserId" className="mb-1.5 block text-sm font-medium text-ink">
-              Actor
-            </label>
-            <Select id="adminUserId" name="adminUserId" defaultValue={filters.adminUserId ?? ""}>
-              <option value="">Anyone</option>
-              {actors.map((actor) => (
-                <option key={actor.id} value={actor.id}>
-                  {actor.name}
-                </option>
-              ))}
-            </Select>
-          </div>
-
-          <Button type="submit">
-            <Search />
-            Search
-          </Button>
-
-          {Object.values(filters).some(Boolean) ? (
-            <Link href="/admin/audit-logs" className={buttonVariants({ variant: "ghost" })}>
-              Clear
-            </Link>
-          ) : null}
-        </form>
-
-        <TableShell>
-          <Thead>
-            <Tr>
-              <Th>When</Th>
-              <Th>Action</Th>
-              <Th>Record</Th>
-              <Th>Summary</Th>
-              <Th>Actor</Th>
-              <Th>IP</Th>
-              {canDelete ? <Th align="right">Actions</Th> : null}
-            </Tr>
-          </Thead>
-
-          <Tbody>
-            {rows.length === 0 ? (
-              <EmptyState
-                colSpan={canDelete ? 7 : 6}
-                title="No matching entries"
+      {/* Wraps the whole panel so the selection survives a filter submit being
+          typed but not sent, and resets the moment the rows actually change. */}
+      <AuditSelection pageIds={canDelete ? rows.map((entry) => entry.id) : []}>
+        <div className="overflow-hidden rounded-lg border border-line bg-white shadow-sm">
+          <form method="get" className="flex flex-wrap items-end gap-3 border-b border-line p-4">
+            <div className="min-w-56 flex-1">
+              <label htmlFor="q" className="mb-1.5 block text-sm font-medium text-ink">
+                Search
+              </label>
+              <Input
+                id="q"
+                name="q"
+                defaultValue={filters.q ?? ""}
+                placeholder="Summary or record id"
               />
-            ) : (
-              rows.map((entry) => (
-                <Tr key={entry.id}>
-                  <Td className="whitespace-nowrap text-ink-muted">
-                    {formatDateTime(entry.createdAt)}
-                  </Td>
-                  <Td>
-                    <Badge tone={ACTION_TONES[entry.action] ?? "neutral"}>
-                      {humanise(entry.action)}
-                    </Badge>
-                  </Td>
-                  <Td className="text-ink-muted">
-                    {entry.entityType}
-                    <div className="font-mono text-xs text-ink-subtle">
-                      {entry.entityId.slice(0, 12)}…
-                    </div>
-                  </Td>
-                  <Td className="max-w-96">
-                    {entry.summary}
-                    <Changes changes={entry.changes} />
-                  </Td>
-                  <Td className="text-ink-muted">
-                    {entry.adminUser?.name ?? "System"}
-                  </Td>
-                  <Td className="font-mono text-xs text-ink-subtle">
-                    {entry.ipAddress ?? "—"}
-                  </Td>
-                  {canDelete ? (
-                    <Td align="right">
-                      <AuditRowActions
-                        entryId={entry.id}
-                        summary={entry.summary}
-                      />
-                    </Td>
-                  ) : null}
-                </Tr>
-              ))
-            )}
-          </Tbody>
-        </TableShell>
+            </div>
 
-        <PaginationControls
-          page={pagination.page}
-          pageCount={pageCount}
-          total={total}
-          pageSize={pagination.pageSize}
-          buildHref={buildHref}
-        />
-      </div>
+            <div className="w-48">
+              <label htmlFor="action" className="mb-1.5 block text-sm font-medium text-ink">
+                Action
+              </label>
+              <Select id="action" name="action" defaultValue={filters.action ?? ""}>
+                <option value="">All</option>
+                {Object.values(AuditAction).map((value) => (
+                  <option key={value} value={value}>
+                    {humanise(value)}
+                  </option>
+                ))}
+              </Select>
+            </div>
+
+            <div className="w-48">
+              <label htmlFor="entityType" className="mb-1.5 block text-sm font-medium text-ink">
+                Record type
+              </label>
+              <Select id="entityType" name="entityType" defaultValue={filters.entityType ?? ""}>
+                <option value="">All</option>
+                {entityTypes.map((row) => (
+                  <option key={row.entityType} value={row.entityType}>
+                    {row.entityType}
+                  </option>
+                ))}
+              </Select>
+            </div>
+
+            <div className="w-48">
+              <label htmlFor="adminUserId" className="mb-1.5 block text-sm font-medium text-ink">
+                Actor
+              </label>
+              <Select id="adminUserId" name="adminUserId" defaultValue={filters.adminUserId ?? ""}>
+                <option value="">Anyone</option>
+                {actors.map((actor) => (
+                  <option key={actor.id} value={actor.id}>
+                    {actor.name}
+                  </option>
+                ))}
+              </Select>
+            </div>
+
+            <Button type="submit">
+              <Search />
+              Search
+            </Button>
+
+            {Object.values(filters).some(Boolean) ? (
+              <Link href="/admin/audit-logs" className={buttonVariants({ variant: "ghost" })}>
+                Clear
+              </Link>
+            ) : null}
+          </form>
+
+          {canDelete ? <AuditBulkBar /> : null}
+
+          <TableShell>
+            <Thead>
+              <Tr>
+                {canDelete ? (
+                  <Th className="w-10">
+                    <AuditSelectAll />
+                  </Th>
+                ) : null}
+                <Th>When</Th>
+                <Th>Action</Th>
+                <Th>Record</Th>
+                <Th>Summary</Th>
+                <Th>Actor</Th>
+                <Th>IP</Th>
+                {canDelete ? <Th align="right">Actions</Th> : null}
+              </Tr>
+            </Thead>
+
+            <Tbody>
+              {rows.length === 0 ? (
+                <EmptyState
+                  colSpan={canDelete ? 8 : 6}
+                  title="No matching entries"
+                />
+              ) : (
+                rows.map((entry) => (
+                  <Tr key={entry.id}>
+                    {canDelete ? (
+                      <Td>
+                        <AuditRowCheckbox
+                          entryId={entry.id}
+                          summary={entry.summary}
+                        />
+                      </Td>
+                    ) : null}
+                    <Td className="whitespace-nowrap text-ink-muted">
+                      {formatDateTime(entry.createdAt)}
+                    </Td>
+                    <Td>
+                      <Badge tone={ACTION_TONES[entry.action] ?? "neutral"}>
+                        {humanise(entry.action)}
+                      </Badge>
+                    </Td>
+                    <Td className="text-ink-muted">
+                      {entry.entityType}
+                      <div className="font-mono text-xs text-ink-subtle">
+                        {entry.entityId.slice(0, 12)}…
+                      </div>
+                    </Td>
+                    <Td className="max-w-96">
+                      {entry.summary}
+                      <Changes changes={entry.changes} />
+                    </Td>
+                    <Td className="text-ink-muted">
+                      {entry.adminUser?.name ?? "System"}
+                    </Td>
+                    <Td className="font-mono text-xs text-ink-subtle">
+                      {entry.ipAddress ?? "—"}
+                    </Td>
+                    {canDelete ? (
+                      <Td align="right">
+                        <AuditRowActions
+                          entryId={entry.id}
+                          summary={entry.summary}
+                        />
+                      </Td>
+                    ) : null}
+                  </Tr>
+                ))
+              )}
+            </Tbody>
+          </TableShell>
+
+          <PaginationControls
+            page={pagination.page}
+            pageCount={pageCount}
+            total={total}
+            pageSize={pagination.pageSize}
+            buildHref={buildHref}
+          />
+        </div>
+      </AuditSelection>
     </>
   );
 }

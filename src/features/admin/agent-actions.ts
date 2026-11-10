@@ -14,7 +14,6 @@ import {
   createAgent,
   deleteAgent,
   resetAgentPassword,
-  setAgentAccountStatus,
   unlockAgent,
   updateAgent,
 } from "@/server/services/agent-service";
@@ -210,10 +209,11 @@ export async function unlockAgentAction(
 }
 
 /**
- * Deletes an account, or suspends it where deleting would erase attribution.
+ * Deletes an account for good.
  *
- * One control, two outcomes, as everywhere else in the admin: the row knows
- * whether the account has done anything, and the server decides for real.
+ * The service does the real refusing — deleting your own account is the only
+ * case left, and it is refused there rather than here so it holds however the
+ * call arrives.
  */
 export async function removeAgentAction(
   _previous: AgentFormState,
@@ -225,25 +225,8 @@ export async function removeAgentAction(
   if (!parsed.success) return { error: "Invalid request." };
 
   const { agentId } = parsed.data;
-  const deactivating = formData.get("deactivate") === "true";
-
-  // Deleting your own account signs you out mid-request and leaves the
-  // session pointing at a row that no longer exists.
-  if (formData.get("selfId") === user.id) {
-    return { error: "You cannot remove your own account." };
-  }
 
   try {
-    if (deactivating) {
-      await setAgentAccountStatus(agentId, AdminUserStatus.DEACTIVATED, user.id);
-      revalidatePath("/admin/agents");
-      revalidatePath(`/admin/agents/${agentId}`);
-      return {
-        success:
-          "Account deactivated. They are signed out and cannot sign back in.",
-      };
-    }
-
     await deleteAgent(agentId, user.id);
   } catch (error) {
     if (error instanceof AgentInUseError) return { error: error.message };
@@ -254,26 +237,4 @@ export async function removeAgentAction(
 
   revalidatePath("/admin/agents");
   return { success: "Account deleted." };
-}
-
-/** Restores a suspended or deactivated account. */
-export async function reactivateAgentAction(
-  _previous: AgentFormState,
-  formData: FormData,
-): Promise<AgentFormState> {
-  const user = await requirePermission(PERMISSIONS.AGENT_MANAGE);
-
-  const parsed = agentIdSchema.safeParse(Object.fromEntries(formData.entries()));
-  if (!parsed.success) return { error: "Invalid request." };
-
-  try {
-    await setAgentAccountStatus(parsed.data.agentId, AdminUserStatus.ACTIVE, user.id);
-  } catch (error) {
-    log.error({ err: error }, "Failed to reactivate agent");
-    return { error: "The account could not be reactivated. Try again." };
-  }
-
-  revalidatePath("/admin/agents");
-  revalidatePath(`/admin/agents/${parsed.data.agentId}`);
-  return { success: "Account is active again." };
 }

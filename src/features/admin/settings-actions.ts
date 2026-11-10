@@ -7,6 +7,7 @@ import { recordAudit } from "@/lib/audit";
 import { requirePermission } from "@/lib/auth/dal";
 import { prisma } from "@/lib/db/prisma";
 import { loggerFor } from "@/lib/logging/logger";
+import { MAX_PAGE_SIZE } from "@/lib/pagination";
 import { PERMISSIONS } from "@/lib/permissions";
 import {
   resetBusinessSetting,
@@ -85,12 +86,12 @@ export async function resetBusinessSettingAction(
  *     summary and actor. Removing one entry therefore leaves a visible scar
  *     rather than a silent hole — unless that entry is deleted too, which is
  *     the limit of what any in-system control can do.
- *   - Only one row at a time. There is deliberately no bulk delete and no
- *     date-range purge, because the difference between removing a mistake and
- *     clearing a trail is mostly a question of volume.
+ *   - A selection is one page of the table at most — see
+ *     `deleteAuditEntriesAction` below, which is this function over a list and
+ *     subject to the same two rules.
  *
  * For genuine retention trimming, a scheduled job against the database with a
- * documented policy is the right tool, not a button in the admin.
+ * documented policy is still the right tool, not a button in the admin.
  */
 export async function deleteAuditEntryAction(
   _previous: SettingActionState,
@@ -143,4 +144,102 @@ export async function deleteAuditEntryAction(
 
   revalidatePath("/admin/audit-logs");
   return { success: "Entry deleted. The deletion is itself recorded." };
+}
+
+/**
+ * Deletes a selection of audit entries.
+ *
+ * The single-row version above and this one are the same operation; the only
+ * real difference is that a mistake here is larger, so the two safeguards that
+ * matter are kept rather than relaxed:
+ *
+ *   - Same permission. There is no bulk-specific grant to hand out by
+ *     accident; if you can clear one entry you can clear a page of them, and
+ *     if you cannot, neither.
+ *   - One scar per deletion, carrying *every* removed row's summary, actor and
+ *     time — not a count. A replacement entry reading "deleted 40 entries"
+ *     would record that something was removed while erasing what it was.
+ *
+ * `MAX_PAGE_SIZE` is the ceiling because the selection is drawn from one
+ * rendered page and cannot legitimately exceed it. It is a sanity bound on a
+ * hand-posted request, not a retention policy.
+ */
+export async function deleteAuditEntriesAction(
+  _previous: SettingActionState,
+  formData: FormData,
+): Promise<SettingActionState> {
+  const user = await requirePermission(PERMISSIONS.AUDIT_LOG_DELETE);
+
+  const ids = [
+    ...new Set(
+      String(formData.get("ids") ?? "")
+        .split(",")
+        .map((id) => id.trim())
+        .filter(Boolean),
+    ),
+  ];
+
+  if (ids.length === 0) return { error: "Nothing was selected." };
+
+  if (ids.length > MAX_PAGE_SIZE) {
+    return {
+      error: `Select at most ${MAX_PAGE_SIZE} entries at a time.`,
+    };
+  }
+
+  const entries = await prisma.auditLog.findMany({
+    where: { id: { in: ids } },
+    select: {
+      id: true,
+      summary: true,
+      entityType: true,
+      entityId: true,
+      createdAt: true,
+      adminUser: { select: { name: true } },
+    },
+    orderBy: { createdAt: "desc" },
+  });
+
+  if (entries.length === 0) {
+    return { error: "Those entries no longer exist." };
+  }
+
+  try {
+    // Deleted by the ids actually found, so a row removed between the read and
+    // the write is simply absent from the record rather than claimed as gone.
+    const { count } = await prisma.auditLog.deleteMany({
+      where: { id: { in: entries.map((entry) => entry.id) } },
+    });
+
+    await recordAudit({
+      action: AuditAction.DELETE,
+      entityType: "AuditLog",
+      // No single row to point at. The ids are in `changes` below; this names
+      // the actor's selection so the entry is not pointing at nothing.
+      entityId: `bulk:${user.id}`,
+      adminUserId: user.id,
+      summary: `Deleted ${count} audit ${count === 1 ? "entry" : "entries"}`,
+      changes: {
+        deletedEntries: {
+          before: entries.map((entry) => ({
+            id: entry.id,
+            summary: entry.summary,
+            entityType: entry.entityType,
+            entityId: entry.entityId,
+            actor: entry.adminUser?.name ?? "Unknown",
+            at: entry.createdAt.toISOString(),
+          })),
+          after: null,
+        },
+      },
+    });
+
+    revalidatePath("/admin/audit-logs");
+    return {
+      success: `${count} ${count === 1 ? "entry" : "entries"} deleted. The deletion is itself recorded.`,
+    };
+  } catch (error) {
+    log.error({ err: error, count: ids.length }, "Failed to delete audit entries");
+    return { error: "The entries could not be deleted." };
+  }
 }

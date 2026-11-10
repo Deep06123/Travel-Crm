@@ -181,10 +181,12 @@ test("deleting an audit entry records its own deletion", async ({ page }) => {
 
   const firstRow = page.getByRole("row").nth(1);
 
-  // The first line only: the summary cell also renders the changed fields
-  // underneath, and those are not part of the sentence being matched later.
+  // Column 4, not 3: the selection checkbox is the first cell for anyone who
+  // can delete. The first line only, because the summary cell also renders the
+  // changed fields underneath and those are not part of the sentence matched
+  // later.
   const summary =
-    (await firstRow.locator("td").nth(3).innerText()).split("\n")[0]?.trim() ??
+    (await firstRow.locator("td").nth(4).innerText()).split("\n")[0]?.trim() ??
     "";
 
   await firstRow.getByRole("button", { name: "Delete" }).click();
@@ -214,4 +216,66 @@ test("deleting an audit entry records its own deletion", async ({ page }) => {
       page.getByText(summary, { exact: false }).first(),
     ).toBeVisible();
   }
+});
+
+test("a selection of audit entries is deleted in one go", async ({ page }) => {
+  await signIn(page, superAdmin);
+  await page.goto("/admin/audit-logs");
+
+  const rows = page.getByRole("row");
+  const before = await rows.count();
+  test.skip(before < 4, "Needs at least three audit entries to select from");
+
+  // Two rows, ticked individually — the bar only counts what is on screen.
+  await rows.nth(1).getByRole("checkbox").check();
+  await rows.nth(2).getByRole("checkbox").check();
+
+  await expect(page.getByText("2 entries selected on this page")).toBeVisible();
+
+  await page.getByRole("button", { name: "Delete 2 entries" }).click();
+  const dialog = page.getByRole("dialog");
+
+  // The same typed confirmation as the single row: a larger mistake has more
+  // claim to the friction, not less.
+  const submit = dialog.getByRole("button", { name: "Delete them for good" });
+  await expect(submit).toBeDisabled();
+
+  await dialog.getByLabel("Type DELETE below to confirm").fill("DELETE");
+  await submit.click();
+  await expect(dialog).toBeHidden();
+
+  // The bar goes with the selection it was describing.
+  await expect(
+    page.getByText("2 entries selected on this page"),
+  ).toBeHidden();
+
+  await page.reload();
+
+  // One scar for the pair, rather than one per row.
+  await expect(page.getByText("Deleted 2 audit entries").first()).toBeVisible();
+});
+
+test("selecting the header checkbox takes the whole page, and clears", async ({
+  page,
+}) => {
+  await signIn(page, superAdmin);
+  await page.goto("/admin/audit-logs");
+
+  const rowCount = (await page.getByRole("row").count()) - 1;
+  test.skip(rowCount < 1, "No audit entries in this database");
+
+  await page
+    .getByRole("checkbox", { name: "Select every entry on this page" })
+    .check();
+
+  await expect(
+    page.getByText(
+      `${rowCount} ${rowCount === 1 ? "entry" : "entries"} selected on this page`,
+    ),
+  ).toBeVisible();
+
+  // Nothing is removed here: the assertion is about the control, and these are
+  // somebody's development entries.
+  await page.getByRole("button", { name: "Clear selection" }).click();
+  await expect(page.getByText("selected on this page")).toBeHidden();
 });

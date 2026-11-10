@@ -18,8 +18,8 @@ import {
  *     as "type something to confirm" and people typed "confirm" and met a
  *     button that stayed dead without explaining itself.
  *   - A never-used account is deleted for real and leaves the list.
- *   - An account that has done things offers Deactivate instead, because
- *     deleting it would reattribute its work to nobody.
+ *   - Delete is the only removal control: an account that has done things is
+ *     offered the same button, and Deactivate/Reactivate are gone.
  */
 
 let superAdmin: TestUser;
@@ -82,41 +82,41 @@ test("an unused agent account is deleted once its name is typed back", async ({
   await expect(rowFor(page, `created-${doomed.email}`)).toHaveCount(0);
 });
 
-test("an agent who has done work offers Deactivate, not Delete", async ({
+test("Delete is the only removal control, whatever the account has done", async ({
   page,
 }) => {
   await signIn(page, superAdmin);
   await page.goto("/admin/agents");
 
-  // Any account that has signed in or recorded work. Found rather than
-  // created, because creating one means signing in as it — and the fork is
-  // about what the list shows for an account with a history, whoever it is.
-  const inUse = page
+  // Gone entirely — removal is one control now, not a fork.
+  await expect(page.getByRole("button", { name: "Deactivate" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Reactivate" })).toHaveCount(0);
+
+  // Every row that is not your own offers Delete. Found rather than created,
+  // because an account with a history means signing in as it, and the point
+  // is what the list offers for one, whoever it is.
+  const others = page
     .getByRole("row")
-    .filter({ has: page.getByRole("button", { name: "Deactivate" }) });
+    .filter({ has: page.getByRole("link", { name: "Edit" }) })
+    .filter({ hasNotText: "Your account" });
 
-  const count = await inUse.count();
-  test.skip(count === 0, "No agent with recorded activity in this database");
+  const count = await others.count();
+  test.skip(count === 0, "No other agent accounts in this database");
 
-  const row = inUse.first();
+  const row = others.first();
+  await row.getByRole("button", { name: "Delete" }).click();
 
-  // The guard that matters: deleting would reattribute their work to nobody,
-  // so the control is not offered at all.
-  await expect(row.getByRole("button", { name: "Delete" })).toHaveCount(0);
-
-  await row.getByRole("button", { name: "Deactivate" }).click();
   const dialog = page.getByRole("dialog");
+  await expect(dialog).toContainText("removed permanently");
+  await expect(dialog).toContainText("no longer name anyone");
 
-  await expect(dialog).toContainText("signed out immediately");
-  await expect(dialog).toContainText("attributed to it");
-
-  // Reversible, so no typed confirmation stands in the way.
+  // Irreversible, so the typed confirmation still guards it.
   await expect(
-    dialog.getByRole("button", { name: "Deactivate account" }),
-  ).toBeEnabled();
+    dialog.getByRole("button", { name: "Delete for good" }),
+  ).toBeDisabled();
 
   // Cancelled: this is somebody's development account, and the assertion is
-  // about which control is offered, not about switching it off.
+  // about which control is offered, not about removing it.
   await dialog.getByRole("button", { name: "Cancel" }).click();
   await expect(dialog).toBeHidden();
 });

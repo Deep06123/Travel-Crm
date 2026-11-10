@@ -236,12 +236,6 @@ export default async function AgentsPage({
                           <AgentRowActions
                             agentId={agent.id}
                             name={agent.adminUser.name}
-                            status={agent.adminUser.status}
-                            hasActivity={
-                              agent.adminUser.lastLoginAt !== null ||
-                              agent.adminUser._count.createdBookings > 0 ||
-                              agent.adminUser._count.auditLogs > 0
-                            }
                             isSelf={agent.adminUser.id === viewer.id}
                           />
                         </Td>

@@ -42,6 +42,7 @@ export function ConfirmButton({
   icon,
   disabled,
   disabledReason,
+  onSuccess,
 }: {
   action: (
     previous: ConfirmActionState,
@@ -61,6 +62,11 @@ export function ConfirmButton({
   /** Renders the trigger unclickable, with the reason as its tooltip. */
   disabled?: boolean;
   disabledReason?: string;
+  /**
+   * Run once the action reports success. For callers holding state the action
+   * has just invalidated — a selection whose rows are now gone.
+   */
+  onSuccess?: () => void;
 }) {
   const dialogRef = useRef<HTMLDialogElement>(null);
   const [state, formAction] = useActionState<ConfirmActionState, FormData>(
@@ -76,6 +82,17 @@ export function ConfirmButton({
       dialogRef.current?.showModal();
     }
   }, [state.error]);
+
+  // Guarded on the state object rather than its message: every result is a
+  // fresh object, so two deletes that happen to report the same wording still
+  // call back twice, while a plain re-render calls back not at all.
+  const announced = useRef<ConfirmActionState | null>(null);
+  useEffect(() => {
+    if (state.success && announced.current !== state) {
+      announced.current = state;
+      onSuccess?.();
+    }
+  }, [state, onSuccess]);
 
   function close() {
     setTyped("");

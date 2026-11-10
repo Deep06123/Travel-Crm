@@ -496,7 +496,7 @@ export async function getAgentActivity(
 
 // --- Removal ----------------------------------------------------------------
 
-/** Thrown when an account has acted and so must be deactivated, not deleted. */
+/** Thrown when an account cannot be removed — it is gone, or it is your own. */
 export class AgentInUseError extends Error {
   constructor(message: string) {
     super(message);
@@ -505,20 +505,20 @@ export class AgentInUseError extends Error {
 }
 
 /**
- * Deletes an agent account, or refuses because it has done things.
+ * Deletes an agent account outright, whatever it has done.
  *
- * Every foreign key pointing at `AdminUser` is `SetNull`, so the database
- * would happily delete one — and that is exactly the danger. The row would go
- * and every booking they created, refund they approved and authorization they
- * sent would quietly become "Unknown". An account that has acted is part of
- * the audit trail, and the trail is the reason half this application exists.
+ * Every foreign key pointing at `AdminUser` is `SetNull`, so the row goes and
+ * the work survives with its attribution cleared: bookings they created,
+ * refunds they approved and authorizations they sent remain, but no longer
+ * name anybody. `AdminSession` and `Agent` cascade, so the account's sessions
+ * end with it and it cannot sign back in.
  *
- * So the guard here is not a foreign key, it is a judgement: has this account
- * done anything? If yes, deactivating is the operation — it ends their
- * sessions and stops them signing in while every attribution survives.
+ * The audit entry records what was lost — it survives the delete because
+ * `AuditLog.adminUserId` is nulled rather than removed — so the trail still
+ * says an account with this footprint existed and who removed it.
  *
- * Deleting is for the account created with a typo in the email that nobody
- * ever signed in to.
+ * The one refusal left is deleting yourself, which would sign you out
+ * mid-request and leave the session pointing at a row that is no longer there.
  */
 export async function deleteAgent(
   agentId: string,
@@ -532,7 +532,6 @@ export async function deleteAgent(
         select: {
           name: true,
           email: true,
-          lastLoginAt: true,
           _count: {
             select: {
               createdBookings: true,
@@ -551,6 +550,10 @@ export async function deleteAgent(
 
   if (!agent) return;
 
+  if (agent.adminUserId === actorId) {
+    throw new AgentInUseError("You cannot delete your own account.");
+  }
+
   const { adminUser } = agent;
   const counts = adminUser._count;
 
@@ -564,13 +567,8 @@ export async function deleteAgent(
     counts.auditLogs > 0 ? `${counts.auditLogs} audit entries` : null,
   ].filter((part): part is string => part !== null);
 
-  if (footprint.length > 0) {
-    throw new AgentInUseError(
-      `${adminUser.name} has ${footprint.join(", ")} against their name. Deleting the account would leave all of it attributed to nobody. Deactivate them instead — they lose access immediately and the record stays intact.`,
-    );
-  }
-
-  // The Agent row cascades from AdminUser, so one delete removes both.
+  // The Agent row and every session cascade from AdminUser, so one delete
+  // removes the account and ends its access in the same statement.
   await prisma.adminUser.delete({ where: { id: agent.adminUserId } });
 
   await recordAudit({
@@ -578,7 +576,10 @@ export async function deleteAgent(
     entityType: "AdminUser",
     entityId: agent.adminUserId,
     adminUserId: actorId,
-    summary: `Deleted the unused account ${adminUser.name} <${adminUser.email}>`,
+    summary:
+      footprint.length > 0
+        ? `Deleted the account ${adminUser.name} <${adminUser.email}>, unattributing ${footprint.join(", ")}`
+        : `Deleted the unused account ${adminUser.name} <${adminUser.email}>`,
   });
 }
 
