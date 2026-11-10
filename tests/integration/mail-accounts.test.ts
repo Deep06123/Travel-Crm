@@ -10,11 +10,12 @@ import {
 import { hashPassword } from "@/lib/auth/password";
 import { prisma } from "@/lib/db/prisma";
 import { resetEnvCache } from "@/lib/env";
-import { resetMailerCache } from "@/lib/mail";
+import { resetMailerCache, resetSentFolderCache } from "@/lib/mail";
 import { sendAuthorizationEmail } from "@/server/services/booking-authorization-service";
 import { createFlightBooking } from "@/server/services/booking-service";
 import {
   createMailAccount,
+  MailAccountValidationError,
   MAIL_DEFAULTS_SETTING_KEY,
   resetMailAccountCache,
   resolveMailer,
@@ -33,6 +34,7 @@ import {
   takeAdminNoticeSetting,
   type SavedNoticeSetting,
 } from "../helpers/admin-notices";
+import { ImapSink } from "../helpers/imap-sink";
 import { SmtpSink } from "../helpers/smtp-sink";
 
 /**
@@ -50,6 +52,7 @@ import { SmtpSink } from "../helpers/smtp-sink";
 
 const SUFFIX = Date.now();
 const sink = new SmtpSink();
+const imap = new ImapSink();
 
 let actorId: string;
 let customerId: string;
@@ -57,6 +60,7 @@ let savedNotices: SavedNoticeSetting = null;
 let suspendedAccounts: SuspendedAccounts = [];
 let savedDefaults: unknown;
 let port: number;
+let imapPort: number;
 
 const bookingIds: string[] = [];
 const accountIds: string[] = [];
@@ -65,7 +69,15 @@ const accountIds: string[] = [];
 async function makeAccount(
   label: string,
   fromEmail: string,
-  overrides: { fromName?: string; password?: string; username?: string } = {},
+  overrides: {
+    fromName?: string;
+    password?: string;
+    username?: string;
+    saveToSent?: boolean;
+    imapHost?: string;
+    imapPort?: number;
+    imapSecure?: boolean;
+  } = {},
 ): Promise<string> {
   const id = await createMailAccount(
     {
@@ -75,6 +87,11 @@ async function makeAccount(
       port,
       secure: false,
       isActive: true,
+      // No Sent copy: the sink speaks SMTP only, and filing a copy is a
+      // second connection to an IMAP server that is not there.
+      saveToSent: false,
+      imapPort: 993,
+      imapSecure: true,
       ...overrides,
     },
     actorId,
@@ -138,6 +155,7 @@ async function makeBooking(): Promise<string> {
 
 beforeAll(async () => {
   port = await sink.start();
+  imapPort = await imap.start();
 
   // Deliberately pointed somewhere that is *not* the sink: every assertion
   // below about an account sending is then also an assertion that the
@@ -190,7 +208,9 @@ beforeAll(async () => {
 
 afterEach(() => {
   sink.reset();
+  imap.reset();
   resetMailAccountCache();
+  resetSentFolderCache();
 });
 
 afterAll(async () => {
@@ -217,6 +237,7 @@ afterAll(async () => {
   await restoreMailAccounts(suspendedAccounts);
 
   await sink.stop();
+  await imap.stop();
   await prisma.$disconnect();
 });
 
@@ -373,6 +394,9 @@ describe("credentials", () => {
         port,
         secure: false,
         isActive: true,
+        saveToSent: false,
+        imapPort: 993,
+        imapSecure: true,
         username: "kept@example.invalid",
         // Undefined, which is what the form posts when the operator did not
         // retype it. Wiping it here would silently break a working mailbox.
@@ -445,5 +469,152 @@ describe("deleting an account", () => {
     expect(defaults?.value).not.toMatchObject({ authorization: id });
 
     await prisma.notification.deleteMany({ where: { bookingId } });
+  });
+});
+
+/**
+ * The account setting, not the adapter.
+ *
+ * `mail-sent-copy.test.ts` proves the IMAP append itself works. What is left
+ * to prove is that an operator ticking a checkbox in Settings reaches it: the
+ * column, the validation, the adapter built from the row, and the cache that
+ * has to let go of the old adapter when the row changes. Each of those is a
+ * place the feature could be perfectly implemented and still do nothing.
+ */
+describe("saving sent mail to the mailbox's Sent folder", () => {
+  /** An account whose copies go to the IMAP sink rather than being derived. */
+  async function makeCopyingAccount(label: string): Promise<string> {
+    return makeAccount(label, `${label.toLowerCase()}@example.invalid`, {
+      username: imap.user,
+      password: imap.password,
+      saveToSent: true,
+      // 127.0.0.1 derives no IMAP host, which is the point of the override.
+      imapHost: "127.0.0.1",
+      imapPort,
+      imapSecure: false,
+    });
+  }
+
+  it("files a copy when an account has the setting on", async () => {
+    const id = await makeCopyingAccount("Copies");
+
+    const resolved = await resolveMailer("authorization", id);
+    await resolved!.adapter.send({
+      to: "customer@example.invalid",
+      subject: "Authorize your booking",
+      text: "Please authorize.",
+    });
+
+    expect(sink.messages).toHaveLength(1);
+
+    const copy = imap.only();
+    expect(copy.mailbox).toBe("INBOX.Sent");
+    expect(copy.message).toContain("Authorize your booking");
+
+    // The same message, not a second rendering of it.
+    const messageId = /^message-id:\s*(<[^>]+>)/im.exec(sink.only().data)?.[1];
+    expect(copy.message).toContain(messageId!);
+  });
+
+  it("opens no IMAP connection for an account with the setting off", async () => {
+    const id = await makeAccount("Quiet", "quiet@example.invalid", {
+      username: imap.user,
+      password: imap.password,
+    });
+
+    const resolved = await resolveMailer("authorization", id);
+    await resolved!.adapter.send({
+      to: "customer@example.invalid",
+      subject: "No copy",
+      text: "No copy.",
+    });
+
+    expect(sink.messages).toHaveLength(1);
+    expect(imap.connections).toBe(0);
+  });
+
+  it("stops filing copies as soon as the setting is turned off", async () => {
+    const id = await makeCopyingAccount("Switched");
+
+    // Sent once first, so an adapter carrying the old configuration is really
+    // in the cache. Without this the test passes for the wrong reason: there
+    // would be nothing cached to invalidate.
+    const before = await resolveMailer("authorization", id);
+    await before!.adapter.send({
+      to: "customer@example.invalid",
+      subject: "Before the edit",
+      text: "Before the edit.",
+    });
+    expect(imap.appends).toHaveLength(1);
+
+    await updateMailAccount(
+      id,
+      {
+        label: `Switched ${SUFFIX}`,
+        fromEmail: "switched@example.invalid",
+        host: "127.0.0.1",
+        port,
+        secure: false,
+        isActive: true,
+        username: imap.user,
+        saveToSent: false,
+        imapPort: 993,
+        imapSecure: true,
+      },
+      actorId,
+    );
+
+    const resolved = await resolveMailer("authorization", id);
+    await resolved!.adapter.send({
+      to: "customer@example.invalid",
+      subject: "After the edit",
+      text: "After the edit.",
+    });
+
+    // The cached adapter held the old configuration until the row's
+    // `updatedAt` changed the key — this is that, from the outside: a second
+    // send, and no second copy.
+    expect(sink.messages).toHaveLength(2);
+    expect(imap.appends).toHaveLength(1);
+  });
+
+  it("refuses the setting when no IMAP host can be derived or given", async () => {
+    await expect(
+      createMailAccount(
+        {
+          label: `Underived ${SUFFIX}`,
+          fromEmail: "underived@example.invalid",
+          host: "127.0.0.1",
+          port,
+          secure: false,
+          isActive: true,
+          username: imap.user,
+          password: imap.password,
+          saveToSent: true,
+          imapPort: 993,
+          imapSecure: true,
+        },
+        actorId,
+      ),
+    ).rejects.toThrow(MailAccountValidationError);
+  });
+
+  it("refuses the setting on an account with no credentials to sign in with", async () => {
+    await expect(
+      createMailAccount(
+        {
+          label: `Anonymous ${SUFFIX}`,
+          fromEmail: "anonymous@example.invalid",
+          host: "smtp.example.invalid",
+          port,
+          secure: false,
+          isActive: true,
+          saveToSent: true,
+          imapPort: 993,
+          imapSecure: true,
+        },
+        actorId,
+      ),
+    ).rejects.toThrow(MailAccountValidationError);
   });
 });

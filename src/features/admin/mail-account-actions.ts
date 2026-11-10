@@ -50,6 +50,14 @@ const accountSchema = z.object({
   password: z.string().max(400).optional(),
   /** Ticked to remove a stored credential, for a relay that needs none. */
   clearPassword: z.literal("on").optional(),
+
+  // Sent-folder copy. The port has a default because the field is only shown
+  // once the box is ticked, so an untouched form posts nothing for it.
+  saveToSent: z.literal("on").optional(),
+  imapHost: z.string().trim().max(200).optional(),
+  imapPort: z.coerce.number().int().min(1).max(65_535).default(993),
+  imapSecure: z.literal("on").optional(),
+  sentFolder: z.string().trim().max(200).optional(),
 });
 
 export async function saveMailAccountAction(
@@ -64,13 +72,23 @@ export async function saveMailAccountAction(
     return { error: "Check the account details and try again." };
   }
 
-  const { id, password, secure, isActive, clearPassword, ...rest } =
-    parsed.data;
+  const {
+    id,
+    password,
+    secure,
+    isActive,
+    clearPassword,
+    saveToSent,
+    imapSecure,
+    ...rest
+  } = parsed.data;
 
   const input = {
     ...rest,
     secure: secure === "on",
     isActive: isActive === "on",
+    saveToSent: saveToSent === "on",
+    imapSecure: imapSecure === "on",
     // An edit posts an empty password box when the operator did not retype
     // the credential, and that must not wipe a working one. `undefined` means
     // "leave it alone"; the clear checkbox is how you ask for removal.

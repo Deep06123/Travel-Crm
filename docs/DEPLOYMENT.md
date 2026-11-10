@@ -47,6 +47,10 @@ reaches the browser bundle.
 | `SMTP_USER` / `SMTP_PASSWORD` | no | Omit both for a relay that authorises by network |
 | `MAIL_FROM` | if smtp | Envelope sender, e.g. `Travel CRM <bookings@example.com>` |
 | `MAIL_REPLY_TO` | no | Where customer replies land, if not `MAIL_FROM` |
+| `MAIL_SAVE_TO_SENT` | no | `"true"` files a copy of each sent message in the mailbox's Sent folder over IMAP. Off by default |
+| `IMAP_HOST` | no | Derived from `SMTP_HOST` when unset: `smtp.example.com` → `imap.example.com`, and a combined `mail.example.com` serves both |
+| `IMAP_PORT` / `IMAP_SECURE` | no | Default 993 and `"true"` (implicit TLS) |
+| `MAIL_SENT_FOLDER` | no | Default is whichever folder the server flags `\Sent` |
 
 The `SMTP_*` block above is the fallback, not the only answer. Once an
 administrator adds a sending account under **Settings → Sending accounts**,
@@ -97,6 +101,15 @@ decision, and it should not take a server login and a redeploy.
   anything. Use it after adding an account; the alternative way to discover a
   wrong password is a customer not receiving their authorization.
 - Passwords are stored as AES-256-GCM ciphertext and are never shown again.
+- **Save a copy in the mailbox's Sent folder** is off until ticked, per account.
+  Saving to Sent is not part of SMTP — the sending server relays the message
+  and keeps nothing, and what fills the folder on a normal mail client is a
+  separate IMAP `APPEND` afterwards. Gmail files a copy for you; Hostinger,
+  Titan, SES and the rest do not, so without this, mail is delivered correctly
+  and is nowhere to be seen in the mailbox it came from. The IMAP host is
+  derived from the SMTP host unless set, the folder is whichever one the server
+  flags `\Sent`, and the same username and password are reused. A mailbox that
+  refuses the copy is logged and never fails the send.
 - Which account sent a given message is recorded on the notification row, so
   the delivery history survives the account being deleted.
 

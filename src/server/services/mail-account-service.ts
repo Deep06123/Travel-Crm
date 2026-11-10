@@ -5,7 +5,14 @@ import { recordAudit } from "@/lib/audit";
 import { openSecret, sealSecret, SecretUnsealError } from "@/lib/crypto/secret-box";
 import { prisma } from "@/lib/db/prisma";
 import { loggerFor } from "@/lib/logging/logger";
-import { getMailer, SmtpMailAdapter, type MailAdapter } from "@/lib/mail";
+import {
+  deriveImapHost,
+  getMailer,
+  resetSentFolderCache,
+  SmtpMailAdapter,
+  type MailAdapter,
+  type SentCopyOptions,
+} from "@/lib/mail";
 
 const log = loggerFor("mail-account-service");
 
@@ -59,6 +66,17 @@ export interface MailAccountView {
   username: string | null;
   /** Whether a credential is stored, which is all the page may be told. */
   hasPassword: boolean;
+  saveToSent: boolean;
+  imapHost: string | null;
+  imapPort: number;
+  imapSecure: boolean;
+  sentFolder: string | null;
+  /**
+   * The IMAP host a send would actually use — the configured one, or what is
+   * derived from the SMTP host. Null when neither yields one, which the
+   * settings page shows as the reason no copy is being filed.
+   */
+  effectiveImapHost: string | null;
   isActive: boolean;
   verifiedAt: Date | null;
   lastError: string | null;
@@ -88,6 +106,13 @@ export interface MailAccountInput {
    * by network.
    */
   password?: string | undefined;
+  saveToSent: boolean;
+  /** Blank means "derive it from the SMTP host". */
+  imapHost?: string | undefined;
+  imapPort: number;
+  imapSecure: boolean;
+  /** Blank means "ask the server which folder it flags `\Sent`". */
+  sentFolder?: string | undefined;
   isActive: boolean;
 }
 
@@ -127,9 +152,42 @@ function validate(input: MailAccountInput) {
     );
   }
 
+  const imapHost = input.imapHost?.trim() || null;
+
+  if (
+    !Number.isInteger(input.imapPort) ||
+    input.imapPort < 1 ||
+    input.imapPort > 65_535
+  ) {
+    throw new MailAccountValidationError(
+      "The IMAP port must be between 1 and 65535.",
+    );
+  }
+
+  // Caught here rather than at send time, where the only symptom is a warning
+  // in the log and a Sent folder that stays empty for a reason nobody can see.
+  if (input.saveToSent) {
+    if (!imapHost && !deriveImapHost(host)) {
+      throw new MailAccountValidationError(
+        `An IMAP host is required to save to Sent: one cannot be derived from "${host}".`,
+      );
+    }
+
+    if (!input.username?.trim()) {
+      throw new MailAccountValidationError(
+        "Saving to Sent signs in to the mailbox over IMAP, which needs a username and password.",
+      );
+    }
+  }
+
   return {
     label,
     host,
+    saveToSent: input.saveToSent,
+    imapHost,
+    imapPort: input.imapPort,
+    imapSecure: input.imapSecure,
+    sentFolder: input.sentFolder?.trim() || null,
     fromEmail: requireEmail(input.fromEmail, "The from address"),
     fromName: input.fromName?.trim() || null,
     replyTo: input.replyTo?.trim()
@@ -153,12 +211,21 @@ function toView(row: {
   secure: boolean;
   username: string | null;
   passwordCipher: string | null;
+  saveToSent: boolean;
+  imapHost: string | null;
+  imapPort: number;
+  imapSecure: boolean;
+  sentFolder: string | null;
   isActive: boolean;
   verifiedAt: Date | null;
   lastError: string | null;
 }): MailAccountView {
   const { passwordCipher, ...rest } = row;
-  return { ...rest, hasPassword: passwordCipher !== null };
+  return {
+    ...rest,
+    hasPassword: passwordCipher !== null,
+    effectiveImapHost: row.imapHost ?? deriveImapHost(row.host) ?? null,
+  };
 }
 
 export async function listMailAccounts(): Promise<MailAccountView[]> {
@@ -374,6 +441,7 @@ export async function updateMailAccount(
         after: `${data.host}:${data.port}`,
       },
       isActive: { before: existing.isActive, after: data.isActive },
+      saveToSent: { before: existing.saveToSent, after: data.saveToSent },
     },
   });
 
@@ -489,6 +557,11 @@ function forgetAdapter(id: string): void {
   for (const key of adapters.keys()) {
     if (key.startsWith(`${id}:`)) adapters.delete(key);
   }
+
+  // The discovered Sent folder is keyed by host and user, not by account, so
+  // it cannot be cleared selectively. Dropping all of it costs one `LIST` on
+  // the next send and means a corrected mailbox name takes effect at once.
+  resetSentFolderCache();
 }
 
 /** Test seam, and the counterpart to `resetMailerCache`. */
@@ -507,8 +580,40 @@ type MailAccountRow = {
   secure: boolean;
   username: string | null;
   passwordCipher: string | null;
+  saveToSent: boolean;
+  imapHost: string | null;
+  imapPort: number;
+  imapSecure: boolean;
+  sentFolder: string | null;
   updatedAt: Date;
 };
+
+/**
+ * The Sent-folder configuration for an account, or undefined for no copy.
+ *
+ * Every condition here is also enforced by `validate`, so reaching one of the
+ * `undefined` returns means the row predates the setting or was changed
+ * underneath us. Silently not filing a copy is the right failure: the message
+ * itself must still go.
+ */
+function sentCopyFor(
+  account: MailAccountRow,
+  password: string | undefined,
+): SentCopyOptions | undefined {
+  if (!account.saveToSent) return undefined;
+
+  const host = account.imapHost ?? deriveImapHost(account.host);
+  if (!host || !account.username || !password) return undefined;
+
+  return {
+    host,
+    port: account.imapPort,
+    secure: account.imapSecure,
+    user: account.username,
+    password,
+    ...(account.sentFolder ? { mailbox: account.sentFolder } : {}),
+  };
+}
 
 function buildAdapter(account: MailAccountRow): SmtpMailAdapter {
   const key = `${account.id}:${account.updatedAt.getTime()}`;
@@ -519,7 +624,10 @@ function buildAdapter(account: MailAccountRow): SmtpMailAdapter {
     ? openSecret(account.passwordCipher, SECRET_PURPOSE)
     : undefined;
 
+  const sentCopy = sentCopyFor(account, password);
+
   const adapter = new SmtpMailAdapter({
+    ...(sentCopy ? { sentCopy } : {}),
     host: account.host,
     port: account.port,
     secure: account.secure,

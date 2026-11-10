@@ -56,6 +56,7 @@
     "class-variance-authority": "0.7.1",
     "clsx": "2.1.1",
     "date-fns": "4.4.0",
+    "imapflow": "^2.11.0",
     "lucide-react": "1.59.0",
     "mariadb": "^3.5.4",
     "next": "16.4.2",

@@ -47,6 +47,13 @@ export interface MailAccountRow {
   secure: boolean;
   username: string | null;
   hasPassword: boolean;
+  saveToSent: boolean;
+  imapHost: string | null;
+  imapPort: number;
+  imapSecure: boolean;
+  sentFolder: string | null;
+  /** What the IMAP host resolves to, configured or derived. */
+  effectiveImapHost: string | null;
   isActive: boolean;
   /** Pre-formatted: this is a Client Component and `@/lib/format` is server-only. */
   verifiedAtLabel: string | null;
@@ -297,6 +304,8 @@ function AccountForm({
         ) : null}
       </div>
 
+      <SentCopyFields account={account} />
+
       <div className="flex gap-2">
         <PendingButton
           label={account ? "Save changes" : "Add account"}
@@ -311,6 +320,111 @@ function AccountForm({
         ) : null}
       </div>
     </form>
+  );
+}
+
+/**
+ * Whether to file a copy of each sent message, and where.
+ *
+ * The explanation is worth the space because the behaviour surprises people:
+ * mail sent by this application is delivered correctly and then nowhere to be
+ * found in the mailbox it came from. Saving to Sent is not part of SMTP — a
+ * mail client does it separately, over IMAP — so until this is ticked there is
+ * nothing to find. Gmail files a copy for you, which is why the gap only shows
+ * up after moving to a provider that does not.
+ *
+ * The host and folder are collapsed until the box is ticked. Both can be left
+ * empty: the host is derived from the SMTP host, and the folder is whichever
+ * one the server itself flags as Sent.
+ */
+function SentCopyFields({ account }: { account?: MailAccountRow }) {
+  const [enabled, setEnabled] = useState(account?.saveToSent ?? false);
+  const id = account?.id ?? "new";
+
+  return (
+    <div className="rounded-md border border-line bg-surface-sunken/50 p-3">
+      <label className="flex items-start gap-2 text-sm">
+        <input
+          type="checkbox"
+          name="saveToSent"
+          className="mt-1"
+          checked={enabled}
+          onChange={(event) => setEnabled(event.target.checked)}
+        />
+        <span>
+          <span className="font-medium text-ink">
+            Save a copy in the mailbox&rsquo;s Sent folder
+          </span>
+          <span className="mt-0.5 block text-xs text-ink-muted">
+            Connects over IMAP after each send, the way a mail client does.
+            Without this, sent mail is delivered but never appears in the
+            mailbox. Uses the username and password above.
+          </span>
+        </span>
+      </label>
+
+      {enabled ? (
+        <div className="mt-3 grid gap-3 sm:grid-cols-2">
+          <Field
+            id={`imap-host-${id}`}
+            label="IMAP host"
+            hint={
+              account?.effectiveImapHost
+                ? `Leave empty for ${account.effectiveImapHost}`
+                : "Leave empty to derive it from the SMTP host"
+            }
+          >
+            {(props) => (
+              <Input
+                {...props}
+                name="imapHost"
+                autoComplete="off"
+                placeholder={account?.effectiveImapHost ?? "imap.example.com"}
+                defaultValue={account?.imapHost ?? ""}
+              />
+            )}
+          </Field>
+
+          <Field id={`imap-port-${id}`} label="IMAP port">
+            {(props) => (
+              <Input
+                {...props}
+                name="imapPort"
+                type="number"
+                min={1}
+                max={65535}
+                defaultValue={account?.imapPort ?? 993}
+              />
+            )}
+          </Field>
+
+          <Field
+            id={`sent-folder-${id}`}
+            label="Sent folder"
+            hint="Leave empty to use whichever folder the server marks as Sent"
+          >
+            {(props) => (
+              <Input
+                {...props}
+                name="sentFolder"
+                autoComplete="off"
+                placeholder="Sent"
+                defaultValue={account?.sentFolder ?? ""}
+              />
+            )}
+          </Field>
+
+          <label className="flex items-center gap-2 self-end pb-2 text-sm">
+            <input
+              type="checkbox"
+              name="imapSecure"
+              defaultChecked={account?.imapSecure ?? true}
+            />
+            Implicit TLS (port 993)
+          </label>
+        </div>
+      ) : null}
+    </div>
   );
 }
 
@@ -378,6 +492,11 @@ function AccountCard({ account }: { account: MailAccountRow }) {
             {account.host}:{account.port}
             {account.secure ? " · TLS" : " · STARTTLS"}
             {account.username ? ` · ${account.username}` : " · no credentials"}
+            {/* Worth a word in the summary: whether sent mail turns up in the
+                mailbox is the first thing anyone asks about an account. */}
+            {account.saveToSent && account.effectiveImapHost
+              ? ` · copies to Sent via ${account.effectiveImapHost}`
+              : " · no Sent copy"}
           </p>
         </div>
 

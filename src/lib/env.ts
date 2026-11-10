@@ -146,6 +146,39 @@ const serverEnvSchema = z.object({
   SMTP_USER: z.string().optional(),
   SMTP_PASSWORD: z.string().optional(),
 
+  /**
+   * Whether to file a copy of each sent message in the mailbox's Sent folder.
+   *
+   * Off by default, because it is a second connection to a second service and
+   * an unconfigured deployment should not start making it. Saving to Sent is
+   * not part of SMTP: the sending server relays the message and keeps nothing,
+   * and what fills the folder on a normal mail client is a separate IMAP
+   * APPEND. Gmail is the exception that files a copy for you; Hostinger,
+   * Titan, SES and the rest do not.
+   */
+  MAIL_SAVE_TO_SENT: z
+    .enum(["true", "false"])
+    .default("false")
+    .transform((value) => value === "true"),
+  /**
+   * Left unset, this is derived from `SMTP_HOST` — `smtp.example.com` pairs
+   * with `imap.example.com`, and a combined `mail.example.com` serves both.
+   * Set it where the provider does something else.
+   */
+  IMAP_HOST: z.string().optional(),
+  IMAP_PORT: z.coerce.number().int().positive().max(65_535).default(993),
+  /** True for implicit TLS on 993, which is what every IMAP host still uses. */
+  IMAP_SECURE: z
+    .enum(["true", "false"])
+    .default("true")
+    .transform((value) => value === "true"),
+  /**
+   * Left unset, the folder the server flags `\Sent` is used. Provider names
+   * differ — `Sent`, `INBOX.Sent`, `Sent Items` — and a wrong guess creates a
+   * stray folder rather than filling the real one.
+   */
+  MAIL_SENT_FOLDER: z.string().optional(),
+
   /** Envelope sender, e.g. `Travel CRM <bookings@example.com>`. */
   MAIL_FROM: z.string().optional(),
   /** Where customer replies should land, if different from MAIL_FROM. */

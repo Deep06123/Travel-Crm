@@ -1,7 +1,10 @@
 import "server-only";
 
 import nodemailer, { type Transporter } from "nodemailer";
+import MailComposer from "nodemailer/lib/mail-composer";
+import type { Options as MailOptions } from "nodemailer/lib/mailer";
 
+import { trySaveToSentFolder, type SentCopyOptions } from "./sent-copy";
 import type { MailAdapter, MailMessage, MailResult } from "./types";
 
 export interface SmtpAdapterOptions {
@@ -12,6 +15,12 @@ export interface SmtpAdapterOptions {
   password?: string | undefined;
   from: string;
   replyTo?: string | undefined;
+  /**
+   * Where to file a copy of each sent message. Absent means no copy — the
+   * behaviour this adapter had before, and still the right one for a relay
+   * with no mailbox behind it.
+   */
+  sentCopy?: SentCopyOptions | undefined;
 }
 
 /**
@@ -54,7 +63,7 @@ export class SmtpMailAdapter implements MailAdapter {
   }
 
   async send(message: MailMessage): Promise<MailResult> {
-    const info = await this.getTransporter().sendMail({
+    const options: MailOptions = {
       from: this.options.from,
       to: message.to,
       subject: message.subject,
@@ -75,9 +84,31 @@ export class SmtpMailAdapter implements MailAdapter {
             })),
           }
         : {}),
+    };
+
+    // Composed here rather than inside `sendMail`, so the exact bytes that go
+    // to the server are also the bytes filed in Sent. Composing twice would
+    // mint a second Message-ID, and the copy would no longer be the message
+    // the customer's reply threads against.
+    const raw = await new MailComposer(options).compile().build();
+
+    const info = await this.getTransporter().sendMail({
+      raw,
+      // Required with `raw`: the transport reads recipients from the envelope
+      // rather than parsing headers back out of the message.
+      envelope: { from: this.options.from, to: message.to },
     });
 
-    return { providerReference: info.messageId };
+    if (this.options.sentCopy) {
+      await trySaveToSentFolder(this.options.sentCopy, raw);
+    }
+
+    // The message's own id first, not nodemailer's. Handed a `raw` buffer it
+    // does not read the id back out — it mints a fresh one for `info` that
+    // appears nowhere in what was sent, so trusting it would fill
+    // `providerReference` with an id that matches nothing in the provider's
+    // logs and nothing in the mailbox.
+    return { providerReference: messageIdOf(raw) ?? info.messageId };
   }
 
   /**
@@ -89,4 +120,20 @@ export class SmtpMailAdapter implements MailAdapter {
   async verify(): Promise<void> {
     await this.getTransporter().verify();
   }
+}
+
+/**
+ * Reads the Message-ID back out of a composed message.
+ *
+ * nodemailer derives `info.messageId` from the structured options it was
+ * given; handed a `raw` buffer it has nothing to read, and the id is what
+ * `providerReference` is for — tracing one message in a provider's console.
+ */
+function messageIdOf(raw: Buffer): string | undefined {
+  // Headers only: the body may well contain the same characters, and a MIME
+  // message always separates the two with a blank line.
+  const headerEnd = raw.indexOf("\r\n\r\n");
+  const headers = raw.subarray(0, headerEnd === -1 ? raw.length : headerEnd);
+
+  return /^message-id:\s*(<[^>]+>)/im.exec(headers.toString("utf8"))?.[1];
 }

@@ -1583,6 +1583,24 @@ model MailAccount {
   /// authorises by network rather than by credentials.
   passwordCipher String? @db.Text
 
+  /// Whether to file a copy of each sent message in the mailbox's Sent folder.
+  ///
+  /// Saving to Sent is not part of SMTP — the client does it, over IMAP, as a
+  /// second step. Without this, mail this application sends is delivered but
+  /// invisible in the mailbox it came from. Off for a relay with no mailbox
+  /// behind it; see `src/lib/mail/sent-copy.ts`.
+  saveToSent Boolean @default(false)
+  /// Null means "derive it from the SMTP host", which covers the usual
+  /// smtp./imap. pairing. Set explicitly where the two differ.
+  imapHost   String?
+  imapPort   Int     @default(993)
+  /// True for implicit TLS on 993, which is what every IMAP host still uses.
+  imapSecure Boolean @default(true)
+  /// Null means "ask the server", which answers with the folder it flags
+  /// `\Sent`. Names differ by provider — Sent, INBOX.Sent, Sent Items — and
+  /// guessing wrong creates a stray folder instead of filling the real one.
+  sentFolder String?
+
   /// An account kept for its history but no longer offered when sending.
   isActive Boolean @default(true)
 
