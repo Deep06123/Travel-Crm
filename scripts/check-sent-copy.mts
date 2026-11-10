@@ -24,6 +24,14 @@ import { deriveImapHost } from "../src/lib/mail/sent-copy.js";
  *   npm run mail:check-sent              # report only
  *   npm run mail:check-sent -- --append  # also file a test message
  *
+ * On a deployed server the secrets are not in the checkout — `hostinger-deploy`
+ * keeps them in `shared/.env` and deletes any `.env` from the release — so
+ * load them first:
+ *
+ *   cd /srv/travel-crm/repo
+ *   set -a; . /srv/travel-crm/shared/.env; set +a
+ *   npm run mail:check-sent
+ *
  * `--append` puts one real message in the Sent folder, which you can then
  * delete from webmail. It is the only part of this that writes anything.
  *
