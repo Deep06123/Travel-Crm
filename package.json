@@ -24,6 +24,7 @@
     "dev:db": "bash scripts/start-local-mysql.sh start",
     "dev:db:stop": "bash scripts/start-local-mysql.sh stop",
     "smoke": "tsx scripts/smoke-test.mts",
+    "mail:check-sent": "tsx --conditions=react-server --env-file=.env scripts/check-sent-copy.mts",
     "dev:db:reset": "bash scripts/start-local-mysql.sh reset",
     "db:sample": "tsx scripts/seed-sample-data.mts",
     "db:sample:clear": "tsx scripts/clear-sample-data.mts"
