@@ -59,6 +59,7 @@ per kind of message. See [Sending accounts](#sending-accounts) below.
 
 | `GEOIP_PROVIDER` | no | `none` (default) or `ipapi`. Resolves an approximate city and country for the IP a customer signed a booking from. The IP itself is recorded either way; without a provider those columns stay null. A failed lookup never fails a signature |
 | `GEOIP_API_KEY` | no | Raises ipapi.co's keyless rate limit |
+| `TRUSTED_PROXY_HOPS` | no | How many reverse proxies sit in front of the app. `1` (default) is correct behind a single nginx or Vercel's edge. `X-Forwarded-For` is read from the right-hand end — a client can write the left-hand entries, and an address a signer chose for themselves is not evidence. Set `0` only when the app is exposed directly, which records no IP at all |
 
 First-run only, used by the seed and then removable:
 

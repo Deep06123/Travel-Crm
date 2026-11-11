@@ -198,6 +198,25 @@ const serverEnvSchema = z.object({
    */
   GEOIP_PROVIDER: z.enum(["none", "ipapi"]).default("none"),
   GEOIP_API_KEY: z.string().optional(),
+
+  /**
+   * How many reverse proxies sit in front of this application.
+   *
+   * `X-Forwarded-For` is a list a client can start writing: a browser may send
+   * `X-Forwarded-For: 1.2.3.4` and every proxy in the chain appends to it,
+   * right to left. Taking the leftmost entry therefore means taking whatever
+   * the client typed, which is worthless as evidence — an address recorded
+   * against a signature has to be one the server observed, not one the signer
+   * chose.
+   *
+   * This says how many entries at the *right-hand* end were written by
+   * infrastructure under this deployment's control. `1` is correct behind a
+   * single reverse proxy such as nginx or Vercel's edge, and is the default
+   * because every production deployment of this application runs behind one.
+   * `0` means the application is exposed directly, in which case the header is
+   * not trusted at all.
+   */
+  TRUSTED_PROXY_HOPS: z.coerce.number().int().min(0).max(10).default(1),
 })
   // Checked here rather than at send time: a misconfigured mail setup should
   // fail at startup with a readable message, not hours later when a customer

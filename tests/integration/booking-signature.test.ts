@@ -1,3 +1,7 @@
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 
 import {
@@ -21,6 +25,12 @@ import {
   recordSignature,
 } from "@/server/services/booking-signature-service";
 import { createFlightBooking } from "@/server/services/booking-service";
+import {
+  deliverSignatureConfirmation,
+  flushPendingSignatureConfirmations,
+} from "@/server/services/signature-confirmation-service";
+import { resetMailAccountCache } from "@/server/services/mail-account-service";
+import { resetStorageCache } from "@/lib/storage";
 
 import {
   restoreMailAccounts,
@@ -34,6 +44,7 @@ import {
   type SavedNoticeSetting,
 } from "../helpers/admin-notices";
 import { SmtpSink, decodeQuotedPrintable } from "../helpers/smtp-sink";
+import { pdfText } from "../helpers/pdf-text";
 
 /**
  * Customer authorization: the emailed link, the signature it returns, and the
@@ -52,6 +63,7 @@ let actorId: string;
 let customerId: string;
 let savedNotices: SavedNoticeSetting = null;
 let suspendedAccounts: SuspendedAccounts = [];
+let storageRoot = "";
 const bookingIds: string[] = [];
 
 const CLAIMS = {
@@ -136,8 +148,20 @@ beforeAll(async () => {
   delete process.env.SMTP_USER;
   delete process.env.SMTP_PASSWORD;
 
+  // The signed confirmation PDF is written through the storage adapter, so
+  // this file needs somewhere real to put it. A temporary directory rather
+  // than whatever the developer's `.env` points at: these are throwaway bytes
+  // and must not land in a blob store or beside genuine documents.
+  storageRoot = await mkdtemp(join(tmpdir(), "signature-pdf-"));
+  process.env.STORAGE_DRIVER = "local";
+  process.env.STORAGE_LOCAL_ROOT = storageRoot;
+
+  // One trusted proxy, matching the production shape the route is written for.
+  process.env.TRUSTED_PROXY_HOPS = "1";
+
   resetEnvCache();
   resetMailerCache();
+  resetStorageCache();
 
   // Off for the file, so every assertion about what crossed the socket is
   // about the customer's message. The one test that is *about* the internal
@@ -177,6 +201,7 @@ afterEach(async () => {
   // A notice dispatched by the test that just ended is still in flight, and
   // would otherwise land in the next test's sink.
   await flushPendingAdminNotices();
+  await flushPendingSignatureConfirmations();
   sink.reset();
 });
 
@@ -193,6 +218,7 @@ afterAll(async () => {
   await prisma.customer.deleteMany({ where: { id: customerId } });
   await prisma.adminUser.deleteMany({ where: { id: actorId } });
   await sink.stop();
+  if (storageRoot) await rm(storageRoot, { recursive: true, force: true });
   await prisma.$disconnect();
 });
 
@@ -602,5 +628,534 @@ describe("internal notifications", () => {
     // Deliberately not even a SUPPRESSED row: a deployment that wants no
     // internal copies must not accumulate one per customer email saying so.
     expect(rows).toBe(0);
+  });
+});
+
+/**
+ * The signed authorization going back to the mailbox that asked for it.
+ *
+ * Asserted against the bytes on the socket and the rows in the database, like
+ * everything else in this file. The destination is the property under test:
+ * it must come from what was captured when the invitation went out, never
+ * from whichever account happens to be the default when the customer signs.
+ */
+describe("the signature confirmation", () => {
+  /** The attachment, decoded back into the PDF it was before transfer. */
+  function attachedPdf(raw: string): Buffer {
+    const start = raw.indexOf("application/pdf");
+    expect(start).toBeGreaterThan(-1);
+
+    // Headers, then a blank line, then base64 until the next MIME boundary.
+    const bodyStart = raw.indexOf("\r\n\r\n", start) + 4;
+    const end = raw.indexOf("\r\n--", bodyStart);
+
+    return Buffer.from(
+      raw.slice(bodyStart, end === -1 ? undefined : end).replace(/\s+/g, ""),
+      "base64",
+    );
+  }
+
+  /** Signs a fresh booking and waits for the dispatched confirmation. */
+  async function signBooking(): Promise<{ bookingId: string; signatureId: string }> {
+    const bookingId = await makeBooking();
+
+    await sendAuthorizationEmail({
+      bookingId,
+      actorId,
+      origin: "https://crm.example.invalid",
+    });
+
+    const row = await prisma.bookingSignature.findFirstOrThrow({
+      where: { bookingId },
+      select: { id: true },
+    });
+
+    // The token never leaves `createSignatureRequest`, and the one minted by
+    // the send above is in the email. Issuing a second here would revoke it,
+    // so the row is signed through the service with a token of its own.
+    const { token, id: signatureId } = await createSignatureRequest(
+      bookingId,
+      `sign-customer-${SUFFIX}@example.invalid`,
+      actorId,
+      { email: "bookings@example.invalid", accountId: null },
+    );
+
+    expect(signatureId).not.toBe(row.id);
+
+    await findSignatureByToken(token);
+    sink.reset();
+
+    const outcome = await recordSignature({
+      token,
+      claims: CLAIMS,
+      ipAddress: "203.0.113.5",
+      userAgent: "Mozilla/5.0 (Windows NT 10.0)",
+    });
+
+    expect(outcome).toMatchObject({ ok: true });
+
+    await flushPendingSignatureConfirmations();
+
+    return { bookingId, signatureId };
+  }
+
+  it("captures the sending address when the invitation goes out", async () => {
+    const bookingId = await makeBooking();
+
+    await sendAuthorizationEmail({
+      bookingId,
+      actorId,
+      origin: "https://crm.example.invalid",
+    });
+
+    const row = await prisma.bookingSignature.findFirstOrThrow({
+      where: { bookingId },
+      select: { senderEmail: true, senderMailAccountId: true },
+    });
+
+    // Taken from MAIL_FROM, with the display name stripped: the address is
+    // what a later message is sent back to, and the name beside it is a label.
+    expect(row.senderEmail).toBe("bookings@example.invalid");
+    expect(row.senderMailAccountId).toBeNull();
+  });
+
+  it("emails the captured sender the consent wording, the evidence and the PDF", async () => {
+    const { signatureId } = await signBooking();
+
+    const message = sink.messages.find((entry) =>
+      entry.recipients.includes("bookings@example.invalid"),
+    );
+
+    expect(message).toBeDefined();
+
+    const body = decodeQuotedPrintable(message!.data);
+
+    // Verbatim, because this is the sentence a dispute turns on.
+    expect(body).toContain(CLAIMS.consentText);
+
+    // Everything the signing page said would be recorded.
+    expect(body).toContain("203.0.113.5");
+    expect(body).toContain("Windows PC");
+    expect(body).toContain("Win32");
+    expect(body).toContain("Google Chrome");
+    expect(body).toContain("1920 x 1080");
+    expect(body).toContain("Europe/London");
+    expect(body.toLowerCase()).toContain("customer security information");
+
+    // And the document itself, not merely a claim that one exists.
+    const pdf = attachedPdf(message!.data);
+    expect(pdf.subarray(0, 5).toString("latin1")).toBe("%PDF-");
+
+    const drawn = pdfText(pdf);
+    expect(drawn).toContain("203.0.113.5");
+    expect(drawn).toContain("Google Chrome");
+    expect(drawn.replace(/\s+/g, " ")).toContain(CLAIMS.consentText);
+
+    const stored = await prisma.bookingSignature.findUniqueOrThrow({
+      where: { id: signatureId },
+      select: { confirmationPdfKey: true },
+    });
+
+    expect(stored.confirmationPdfKey).toBeTruthy();
+  });
+
+  it("records the delivery against the booking, under a key unique to the signature", async () => {
+    const { bookingId, signatureId } = await signBooking();
+
+    const row = await prisma.notification.findFirstOrThrow({
+      where: { bookingId, eventType: "BOOKING_AUTHORIZATION_CONFIRMATION" },
+      select: {
+        status: true,
+        recipient: true,
+        template: true,
+        sentAt: true,
+        dedupeKey: true,
+        attemptCount: true,
+      },
+    });
+
+    expect(row.status).toBe(NotificationStatus.SENT);
+    expect(row.recipient).toBe("bookings@example.invalid");
+    expect(row.template).toBe("signature-confirmation");
+    expect(row.sentAt).not.toBeNull();
+    expect(row.attemptCount).toBe(1);
+    expect(row.dedupeKey).toBe(`signature:${signatureId}:confirmation`);
+  });
+
+  it("sends exactly one copy however many times delivery is attempted", async () => {
+    const { bookingId, signatureId } = await signBooking();
+    sink.reset();
+
+    // Two more attempts, concurrently — the shape a double-tapped retry or a
+    // second application instance would produce.
+    const [a, b] = await Promise.all([
+      deliverSignatureConfirmation(signatureId),
+      deliverSignatureConfirmation(signatureId),
+    ]);
+
+    expect(a).toEqual({ result: "duplicate" });
+    expect(b).toEqual({ result: "duplicate" });
+    expect(sink.messages).toHaveLength(0);
+
+    const rows = await prisma.notification.count({
+      where: { bookingId, eventType: "BOOKING_AUTHORIZATION_CONFIRMATION" },
+    });
+
+    expect(rows).toBe(1);
+  });
+
+  it("does not fail the signature when the confirmation cannot be sent", async () => {
+    const bookingId = await makeBooking();
+    const { token, id } = await createSignatureRequest(
+      bookingId,
+      `sign-customer-${SUFFIX}@example.invalid`,
+      actorId,
+      { email: "bookings@example.invalid", accountId: null },
+    );
+
+    // Every recipient refused. The signature is committed before the
+    // confirmation is attempted and must stand regardless.
+    sink.rejectRecipients = true;
+
+    const outcome = await recordSignature({
+      token,
+      claims: CLAIMS,
+      ipAddress: "203.0.113.5",
+      userAgent: "Mozilla/5.0 (Windows NT 10.0)",
+    });
+
+    await flushPendingSignatureConfirmations();
+    sink.rejectRecipients = false;
+
+    expect(outcome).toMatchObject({ ok: true });
+
+    const signature = await prisma.bookingSignature.findUniqueOrThrow({
+      where: { id },
+      select: { status: true },
+    });
+    expect(signature.status).toBe(BookingSignatureStatus.SIGNED);
+
+    // And the failure is accounted for rather than swallowed.
+    const row = await prisma.notification.findFirstOrThrow({
+      where: { bookingId, eventType: "BOOKING_AUTHORIZATION_CONFIRMATION" },
+      select: { status: true, lastError: true, sentAt: true, attemptCount: true },
+    });
+
+    expect(row.status).toBe(NotificationStatus.FAILED);
+    expect(row.lastError).toBeTruthy();
+    expect(row.sentAt).toBeNull();
+    expect(row.attemptCount).toBe(1);
+  });
+
+  it("retries a failed confirmation and reuses the document already rendered", async () => {
+    const bookingId = await makeBooking();
+    const { token, id } = await createSignatureRequest(
+      bookingId,
+      `sign-customer-${SUFFIX}@example.invalid`,
+      actorId,
+      { email: "bookings@example.invalid", accountId: null },
+    );
+
+    sink.rejectRecipients = true;
+    await recordSignature({
+      token,
+      claims: CLAIMS,
+      ipAddress: "203.0.113.5",
+      userAgent: "Mozilla/5.0 (Windows NT 10.0)",
+    });
+    await flushPendingSignatureConfirmations();
+    sink.rejectRecipients = false;
+
+    const afterFailure = await prisma.bookingSignature.findUniqueOrThrow({
+      where: { id },
+      select: { confirmationPdfKey: true },
+    });
+
+    // The PDF was rendered and stored before the send was attempted, so a
+    // retry has something to reuse.
+    expect(afterFailure.confirmationPdfKey).toBeTruthy();
+
+    sink.reset();
+
+    const retried = await deliverSignatureConfirmation(id, { retry: true });
+
+    expect(retried).toMatchObject({
+      result: "sent",
+      recipient: "bookings@example.invalid",
+    });
+    expect(sink.messages).toHaveLength(1);
+
+    const afterRetry = await prisma.bookingSignature.findUniqueOrThrow({
+      where: { id },
+      select: { confirmationPdfKey: true },
+    });
+
+    // The same object, not a second rendering: two versions of one piece of
+    // evidence is a question nobody wants to answer.
+    expect(afterRetry.confirmationPdfKey).toBe(afterFailure.confirmationPdfKey);
+
+    const row = await prisma.notification.findFirstOrThrow({
+      where: { bookingId, eventType: "BOOKING_AUTHORIZATION_CONFIRMATION" },
+      select: { status: true, attemptCount: true, lastError: true },
+    });
+
+    expect(row.status).toBe(NotificationStatus.SENT);
+    expect(row.attemptCount).toBe(2);
+    // Cleared, so the booking page does not keep showing an error that no
+    // longer describes the state.
+    expect(row.lastError).toBeNull();
+  });
+
+  it("refuses to retry a confirmation that was already delivered", async () => {
+    const { signatureId } = await signBooking();
+    sink.reset();
+
+    await expect(
+      deliverSignatureConfirmation(signatureId, { retry: true }),
+    ).resolves.toEqual({ result: "duplicate" });
+
+    expect(sink.messages).toHaveLength(0);
+  });
+
+  it("refuses to confirm an authorization that has not been signed", async () => {
+    const bookingId = await makeBooking();
+    const { id } = await createSignatureRequest(
+      bookingId,
+      `sign-customer-${SUFFIX}@example.invalid`,
+      actorId,
+      { email: "bookings@example.invalid", accountId: null },
+    );
+
+    sink.reset();
+
+    const outcome = await deliverSignatureConfirmation(id);
+
+    expect(outcome).toMatchObject({ result: "suppressed" });
+    expect(sink.messages).toHaveLength(0);
+  });
+
+  it("suppresses rather than guesses when no sender was captured", async () => {
+    const bookingId = await makeBooking();
+
+    // An invitation issued before senders were captured, or on a machine with
+    // no transport at all.
+    const { token, id } = await createSignatureRequest(
+      bookingId,
+      `sign-customer-${SUFFIX}@example.invalid`,
+      actorId,
+    );
+
+    sink.reset();
+
+    await recordSignature({
+      token,
+      claims: CLAIMS,
+      ipAddress: "203.0.113.5",
+      userAgent: "Mozilla/5.0 (Windows NT 10.0)",
+    });
+
+    await flushPendingSignatureConfirmations();
+
+    // Nothing was sent to today's default account, which never asked for it.
+    expect(sink.messages).toHaveLength(0);
+
+    const row = await prisma.notification.findFirstOrThrow({
+      where: { bookingId, eventType: "BOOKING_AUTHORIZATION_CONFIRMATION" },
+      select: { status: true, lastError: true, dedupeKey: true },
+    });
+
+    expect(row.status).toBe(NotificationStatus.SUPPRESSED);
+    expect(row.lastError).toMatch(/no sender address/i);
+    expect(row.dedupeKey).toBe(`signature:${id}:confirmation`);
+  });
+
+  it("sends through the configured account that issued the invitation", async () => {
+    // The primary path, and the one the whole feature turns on: a deployment
+    // with sending accounts in Settings, where the confirmation must go back
+    // through the identity that asked for the signature rather than through
+    // whatever the environment happens to be configured with.
+    const account = await prisma.mailAccount.create({
+      data: {
+        label: `Reservations ${SUFFIX}`,
+        fromEmail: "reservations@example.invalid",
+        fromName: "Reservations",
+        // The same loopback sink the environment fallback uses, so the send is
+        // real and the assertion is still about what crossed the socket.
+        host: "127.0.0.1",
+        port: Number(process.env.SMTP_PORT),
+        secure: false,
+        isActive: true,
+      },
+      select: { id: true },
+    });
+    resetMailAccountCache();
+
+    try {
+      const bookingId = await makeBooking();
+      const { token, id } = await createSignatureRequest(
+        bookingId,
+        `sign-customer-${SUFFIX}@example.invalid`,
+        actorId,
+        { email: "reservations@example.invalid", accountId: account.id },
+      );
+
+      sink.reset();
+
+      await recordSignature({
+        token,
+        claims: CLAIMS,
+        ipAddress: "203.0.113.5",
+        userAgent: "Mozilla/5.0 (Windows NT 10.0)",
+      });
+
+      await flushPendingSignatureConfirmations();
+
+      const message = sink.messages.find((entry) =>
+        entry.recipients.includes("reservations@example.invalid"),
+      );
+
+      expect(message).toBeDefined();
+
+      // From the account's own identity, not `MAIL_FROM`. The envelope sender
+      // is what a bounce comes back to, so it is the part that matters.
+      expect(message!.from).toBe("reservations@example.invalid");
+      expect(message!.data).toContain("Reservations");
+
+      const body = decodeQuotedPrintable(message!.data);
+      expect(body).toContain(CLAIMS.consentText);
+      expect(body).toContain("203.0.113.5");
+
+      // The document still goes with it when an account is in play.
+      expect(attachedPdf(message!.data).subarray(0, 5).toString("latin1")).toBe(
+        "%PDF-",
+      );
+
+      const row = await prisma.notification.findFirstOrThrow({
+        where: { bookingId, eventType: "BOOKING_AUTHORIZATION_CONFIRMATION" },
+        select: { status: true, recipient: true, mailAccountId: true },
+      });
+
+      expect(row.status).toBe(NotificationStatus.SENT);
+      expect(row.recipient).toBe("reservations@example.invalid");
+      // Attributed to the account that sent it, so the delivery history says
+      // which mailbox this went through.
+      expect(row.mailAccountId).toBe(account.id);
+
+      const signature = await prisma.bookingSignature.findUniqueOrThrow({
+        where: { id },
+        select: { senderMailAccountId: true },
+      });
+      expect(signature.senderMailAccountId).toBe(account.id);
+    } finally {
+      // Deleted in a `finally`: an active account left behind would be picked
+      // up by `resolveMailer` for every later test in this file.
+      await prisma.mailAccount.delete({ where: { id: account.id } });
+      resetMailAccountCache();
+    }
+  });
+
+  it("still delivers when the account that sent the invitation has been deleted", async () => {
+    const account = await prisma.mailAccount.create({
+      data: {
+        label: `Retired ${SUFFIX}`,
+        fromEmail: "retired@example.invalid",
+        host: "127.0.0.1",
+        port: 1,
+        secure: false,
+        // Inactive, so it cannot be picked up by any other test in this file.
+        isActive: false,
+      },
+      select: { id: true },
+    });
+
+    const bookingId = await makeBooking();
+    const { token, id } = await createSignatureRequest(
+      bookingId,
+      `sign-customer-${SUFFIX}@example.invalid`,
+      actorId,
+      { email: "retired@example.invalid", accountId: account.id },
+    );
+
+    // Deleted after the invitation went out. `SetNull` keeps the signature.
+    await prisma.mailAccount.delete({ where: { id: account.id } });
+    resetMailAccountCache();
+
+    sink.reset();
+
+    await recordSignature({
+      token,
+      claims: CLAIMS,
+      ipAddress: "203.0.113.5",
+      userAgent: "Mozilla/5.0 (Windows NT 10.0)",
+    });
+
+    await flushPendingSignatureConfirmations();
+
+    const signature = await prisma.bookingSignature.findUniqueOrThrow({
+      where: { id },
+      select: { senderEmail: true, senderMailAccountId: true },
+    });
+
+    // The evidence survives the deletion, and still names the mailbox.
+    expect(signature.senderMailAccountId).toBeNull();
+    expect(signature.senderEmail).toBe("retired@example.invalid");
+
+    // Sent through the environment fallback, to the address that was captured
+    // rather than to the fallback's own.
+    const message = sink.messages.find((entry) =>
+      entry.recipients.includes("retired@example.invalid"),
+    );
+
+    expect(message).toBeDefined();
+
+    const row = await prisma.notification.findFirstOrThrow({
+      where: { bookingId, eventType: "BOOKING_AUTHORIZATION_CONFIRMATION" },
+      select: { status: true, recipient: true },
+    });
+
+    expect(row.status).toBe(NotificationStatus.SENT);
+    expect(row.recipient).toBe("retired@example.invalid");
+  });
+
+  it("writes one confirmation when the same link is submitted twice at once", async () => {
+    const bookingId = await makeBooking();
+    const { token } = await createSignatureRequest(
+      bookingId,
+      `sign-customer-${SUFFIX}@example.invalid`,
+      actorId,
+      { email: "bookings@example.invalid", accountId: null },
+    );
+
+    sink.reset();
+
+    // A double-tapped button: two requests, one token.
+    const input = {
+      token,
+      claims: CLAIMS,
+      ipAddress: "203.0.113.5",
+      userAgent: "Mozilla/5.0 (Windows NT 10.0)",
+    };
+
+    const outcomes = await Promise.all([
+      recordSignature(input),
+      recordSignature(input),
+    ]);
+
+    await flushPendingSignatureConfirmations();
+
+    // Exactly one signature, and exactly one confirmation behind it.
+    expect(outcomes.filter((outcome) => outcome.ok)).toHaveLength(1);
+
+    const rows = await prisma.notification.count({
+      where: { bookingId, eventType: "BOOKING_AUTHORIZATION_CONFIRMATION" },
+    });
+
+    expect(rows).toBe(1);
+
+    const confirmations = sink.messages.filter((entry) =>
+      entry.recipients.includes("bookings@example.invalid"),
+    );
+
+    expect(confirmations).toHaveLength(1);
   });
 });

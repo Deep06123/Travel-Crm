@@ -20,6 +20,17 @@ export * from "./types";
 
 let cached: StorageAdapter | undefined;
 
+/**
+ * Drops the memoised adapter.
+ *
+ * For tests that change `STORAGE_DRIVER` after something has already asked for
+ * storage — the same role `resetMailerCache` plays for the transport. Nothing
+ * in the application calls it: the driver cannot change while a process runs.
+ */
+export function resetStorageCache(): void {
+  cached = undefined;
+}
+
 export function getStorage(): StorageAdapter {
   if (cached) return cached;
 

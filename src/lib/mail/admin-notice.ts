@@ -29,6 +29,15 @@ export interface AdminNoticeData {
   /** Deep link to the booking, when the deployment knows its own address. */
   bookingUrl?: string | null;
   rows: readonly AdminNoticeRow[];
+  /**
+   * A verbatim block set apart from the rows — the consent wording a customer
+   * agreed to, and anything else where the exact words are the point. A row
+   * would wrap a paragraph into a narrow value column and invite summarising
+   * it, which is precisely what a quotation must not be.
+   */
+  quote?: string | null;
+  /** Heading above `quote`. Ignored when there is no quote. */
+  quoteLabel?: string | null;
   /** Optional closing sentence, for context a row cannot carry. */
   footnote?: string | null;
 }
@@ -57,6 +66,19 @@ export function renderAdminNotice(data: AdminNoticeData): RenderedAdminNotice {
     ...rows.map((row) => `${row.label}: ${row.value}`),
   ];
 
+  if (data.quote?.trim()) {
+    textLines.push(
+      "",
+      `${data.quoteLabel ?? "Quoted"}:`,
+      // Indented and quoted, which is the only way to set a block apart in a
+      // plain-text client.
+      ...data.quote
+        .trim()
+        .split("\n")
+        .map((paragraph) => `  "${paragraph.trim()}"`),
+    );
+  }
+
   if (data.bookingUrl) {
     textLines.push("", `Open the booking: ${data.bookingUrl}`);
   }
@@ -80,6 +102,13 @@ export function renderAdminNotice(data: AdminNoticeData): RenderedAdminNotice {
     )
     .join("");
 
+  const quoteHtml = data.quote?.trim()
+    ? `<tr><td colspan="2" style="padding:12px 20px 0;">
+         <div style="color:#5b6472;font-size:11px;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:6px;">${escapeHtml(data.quoteLabel ?? "Quoted")}</div>
+         <div style="border-left:3px solid #0b1f44;background:#f8fafc;padding:10px 12px;color:#0b1f44;font-size:13px;line-height:1.5;font-style:italic;">${escapeHtml(data.quote.trim())}</div>
+       </td></tr>`
+    : "";
+
   const linkHtml = data.bookingUrl
     ? `<tr><td colspan="2" style="padding:14px 20px 4px;">
          <a href="${escapeHtml(data.bookingUrl)}" style="background:#0b1f44;color:#ffffff;font-size:13px;text-decoration:none;padding:9px 16px;border-radius:4px;display:inline-block;">Open the booking</a>
@@ -99,6 +128,7 @@ export function renderAdminNotice(data: AdminNoticeData): RenderedAdminNotice {
         <td colspan="2" style="padding:14px 20px 4px;color:#0b1f44;font-size:15px;font-weight:bold;">Booking ${escapeHtml(data.bookingNumber)}</td>
       </tr>
       ${rowHtml}
+      ${quoteHtml}
       ${linkHtml}
       ${footnoteHtml}
       <tr>

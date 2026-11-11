@@ -1,6 +1,6 @@
 "use client";
 
-import { ExternalLink, Loader2, Pencil, Send } from "lucide-react";
+import { ExternalLink, Loader2, Pencil, RefreshCw, Send } from "lucide-react";
 import { useActionState, useState } from "react";
 import { useFormStatus } from "react-dom";
 
@@ -11,6 +11,7 @@ import type { BookingSignatureStatus } from "@/generated/prisma/enums";
 import { EmailEditor } from "./email-editor";
 import { SenderSelect, type SenderOption } from "./sender-select";
 import {
+  retrySignatureConfirmationAction,
   sendAuthorizationEmailAction,
   type AuthorizationState,
 } from "./signature-actions";
@@ -51,8 +52,36 @@ export interface SignatureRow {
   geoCity: string | null;
   geoRegion: string | null;
   geoCountry: string | null;
+  /** The mailbox the invitation went out from, snapshotted when it was sent. */
+  senderEmail: string | null;
   sentBy: { id: string; name: string } | null;
+  /**
+   * How the signed confirmation's delivery went. Null when none has been
+   * attempted — which is every row that is not signed, and every signature
+   * taken before confirmations existed.
+   */
+  confirmation: ConfirmationSummary | null;
 }
+
+/** `getConfirmationStatus`, with the date already formatted. */
+export interface ConfirmationSummary {
+  status: "PENDING" | "SENT" | "DELIVERED" | "FAILED" | "SUPPRESSED";
+  recipient: string;
+  sentAtLabel: string | null;
+  lastError: string | null;
+  attemptCount: number;
+}
+
+const CONFIRMATION_TONE: Record<
+  ConfirmationSummary["status"],
+  "success" | "warning" | "danger" | "neutral"
+> = {
+  PENDING: "warning",
+  SENT: "success",
+  DELIVERED: "success",
+  FAILED: "danger",
+  SUPPRESSED: "neutral",
+};
 
 const PRESENTATION: Record<
   BookingSignatureStatus,
@@ -129,6 +158,96 @@ function EditButton() {
     >
       {pending ? <Loader2 className="size-4 animate-spin" /> : <Pencil className="size-4" />}
       Edit email
+    </Button>
+  );
+}
+
+/**
+ * Whether the signed document reached the mailbox that asked for it.
+ *
+ * Shown even when it succeeded. The office's record of a signature is now an
+ * email with an attachment, and "it was sent" is the fact somebody needs when
+ * they cannot find it — printed rather than inferred from its absence.
+ */
+function ConfirmationBlock({
+  bookingId,
+  signatureId,
+  confirmation,
+  canSend,
+}: {
+  bookingId: string;
+  signatureId: string;
+  confirmation: ConfirmationSummary;
+  canSend: boolean;
+}) {
+  const [state, formAction] = useActionState<AuthorizationState, FormData>(
+    retrySignatureConfirmationAction,
+    {},
+  );
+
+  return (
+    <div className="mt-3 rounded-md border border-line px-3 py-2">
+      <div className="mb-1 flex flex-wrap items-center gap-2">
+        <span className="text-xs text-ink-muted">Signed copy emailed</span>
+        <Badge tone={CONFIRMATION_TONE[confirmation.status]}>
+          {confirmation.status === "FAILED"
+            ? "Failed"
+            : confirmation.status === "SUPPRESSED"
+              ? "Not attempted"
+              : confirmation.status === "PENDING"
+                ? "Sending"
+                : "Sent"}
+        </Badge>
+      </div>
+
+      <dl className="divide-y divide-line">
+        <Row label="To" value={confirmation.recipient || null} />
+        <Row label="At" value={confirmation.sentAtLabel} />
+        <Row
+          label="Attempts"
+          value={confirmation.attemptCount > 1 ? String(confirmation.attemptCount) : null}
+        />
+      </dl>
+
+      {confirmation.lastError ? (
+        <p className="mt-2 text-xs break-words text-status-danger">
+          {confirmation.lastError}
+        </p>
+      ) : null}
+
+      {canSend && confirmation.status === "FAILED" ? (
+        <form action={formAction} className="mt-2">
+          <input type="hidden" name="bookingId" value={bookingId} />
+          <input type="hidden" name="signatureId" value={signatureId} />
+          <RetryButton />
+        </form>
+      ) : null}
+
+      {state.error ? (
+        <p role="alert" className="mt-2 text-xs text-status-danger">
+          {state.error}
+        </p>
+      ) : null}
+      {state.success ? (
+        <p role="status" className="mt-2 text-xs text-status-success">
+          {state.success}
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
+function RetryButton() {
+  const { pending } = useFormStatus();
+
+  return (
+    <Button type="submit" variant="secondary" size="sm" disabled={pending}>
+      {pending ? (
+        <Loader2 className="size-4 animate-spin" />
+      ) : (
+        <RefreshCw className="size-4" />
+      )}
+      {pending ? "Sending…" : "Send it again"}
     </Button>
   );
 }
@@ -217,12 +336,22 @@ export function AuthorizationPanel({
             <Row label="Browser timezone" value={signed.clientTimezone} />
             <Row label="Opened" value={signed.viewedAtLabel} />
             <Row label="Link sent by" value={signed.sentBy?.name ?? null} />
+            <Row label="Link sent from" value={signed.senderEmail} />
           </dl>
 
           {signed.consentText ? (
             <p className="mt-3 rounded-md bg-surface-muted px-3 py-2 text-xs leading-relaxed text-ink-muted">
               &ldquo;{signed.consentText}&rdquo;
             </p>
+          ) : null}
+
+          {signed.confirmation ? (
+            <ConfirmationBlock
+              bookingId={bookingId}
+              signatureId={signed.id}
+              confirmation={signed.confirmation}
+              canSend={canSend}
+            />
           ) : null}
 
           {!location(signed) && signed.ipAddress ? (

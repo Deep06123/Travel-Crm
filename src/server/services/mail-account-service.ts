@@ -4,6 +4,7 @@ import { AuditAction } from "@/generated/prisma/enums";
 import { recordAudit } from "@/lib/audit";
 import { openSecret, sealSecret, SecretUnsealError } from "@/lib/crypto/secret-box";
 import { prisma } from "@/lib/db/prisma";
+import { getEnv } from "@/lib/env";
 import { loggerFor } from "@/lib/logging/logger";
 import {
   deriveImapHost,
@@ -651,6 +652,16 @@ export interface ResolvedMailer {
   accountId: string | null;
   /** For the message the operator is shown, e.g. "sent from Reservations". */
   label: string;
+  /**
+   * The envelope address this will send from, bare — no display name.
+   *
+   * For snapshotting onto a record that must be replied to later from the same
+   * mailbox, which is why it is the address alone: a quoted display name is
+   * presentation, and storing it would make the stored value depend on an
+   * editable label. Null only when the environment fallback is in use and
+   * `MAIL_FROM` carries nothing that parses as an address.
+   */
+  fromEmail: string | null;
 }
 
 /**
@@ -718,6 +729,7 @@ export async function resolveMailer(
         adapter: buildAdapter(account),
         accountId: account.id,
         label: account.label,
+        fromEmail: account.fromEmail,
       };
     } catch (error) {
       // A password that cannot be decrypted is a configuration fault, not a
@@ -735,5 +747,28 @@ export async function resolveMailer(
   const fallback = getMailer();
   if (!fallback) return null;
 
-  return { adapter: fallback, accountId: null, label: "the server configuration" };
+  return {
+    adapter: fallback,
+    accountId: null,
+    label: "the server configuration",
+    fromEmail: bareAddress(getEnv().MAIL_FROM),
+  };
+}
+
+/**
+ * The address out of a `From` line, without any display name.
+ *
+ * `MAIL_FROM` is a free-text environment variable and is as likely to hold
+ * `"Reservations" <book@example.com>` as the address alone. Only the address
+ * is worth storing: it is what a later message is addressed back to, and the
+ * display name beside it is a label that can be rewritten without the mailbox
+ * changing at all.
+ */
+function bareAddress(from: string | undefined): string | null {
+  if (!from) return null;
+
+  const angled = /<([^>]+)>/.exec(from)?.[1]?.trim();
+  const candidate = angled ?? from.trim();
+
+  return candidate.includes("@") ? candidate : null;
 }

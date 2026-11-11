@@ -65,6 +65,7 @@ import {
   redactPassengers,
 } from "@/server/services/booking-service";
 import { getBookingSignatures } from "@/server/services/booking-signature-service";
+import { getConfirmationStatus } from "@/server/services/signature-confirmation-service";
 import { getBookingPosition } from "@/server/services/payment-service";
 import {
   BOOKING_CONFIRMED,
@@ -224,7 +225,16 @@ export default async function BookingDetailPage({
 
   // Same reason as above: the panel is a Client Component, so the dates are
   // formatted here rather than there.
-  const signatures = (await getBookingSignatures(booking.id)).map((row) => ({
+  const signatureRows = await getBookingSignatures(booking.id);
+
+  // Only the signed row has a confirmation to report, and there is at most one
+  // of those per booking — so this is a single lookup rather than one per row.
+  const signedRow = signatureRows.find((row) => row.status === "SIGNED");
+  const confirmation = signedRow
+    ? await getConfirmationStatus(signedRow.id)
+    : null;
+
+  const signatures = signatureRows.map((row) => ({
     id: row.id,
     status: row.status,
     recipientEmail: row.recipientEmail,
@@ -244,7 +254,20 @@ export default async function BookingDetailPage({
     geoCity: row.geoCity,
     geoRegion: row.geoRegion,
     geoCountry: row.geoCountry,
+    senderEmail: row.senderEmail,
     sentBy: row.sentBy,
+    confirmation:
+      row.id === signedRow?.id && confirmation
+        ? {
+            status: confirmation.status,
+            recipient: confirmation.recipient,
+            sentAtLabel: confirmation.sentAt
+              ? formatDateTime(confirmation.sentAt)
+              : null,
+            lastError: confirmation.lastError,
+            attemptCount: confirmation.attemptCount,
+          }
+        : null,
   }));
 
   const hasSignature = signatures.some((row) => row.status === "SIGNED");

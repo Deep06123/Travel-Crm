@@ -245,6 +245,9 @@ export interface AdminNoticeInput {
   /** The sentence at the top of the notice and in its subject. */
   headline: string;
   rows: readonly AdminNoticeRow[];
+  /** Verbatim block set apart from the rows — see `renderAdminNotice`. */
+  quote?: string | null;
+  quoteLabel?: string | null;
   footnote?: string | null;
 }
 
@@ -266,6 +269,8 @@ export async function sendAdminNotice({
   event,
   headline,
   rows,
+  quote,
+  quoteLabel,
   footnote,
 }: AdminNoticeInput): Promise<AdminNoticeResult> {
   const recipients = await loadAdminNotificationEmails();
@@ -323,6 +328,8 @@ export async function sendAdminNotice({
     bookingNumber,
     bookingUrl: bookingUrl(bookingId),
     rows,
+    ...(quote ? { quote } : {}),
+    ...(quoteLabel ? { quoteLabel } : {}),
     ...(footnote ? { footnote } : {}),
   });
 

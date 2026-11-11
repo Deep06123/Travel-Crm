@@ -16,6 +16,8 @@ import {
   dispatchAdminNotice,
 } from "./admin-notification-service";
 
+import { dispatchSignatureConfirmation } from "./signature-confirmation-service";
+
 /**
  * Customer authorization links, and the e-signature evidence they return.
  *
@@ -66,6 +68,23 @@ export interface IssuedSignatureRequest {
 }
 
 /**
+ * The mailbox an invitation went out from.
+ *
+ * Snapshotted onto the row because the confirmation that follows a signature
+ * is addressed back to it, and the customer may sign days later — by which
+ * time the configured default for an authorization can be a different account
+ * entirely. Resolving the destination at signing time would send the evidence
+ * to whichever mailbox happened to be the default, which is not where the
+ * conversation lives.
+ */
+export interface SignatureSender {
+  /** Bare address, no display name. Null when none could be determined. */
+  email: string | null;
+  /** The configured identity, where one was used rather than the environment. */
+  accountId: string | null;
+}
+
+/**
  * Mints an authorization link for a booking.
  *
  * Revoking the previous unsigned rows is what makes "resend" mean resend
@@ -79,6 +98,7 @@ export async function createSignatureRequest(
   bookingId: string,
   recipientEmail: string,
   actorId: string,
+  sender: SignatureSender = { email: null, accountId: null },
 ): Promise<IssuedSignatureRequest> {
   const token = randomBytes(TOKEN_BYTES).toString("base64url");
   const expiresAt = new Date(Date.now() + EXPIRY_DAYS * 24 * 60 * 60 * 1_000);
@@ -96,6 +116,8 @@ export async function createSignatureRequest(
         recipientEmail,
         expiresAt,
         sentById: actorId,
+        senderEmail: sender.email,
+        senderMailAccountId: sender.accountId,
       },
       select: { id: true },
     });
@@ -243,7 +265,7 @@ export interface RecordSignatureInput {
 }
 
 export type RecordSignatureResult =
-  | { ok: true; bookingId: string; bookingNumber: string }
+  | { ok: true; signatureId: string; bookingId: string; bookingNumber: string }
   | { ok: false; reason: "unknown" | "expired" | "revoked" | "signed" };
 
 /**
@@ -259,6 +281,42 @@ export type RecordSignatureResult =
  * the page, so two submissions racing from a double-tapped button cannot both
  * write a signature.
  */
+/**
+ * Turns a lost write race into a refusal instead of an error.
+ *
+ * Re-reading the status inside the transaction stops two submissions both
+ * writing a signature, but it does not stop the database noticing the
+ * collision first: MariaDB answers the loser with error 1020, "Record has
+ * changed since last read", and Prisma raises it. A customer who double-tapped
+ * the confirm button would then see a 500 on the request that lost, having
+ * successfully signed on the one that won.
+ *
+ * So a failed attempt re-reads the row. If it is signed, the race is the
+ * explanation and the answer is the same one a second submission would get at
+ * any other time. Anything else is a real fault and is rethrown — a write that
+ * failed for some other reason must not be reported as a duplicate.
+ */
+async function settleRace(
+  tokenHash: string,
+  attempt: () => Promise<RecordSignatureResult>,
+): Promise<RecordSignatureResult> {
+  try {
+    return await attempt();
+  } catch (error) {
+    const row = await prisma.bookingSignature.findUnique({
+      where: { tokenHash },
+      select: { status: true },
+    });
+
+    if (row?.status === BookingSignatureStatus.SIGNED) {
+      log.info({ err: error }, "Concurrent signing attempt lost the race");
+      return { ok: false, reason: "signed" };
+    }
+
+    throw error;
+  }
+}
+
 export async function recordSignature({
   token,
   claims,
@@ -268,7 +326,8 @@ export async function recordSignature({
   const tokenHash = hashToken(token);
   const location = await lookupIp(ipAddress);
 
-  const outcome = await prisma.$transaction(async (tx) => {
+  const outcome = await settleRace(tokenHash, () =>
+    prisma.$transaction(async (tx) => {
     const row = await tx.bookingSignature.findUnique({
       where: { tokenHash },
       select: {
@@ -343,10 +402,12 @@ export async function recordSignature({
 
     return {
       ok: true as const,
+      signatureId: row.id,
       bookingId: row.bookingId,
       bookingNumber: row.booking.bookingNumber,
     };
-  });
+    }),
+  );
 
   if (outcome.ok) {
     log.info({ bookingId: outcome.bookingId, ipAddress }, "Booking authorization signed");
@@ -383,6 +444,14 @@ export async function recordSignature({
       footnote:
         "The e-ticket can now be sent. The full signature evidence is on the booking.",
     });
+
+    // The signed document itself, back to the mailbox the invitation came
+    // from. Dispatched for the same reason as the notice above, and on top of
+    // that it renders a PDF and attaches it — work with no business sitting
+    // between the customer pressing a button and being told it worked. The
+    // signature is already committed; a failure here is recorded on its own
+    // Notification row and can be retried from the booking.
+    dispatchSignatureConfirmation(outcome.signatureId);
   }
 
   return outcome;
@@ -397,6 +466,7 @@ export function getBookingSignatures(bookingId: string) {
       id: true,
       status: true,
       recipientEmail: true,
+      senderEmail: true,
       sentAt: true,
       expiresAt: true,
       viewedAt: true,

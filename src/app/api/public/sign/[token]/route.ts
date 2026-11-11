@@ -2,6 +2,8 @@ import { headers } from "next/headers";
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
 
+import { getEnv } from "@/lib/env";
+import { clientIpFrom } from "@/lib/http/client-ip";
 import { loggerFor } from "@/lib/logging/logger";
 import { recordSignature } from "@/server/services/booking-signature-service";
 
@@ -75,11 +77,14 @@ export async function POST(
   }
 
   const headerList = await headers();
-  // The first entry is the client; the rest are the proxies it passed through.
-  const ipAddress =
-    headerList.get("x-forwarded-for")?.split(",")[0]?.trim() ||
-    headerList.get("x-real-ip") ||
-    null;
+
+  // Read from the right-hand end of the chain, not the left. The leftmost
+  // entry of `X-Forwarded-For` is whatever the client sent, and an address the
+  // signer chose for themselves is not evidence of anything. See
+  // `clientIpFrom`.
+  const ipAddress = clientIpFrom(headerList, {
+    trustedHops: getEnv().TRUSTED_PROXY_HOPS,
+  });
 
   try {
     const outcome = await recordSignature({

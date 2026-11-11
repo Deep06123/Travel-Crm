@@ -12,6 +12,7 @@ import {
   previewAuthorizationEmail,
   sendAuthorizationEmail,
 } from "@/server/services/booking-authorization-service";
+import { deliverSignatureConfirmation } from "@/server/services/signature-confirmation-service";
 
 const log = loggerFor("booking-signature-actions");
 
@@ -149,5 +150,67 @@ export async function sendAuthorizationEmailAction(
   } catch (error) {
     log.error({ err: error, bookingId }, "Authorization send failed");
     return { error: "The authorization email could not be sent. Try again." };
+  }
+}
+
+const retrySchema = z.object({
+  bookingId: z.string().min(1),
+  signatureId: z.string().min(1),
+});
+
+/**
+ * Re-attempts a confirmation email that failed.
+ *
+ * The same permission as sending the invitation, because it puts the same
+ * booking detail — and now the signed document — into a mailbox. There is no
+ * separate "retry" permission, which would be a distinction nobody could
+ * explain.
+ *
+ * Only a FAILED attempt can be retried; the service refuses the rest. That
+ * rule lives there rather than here so it also holds for any other caller, and
+ * so a stale page cannot be used to send a second copy of something already
+ * delivered.
+ */
+export async function retrySignatureConfirmationAction(
+  _previous: AuthorizationState,
+  formData: FormData,
+): Promise<AuthorizationState> {
+  const user = await requirePermission(PERMISSIONS.BOOKING_SIGNATURE_SEND);
+
+  const parsed = retrySchema.safeParse(Object.fromEntries(formData.entries()));
+  if (!parsed.success) return { error: "Invalid request." };
+
+  const { bookingId, signatureId } = parsed.data;
+
+  try {
+    const outcome = await deliverSignatureConfirmation(signatureId, {
+      retry: true,
+    });
+
+    revalidatePath(`/admin/bookings/${bookingId}`);
+
+    log.info(
+      { bookingId, signatureId, actorId: user.id, result: outcome.result },
+      "Signature confirmation retried",
+    );
+
+    switch (outcome.result) {
+      case "sent":
+        return {
+          success: `Confirmation sent to ${outcome.recipient} from ${outcome.sentFrom}.`,
+        };
+      case "duplicate":
+        return {
+          error:
+            "That confirmation is no longer waiting to be retried — it has been sent, or another attempt is in progress.",
+        };
+      case "suppressed":
+        return { error: outcome.reason };
+      case "failed":
+        return { error: `The confirmation was not accepted: ${outcome.reason}` };
+    }
+  } catch (error) {
+    log.error({ err: error, signatureId }, "Signature confirmation retry failed");
+    return { error: "The confirmation could not be sent. Try again." };
   }
 }

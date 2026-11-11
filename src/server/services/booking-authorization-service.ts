@@ -407,10 +407,18 @@ export async function sendAuthorizationEmail({
     return { result: "suppressed", reason };
   }
 
+  // The sender is captured here, with the invitation, and never re-resolved.
+  // The confirmation that comes back after the customer signs is addressed to
+  // this mailbox — which can be days later, by which time the default for an
+  // authorization may well be a different account.
   const { id: signatureId, token, expiresAt } = await createSignatureRequest(
     bookingId,
     recipient,
     actorId,
+    // Optional: in development with no transport at all the link is still
+    // minted and logged, and a row with no sender is the honest record of an
+    // invitation that was never actually sent from anywhere.
+    { email: mailer?.fromEmail ?? null, accountId: mailer?.accountId ?? null },
   );
 
   const signUrl = `${origin.replace(/\/+$/, "")}/sign/${encodeURIComponent(token)}`;

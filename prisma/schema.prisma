@@ -717,6 +717,22 @@ model BookingSignature {
   viewedAt       DateTime?
   revokedAt      DateTime?
 
+  /// The address the invitation actually went out from, snapshotted at the
+  /// moment it was sent.
+  ///
+  /// The confirmation that follows a signature is addressed from this, not from
+  /// whatever account happens to be the default when the customer signs — which
+  /// can be days later and a different mailbox. `sentById` records which
+  /// *person* sent it; this records which *mailbox* did, and those are not the
+  /// same fact. Null for rows written before this was captured, and for a send
+  /// that fell back to the `SMTP_*` environment variables.
+  senderEmail String? @db.Text
+  /// Which configured identity sent the invitation, where one was used.
+  /// `SetNull` on delete, as on Notification: removing an account must not take
+  /// the evidence with it, and `senderEmail` still names where it came from.
+  senderMailAccountId String?
+  senderMailAccount   MailAccount? @relation(fields: [senderMailAccountId], references: [id], onDelete: SetNull)
+
   // --- Captured at signing --------------------------------------------------
   signedAt      DateTime?
   /// The typed name the customer authorized, rendered as their signature.
@@ -750,11 +766,21 @@ model BookingSignature {
   /// rather than as this schema chose to flatten it.
   geoRaw      Json?
 
+  /// Storage key of the signed confirmation PDF, written once after signing.
+  ///
+  /// The key rather than the bytes: the document is evidence and belongs in
+  /// object storage with every other document, and a non-null value here is
+  /// what makes regeneration unnecessary — a retried confirmation email
+  /// re-reads this object instead of rendering a second PDF whose timestamps
+  /// and layout would differ from the one already delivered.
+  confirmationPdfKey String?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   @@index([bookingId, createdAt])
   @@index([status, expiresAt])
+  @@index([senderMailAccountId])
 }
 
 enum CommentVisibility {
@@ -1611,6 +1637,9 @@ model MailAccount {
   lastError     String?   @db.Text
 
   notifications Notification[]
+  /// Invitations sent from this identity. Only so the relation resolves; the
+  /// signature rows are never read through an account.
+  signatureRequests BookingSignature[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
