@@ -114,7 +114,7 @@ export function bookingRows(evidence: SignatureEvidence): EvidenceRow[] {
       value: formatMoney(evidence.totalMinor, evidence.currency),
     },
     { label: "Signed As", value: evidence.signatureName },
-    { label: "Mobile Confirmed", value: evidence.signedPhone },
+    { label: "Mobile Confirmed", value: present(evidence.signedPhone) },
     { label: "Invitation Sent To", value: evidence.recipientEmail },
   ];
 }

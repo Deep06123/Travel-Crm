@@ -719,6 +719,31 @@ describe("the signature confirmation", () => {
     expect(row.senderMailAccountId).toBeNull();
   });
 
+  it("reads as the customer and replies to them, while still being sent as us", async () => {
+    await signBooking();
+
+    const message = sink.messages.find((entry) =>
+      entry.recipients.includes("bookings@example.invalid"),
+    );
+
+    expect(message).toBeDefined();
+
+    // The envelope sender — what a bounce returns to, and what SPF and DKIM
+    // are checked against — is ours. Sending as the customer's own address
+    // would fail DMARC at any recipient domain that publishes a policy.
+    expect(message!.from).toBe("bookings@example.invalid");
+
+    // What the office sees in the inbox: the customer's name over our address.
+    expect(message!.data).toContain(
+      'From: "Grace Hopper (customer)" <bookings@example.invalid>',
+    );
+
+    // And pressing Reply writes to the customer, not back to the office.
+    expect(message!.data).toContain(
+      `Reply-To: sign-customer-${SUFFIX}@example.invalid`,
+    );
+  });
+
   it("emails the captured sender the consent wording, the evidence and the PDF", async () => {
     const { signatureId } = await signBooking();
 
@@ -1019,7 +1044,11 @@ describe("the signature confirmation", () => {
       // From the account's own identity, not `MAIL_FROM`. The envelope sender
       // is what a bounce comes back to, so it is the part that matters.
       expect(message!.from).toBe("reservations@example.invalid");
-      expect(message!.data).toContain("Reservations");
+      // The header carries the account's address under the customer's name —
+      // the account's own display name gives way to it. See the reply-to test.
+      expect(message!.data).toContain(
+        '"Grace Hopper (customer)" <reservations@example.invalid>',
+      );
 
       const body = decodeQuotedPrintable(message!.data);
       expect(body).toContain(CLAIMS.consentText);

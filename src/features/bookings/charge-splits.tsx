@@ -211,15 +211,15 @@ export function ChargeSplits({
                 <div className="grid gap-4 sm:grid-cols-2">
                   <Field
                     id={`splits.${index}.title`}
-                    label="Title"
-                    hint="What this part of the total is for."
+                    label="Supplier"
+                    hint="Who this part of the total is paid to."
                     error={error(`splits.${index}.title`)}
                   >
                     {(props) => (
                       <Input
                         {...props}
                         name={`splits.${index}.title`}
-                        placeholder="Deposit"
+                        placeholder="Skyhyplanners"
                         value={row.title}
                         onChange={(event) =>
                           update(row.key, { title: event.target.value })

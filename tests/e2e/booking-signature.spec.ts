@@ -58,15 +58,12 @@ test("a customer signs the authorization and the evidence reaches the booking", 
   ).toBeVisible();
   await expect(page.getByText(booking.bookingNumber)).toBeVisible();
 
-  // The consent gate holds before anything is recorded.
-  await page.getByRole("button", { name: "Sign & Confirm Booking" }).click();
-  await expect(
-    page.getByText("Please accept the electronic signature consent."),
-  ).toBeVisible();
+  // The page no longer asks for anything: neither the contact number, nor the
+  // security table, nor a consent tick box is on it. Pressing the button is
+  // the whole act, and the consent wording is still recorded against it.
   expect(await readSignature(booking.id)).toBeNull();
+  await expect(page.getByRole("checkbox")).toHaveCount(0);
 
-  await page.getByRole("checkbox").check();
-  await page.getByLabel("Mobile number").fill("+1 555 0100");
   await page.getByRole("button", { name: "Sign & Confirm Booking" }).click();
 
   await expect(
@@ -74,10 +71,10 @@ test("a customer signs the authorization and the evidence reaches the booking", 
   ).toBeVisible();
 
   const signature = await readSignature(booking.id);
-  expect(signature).toMatchObject({
-    status: "SIGNED",
-    signedPhone: "+1 555 0100",
-  });
+  expect(signature).toMatchObject({ status: "SIGNED" });
+  // Taken from the booking, which this fixture leaves blank — so it is
+  // recorded as absent rather than as a confirmed empty string.
+  expect(signature?.signedPhone).toBeNull();
   // Observed by the server from the request, never posted by the page.
   expect(signature?.ipAddress).toBeTruthy();
   expect(signature?.browser).toBeTruthy();
@@ -98,7 +95,7 @@ test("a customer signs the authorization and the evidence reaches the booking", 
       exact: true,
     }),
   });
-  await expect(panel.getByText("+1 555 0100")).toBeVisible();
+  await expect(panel.getByText(customer.lastName)).toBeVisible();
   await expect(
     panel.getByRole("button", { name: /Send E-Ticket Email/i }),
   ).toBeEnabled();

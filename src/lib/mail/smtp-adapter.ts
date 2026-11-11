@@ -24,6 +24,16 @@ export interface SmtpAdapterOptions {
 }
 
 /**
+ * The bare address out of a configured `from`, which may carry a display name.
+ *
+ * Only the address is reused when a message supplies its own display name;
+ * keeping the configured name as well would produce two of them.
+ */
+function addressOf(from: string): string {
+  return /<([^>]+)>/.exec(from)?.[1]?.trim() ?? from.trim();
+}
+
+/**
  * SMTP transport.
  *
  * SMTP rather than a provider-specific SDK because every mainstream service
@@ -64,7 +74,12 @@ export class SmtpMailAdapter implements MailAdapter {
 
   async send(message: MailMessage): Promise<MailResult> {
     const options: MailOptions = {
-      from: this.options.from,
+      // Handed to nodemailer as parts rather than as a string, so it does the
+      // RFC 5322 quoting of a name that contains a comma, a quote or
+      // non-ASCII. The address is ours either way; see `fromName`.
+      from: message.fromName
+        ? { name: message.fromName, address: addressOf(this.options.from) }
+        : this.options.from,
       to: message.to,
       subject: message.subject,
       text: message.text,

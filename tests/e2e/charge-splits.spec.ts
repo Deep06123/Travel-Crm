@@ -71,8 +71,11 @@ test("splits that do not add up to the total fare are refused", async ({
   await openCruiseAccounting(page);
   await fillRequiredCruiseFields(page, "E2ESplitBad");
 
-  await page.locator('input[name="total"]').fill("1800.00");
+  // The total fare is typed at the foot of the splits, which is the only
+  // place the cruise form asks for it — so the splits have to be turned on
+  // before there is anywhere to put it.
   await page.locator('select[name="splitCharges"]').selectOption("true");
+  await page.locator("#totalFareAfterSplits").fill("1800.00");
 
   // 900 + 800 is 1,700, not the 1,800 being charged.
   await page.locator('input[name="splits.0.title"]').fill("Deposit");
@@ -101,8 +104,8 @@ test("a split booking stores the division and shows it back", async ({
   await openCruiseAccounting(page);
   await fillRequiredCruiseFields(page, "E2ESplitGood");
 
-  await page.locator('input[name="total"]').fill("1800.00");
   await page.locator('select[name="splitCharges"]').selectOption("true");
+  await page.locator("#totalFareAfterSplits").fill("1800.00");
 
   await page.locator('input[name="splits.0.title"]').fill("Deposit");
   await page.locator('input[name="splits.0.amount"]').fill("900.00");

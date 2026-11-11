@@ -28,6 +28,17 @@ export interface MailMessage {
   text: string;
   html?: string;
   replyTo?: string | undefined;
+  /**
+   * Display name to show in `From`, over the configured address.
+   *
+   * The address itself is never overridden. Sending as someone else's address
+   * breaks SPF and DKIM alignment — the message is rejected or filed as spam
+   * by any recipient domain publishing a DMARC policy, and it is spoofing. A
+   * display name is just a label on our own address, so a confirmation can
+   * read as coming from the customer while still being sent, and
+   * authenticated, as us.
+   */
+  fromName?: string | undefined;
   attachments?: readonly MailAttachment[] | undefined;
 }
 

@@ -36,7 +36,9 @@ export const dynamic = "force-dynamic";
  */
 const payloadSchema = z.object({
   signatureName: z.string().trim().min(1).max(200),
-  signedPhone: z.string().trim().min(1).max(40),
+  // Optional since the signing page stopped asking for it: what is sent is
+  // the number already on the booking, which may be blank.
+  signedPhone: z.string().trim().max(40).default(""),
   consentText: z.string().trim().min(1).max(2_000),
   device: z.string().trim().max(100).optional(),
   operatingSystem: z.string().trim().max(100).optional(),

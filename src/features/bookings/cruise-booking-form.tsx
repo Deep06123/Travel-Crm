@@ -417,26 +417,20 @@ export function CruiseBookingForm({
           so there is one place a billing detail is entered. */}
       <BillingInformation value={value} error={error} card={card} />
 
-      {/* Five figures, per the review sheet. Currency is no longer chosen
-          per booking: it rides along as a hidden field carrying the operator
-          default, because the service needs it to convert these decimal
-          strings to minor units. */}
+      {/* Supplier and the split charges. Currency is not chosen per booking:
+          it rides along as a hidden field carrying the operator default,
+          because the service needs it to convert the decimal strings the
+          splits are typed in to minor units.
+
+          The cruise fare and the MCO are no longer asked for here, and the
+          total fare is typed where it is checked — at the foot of the splits.
+          It still submits under `total`, so the field is kept as a hidden
+          input for the splits editor to write through to. */}
       <Panel title="Accounting information" defaultOpen={false}>
         <input type="hidden" name="currency" value={options.defaultCurrency} />
+        <input type="hidden" name="total" defaultValue={value("total")} />
 
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          <Field id="baseFare" label="Cruise fare" hint="Digits and a decimal point." error={error("baseFare")}>
-            {(props) => <Input {...props} name="baseFare" inputMode="decimal" placeholder="1800.00" defaultValue={value("baseFare")} />}
-          </Field>
-
-          <Field id="grossMco" label="MCO" hint="Digits and a decimal point." error={error("grossMco")}>
-            {(props) => <Input {...props} name="grossMco" inputMode="decimal" placeholder="1800.00" defaultValue={value("grossMco")} />}
-          </Field>
-
-          <Field id="total" label="Total fare" hint="Digits and a decimal point." error={error("total")}>
-            {(props) => <Input {...props} name="total" inputMode="decimal" placeholder="1800.00" defaultValue={value("total")} />}
-          </Field>
-
           {/* Typed, not picked. The list below is a suggestion of the
               suppliers already on file; a name that is not among them is
               accepted and created with the booking. */}

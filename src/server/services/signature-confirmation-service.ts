@@ -361,8 +361,24 @@ export async function deliverSignatureConfirmation(
     const pdf = await ensureConfirmationPdf(row, evidence);
     const rendered = renderSignatureConfirmation(evidence);
 
+    // Addressed to the office, but written to read as the customer's reply:
+    // the display name is theirs and a reply goes to them rather than to the
+    // account that sent it. The address stays ours — see `MailMessage.fromName`
+    // for why sending as the customer is not an option.
+    //
+    // Only when there is an address to reply to. A `From` name that says
+    // "Grace Hopper" over a Reply-To that silently falls back to the office
+    // would send an answer meant for the customer back to the office.
+    const customerEmail = evidence.recipientEmail.trim();
+
     const { providerReference } = await mailer.adapter.send({
       to: recipient,
+      ...(customerEmail
+        ? {
+            replyTo: customerEmail,
+            fromName: `${evidence.customerName} (customer)`,
+          }
+        : {}),
       subject: rendered.subject,
       text: rendered.text,
       html: rendered.html,

@@ -361,7 +361,9 @@ export async function recordSignature({
         // like any other and is not what the evidence rests on.
         signedAt: new Date(),
         signatureName: claims.signatureName,
-        signedPhone: claims.signedPhone,
+        // Null rather than an empty string: the page no longer asks for a
+        // number, so an absent one is absent, not confirmed as blank.
+        signedPhone: claims.signedPhone.trim() || null,
         consentText: claims.consentText,
         ipAddress,
         userAgent,
@@ -425,7 +427,7 @@ export async function recordSignature({
       headline: "Customer signed the authorization",
       rows: [
         { label: "Signed as", value: claims.signatureName },
-        { label: "Mobile number", value: claims.signedPhone },
+        { label: "Mobile number", value: claims.signedPhone || "Not provided" },
         { label: "Signed at", value: formatDateTime(new Date()) },
         { label: "IP address", value: ipAddress },
         {

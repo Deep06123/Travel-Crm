@@ -1,14 +1,15 @@
 "use client";
 
-import { useState, useSyncExternalStore } from "react";
+import { useState } from "react";
 
 /**
- * The consent the customer agrees to.
+ * The consent recorded against the signature.
  *
- * Exported and submitted with the signature so the stored evidence is the
- * exact sentence that was on screen. Reading the wording out of the component
- * that displayed it — rather than re-stating it on the server — is what makes
- * that true: there is one copy, so the two cannot drift.
+ * No longer displayed on the page — the contact number, the security table and
+ * this sentence were all taken off it — but still submitted and stored, so the
+ * signed record and the confirmation PDF carry the wording the authorization
+ * rests on. Note that it is now recorded rather than agreed to on screen: the
+ * customer's act of consent is pressing "Sign & Confirm Booking".
  */
 export const CONSENT_TEXT =
   "I confirm that I have reviewed the booking details, authorize the electronic " +
@@ -76,57 +77,6 @@ function describeClient() {
   };
 }
 
-/**
- * `describeClient()`, computed once and cached.
- *
- * `useSyncExternalStore` may call the snapshot on any render and compares the
- * result by identity, so handing it a fresh object each time would re-render
- * forever. The description is a property of the browser, not of this component,
- * so one module-level value is also the honest shape for it.
- */
-let cachedClient: ReturnType<typeof describeClient> | null = null;
-
-function clientSnapshot(): ReturnType<typeof describeClient> {
-  return (cachedClient ??= describeClient());
-}
-
-/**
- * `null` on the server and through hydration, so the first client render
- * matches the HTML the server sent and React then re-renders with the real
- * description. Same two-step as the effect this replaces, without a setState
- * in an effect body.
- */
-function serverClientSnapshot(): null {
-  return null;
-}
-
-/** Nothing to subscribe to: the description never changes after it is read. */
-function subscribeToClient(): () => void {
-  return () => {};
-}
-
-/** One line of the security block. `undefined` until the browser value lands. */
-function SecurityRow({
-  label,
-  value,
-  last,
-}: {
-  label: string;
-  value: string | undefined;
-  last?: boolean;
-}) {
-  return (
-    <p
-      className={`flex justify-between gap-3 text-[13px] ${
-        last ? "" : "mb-2.5 border-b border-[#e5e8ef] pb-2.5"
-      }`}
-    >
-      <strong className="text-[#444]">{label}</strong>
-      <span className="break-words text-right">{value ?? "Detecting…"}</span>
-    </p>
-  );
-}
-
 interface Props {
   token: string;
   /** Rendered as the signature and submitted as the name authorized. */
@@ -151,40 +101,12 @@ type Status =
  * treated as a claim.
  */
 export function SignatureForm({ token, customerName, contactPhone }: Props) {
-  const [consented, setConsented] = useState(false);
-  const [phone, setPhone] = useState(contactPhone);
   const [status, setStatus] = useState<Status>({ state: "idle" });
-
-  // Shown as well as submitted, so the customer can see exactly what is being
-  // recorded against their signature before they agree to it. Subscribed to
-  // rather than read during render: on the server `describeClient` returns
-  // blanks, and rendering those first would be a hydration mismatch.
-  const client = useSyncExternalStore(
-    subscribeToClient,
-    clientSnapshot,
-    serverClientSnapshot,
-  );
 
   const signed = status.state === "done";
   const sending = status.state === "sending";
 
   async function submit() {
-    if (!consented) {
-      setStatus({
-        state: "error",
-        message: "Please accept the electronic signature consent.",
-      });
-      return;
-    }
-
-    if (phone.trim() === "") {
-      setStatus({
-        state: "error",
-        message: "Please enter a mobile number we can reach you on.",
-      });
-      return;
-    }
-
     setStatus({ state: "sending" });
 
     try {
@@ -195,7 +117,9 @@ export function SignatureForm({ token, customerName, contactPhone }: Props) {
           headers: { "content-type": "application/json" },
           body: JSON.stringify({
             signatureName: customerName,
-            signedPhone: phone.trim(),
+            // No longer asked for on the page: the number on the booking is
+            // what is recorded, and it may be blank.
+            signedPhone: contactPhone.trim(),
             consentText: CONSENT_TEXT,
             ...describeClient(),
           }),
@@ -242,66 +166,7 @@ export function SignatureForm({ token, customerName, contactPhone }: Props) {
         <small className="text-[#777]">Electronic Signature</small>
       </div>
 
-      <h2 className="mb-2 mt-6 text-base font-semibold text-[#173b70]">
-        Your Contact Number
-      </h2>
-      <label htmlFor="signedPhone" className="sr-only">
-        Mobile number
-      </label>
-      <input
-        id="signedPhone"
-        name="signedPhone"
-        type="tel"
-        inputMode="tel"
-        autoComplete="tel"
-        value={phone}
-        disabled={signed || sending}
-        onChange={(event) => setPhone(event.target.value)}
-        className="w-full rounded-lg border border-[#b9c5d5] px-3 py-3 text-base disabled:bg-[#f5f7fb]"
-        placeholder="e.g. +1 555 0100"
-      />
-      <p className="mt-2 text-xs leading-relaxed text-[#777]">
-        We have filled in the number on your booking. Correct it if we should
-        reach you on a different one — the number you confirm here is recorded
-        with your signature.
-      </p>
-
-      <h2 className="mb-2 mt-6 text-base font-semibold text-[#173b70]">
-        Customer Security Information
-      </h2>
-      <div className="rounded-lg bg-[#f5f7fb] p-4">
-        <SecurityRow label="Device" value={client?.device} />
-        <SecurityRow label="Operating System" value={client?.operatingSystem} />
-        <SecurityRow label="Browser" value={client?.browser} />
-        <SecurityRow label="Screen Size" value={client?.screenSize} />
-        <SecurityRow label="Timezone" value={client?.clientTimezone} />
-        {/* Neither is known to the page: the server reads the address off the
-            request and resolves the location from it, precisely so a client
-            cannot choose either one. */}
-        <SecurityRow label="IP Address" value="Recorded securely by server" />
-        <SecurityRow
-          label="Location"
-          value="Approximate IP location, if available"
-          last
-        />
-      </div>
-
-      <p className="mt-4 text-xs leading-relaxed text-[#777]">
-        Your IP address and approximate location will be recorded by the booking
-        server when you submit your confirmation. IP-based location is
-        approximate and may be inaccurate.
-      </p>
-
-      <label className="my-5 flex items-start gap-2.5 text-[13px] leading-relaxed">
-        <input
-          type="checkbox"
-          className="mt-1"
-          checked={consented}
-          disabled={signed || sending}
-          onChange={(event) => setConsented(event.target.checked)}
-        />
-        <span>{CONSENT_TEXT}</span>
-      </label>
+      <div className="my-5" />
 
       <button
         type="button"
