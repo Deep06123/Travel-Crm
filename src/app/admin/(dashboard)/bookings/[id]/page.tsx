@@ -36,8 +36,8 @@ import { McoControl } from "@/features/bookings/mco-control";
 import { StatusControl } from "@/features/bookings/status-control";
 import { TicketingControl } from "@/features/bookings/ticketing-control";
 import { TicketingReferencesForm } from "@/features/bookings/ticketing-references-form";
-import { BookingFinancialsForm } from "@/features/bookings/booking-financials-form";
 import {
+  AccountingPanel,
   BillingPanel,
   OverviewPanel,
   SailingPanel,
@@ -73,7 +73,6 @@ import {
   getBookingNotifications,
 } from "@/server/services/customer-email-service";
 import { listSendableAccounts } from "@/server/services/mail-account-service";
-import { IN_FLIGHT_REFUND_STATUSES } from "@/lib/financial/refund-rules";
 
 export const metadata: Metadata = { title: "Booking · Travel CRM" };
 
@@ -101,7 +100,13 @@ function withCurrent(
   return [...options, current];
 }
 
-function DetailRow({ label, value }: { label: string; value: React.ReactNode }) {
+function DetailRow({
+  label,
+  value,
+}: {
+  label: string;
+  value: React.ReactNode;
+}) {
   return (
     <div className="flex flex-col gap-0.5 py-1.5">
       <dt className="text-xs font-medium tracking-wide text-ink-muted uppercase">
@@ -292,8 +297,6 @@ export default async function BookingDetailPage({
       : []),
   ];
 
-  const margin = booking.totalMinor - booking.supplierCostMinor;
-
   const splitTotalMinor = booking.chargeSplits.reduce(
     (sum, split) => sum + split.amountMinor,
     0,
@@ -314,18 +317,6 @@ export default async function BookingDetailPage({
       ? formatMoney(position.outstandingBalanceMinor, position.currency)
       : null;
 
-  // Refunds already raised still lay claim to this money, so the ceiling shown
-  // to the operator accounts for them.
-  const inFlightRefundMinor = booking.refunds
-    .filter((refund) =>
-      (IN_FLIGHT_REFUND_STATUSES as readonly string[]).includes(refund.status),
-    )
-    .reduce((sum, refund) => sum + refund.requestedAmountMinor, 0);
-
-  const availableToRefundMinor = Math.max(
-    0,
-    (position?.refundableAmountMinor ?? 0) - inFlightRefundMinor,
-  );
   // A cruise is confirmed by the cruise line rather than ticketed by an
   // airline, so the ticketing panel and ticket-number column do not apply.
   const isCruise = booking.product === "CRUISE";
@@ -348,7 +339,9 @@ export default async function BookingDetailPage({
         actions={
           <div className="flex items-center gap-2">
             <BookingStatusBadge status={booking.status} />
-            {isCruise ? null : <TicketStatusBadge status={booking.ticketStatus} />}
+            {isCruise ? null : (
+              <TicketStatusBadge status={booking.ticketStatus} />
+            )}
             <PriorityBadge level={booking.priority} />
           </div>
         }
@@ -363,13 +356,19 @@ export default async function BookingDetailPage({
             bookingTypes={withCurrent(
               bookingTypes.map((type) => ({ id: type.id, name: type.label })),
               booking.bookingType
-                ? { id: booking.bookingType.id, name: booking.bookingType.label }
+                ? {
+                    id: booking.bookingType.id,
+                    name: booking.bookingType.label,
+                  }
                 : null,
             )}
             agents={withCurrent(
               agents,
               booking.assignedAgent
-                ? { id: booking.assignedAgent.id, name: booking.assignedAgent.name }
+                ? {
+                    id: booking.assignedAgent.id,
+                    name: booking.assignedAgent.name,
+                  }
                 : null,
             )}
             suppliers={withCurrent(
@@ -392,13 +391,25 @@ export default async function BookingDetailPage({
             }}
           >
             <dl className="grid gap-x-6 sm:grid-cols-2 lg:grid-cols-3">
-              <DetailRow label="Booking type" value={booking.bookingType?.label} />
-              <DetailRow label="Charge outcome" value={humanise(booking.chargeOutcome)} />
+              <DetailRow
+                label="Booking type"
+                value={booking.bookingType?.label}
+              />
+              <DetailRow
+                label="Charge outcome"
+                value={humanise(booking.chargeOutcome)}
+              />
               <DetailRow label="Source" value={booking.source} />
               <DetailRow label="Language" value={booking.language} />
-              <DetailRow label="Booked" value={formatDateTime(booking.bookedAt)} />
+              <DetailRow
+                label="Booked"
+                value={formatDateTime(booking.bookedAt)}
+              />
               <DetailRow label="Created by" value={booking.createdBy?.name} />
-              <DetailRow label="Assigned agent" value={booking.assignedAgent?.name} />
+              <DetailRow
+                label="Assigned agent"
+                value={booking.assignedAgent?.name}
+              />
               <DetailRow label="Supplier" value={booking.supplier?.name} />
               {/* The MCO panel in the right column owns both of these for
                   anyone who can change them. Repeated here only for the roles
@@ -477,12 +488,19 @@ export default async function BookingDetailPage({
           {booking.flightDetail ? (
             <Panel title="Itinerary" collapsible={false}>
               <dl className="mb-4 grid gap-x-6 sm:grid-cols-2 lg:grid-cols-4">
-                <DetailRow label="PNR" value={booking.flightDetail.pnrLocator} />
-                <DetailRow label="Airline" value={booking.flightDetail.airline} />
+                <DetailRow
+                  label="PNR"
+                  value={booking.flightDetail.pnrLocator}
+                />
+                <DetailRow
+                  label="Airline"
+                  value={booking.flightDetail.airline}
+                />
                 <DetailRow
                   label="Route"
                   value={
-                    booking.flightDetail.origin && booking.flightDetail.destination
+                    booking.flightDetail.origin &&
+                    booking.flightDetail.destination
                       ? `${booking.flightDetail.origin} → ${booking.flightDetail.destination}`
                       : null
                   }
@@ -539,7 +557,9 @@ export default async function BookingDetailPage({
                         <Td className="whitespace-nowrap">
                           {formatDateTime(segment.arrivalAt)}
                         </Td>
-                        <Td className="text-ink-muted">{segment.bookingClass ?? "—"}</Td>
+                        <Td className="text-ink-muted">
+                          {segment.bookingClass ?? "—"}
+                        </Td>
                       </Tr>
                     ))
                   )}
@@ -584,6 +604,7 @@ export default async function BookingDetailPage({
                 cruiseLine: booking.cruiseDetail.cruiseLine,
                 ship: booking.cruiseDetail.ship ?? "",
                 reservationNumber: booking.cruiseDetail.reservationNumber ?? "",
+                confirmationReference: booking.airlineConfirmation ?? "",
                 sailingName: booking.cruiseDetail.sailingName ?? "",
                 specialRequest: booking.cruiseDetail.specialRequest ?? "",
                 departurePort: booking.cruiseDetail.departurePort ?? "",
@@ -605,11 +626,18 @@ export default async function BookingDetailPage({
               }}
             >
               <dl className="grid gap-x-6 sm:grid-cols-2 lg:grid-cols-4">
-                <DetailRow label="Cruise line" value={booking.cruiseDetail.cruiseLine} />
+                <DetailRow
+                  label="Cruise line"
+                  value={booking.cruiseDetail.cruiseLine}
+                />
                 <DetailRow label="Ship" value={booking.cruiseDetail.ship} />
                 <DetailRow
                   label="Reservation no."
                   value={booking.cruiseDetail.reservationNumber}
+                />
+                <DetailRow
+                  label="Cruise line confirmation"
+                  value={booking.airlineConfirmation}
                 />
                 <DetailRow
                   label="Nights"
@@ -627,7 +655,10 @@ export default async function BookingDetailPage({
                   label="Departs from"
                   value={booking.cruiseDetail.departurePort}
                 />
-                <DetailRow label="Arrives at" value={booking.cruiseDetail.arrivalPort} />
+                <DetailRow
+                  label="Arrives at"
+                  value={booking.cruiseDetail.arrivalPort}
+                />
                 <DetailRow
                   label="Sail date"
                   value={formatCalendarDate(booking.cruiseDetail.sailDate)}
@@ -636,8 +667,14 @@ export default async function BookingDetailPage({
                   label="Return date"
                   value={formatCalendarDate(booking.cruiseDetail.returnDate)}
                 />
-                <DetailRow label="Deck" value={booking.cruiseDetail.deckNumber} />
-                <DetailRow label="Cabin" value={booking.cruiseDetail.cabinNumber} />
+                <DetailRow
+                  label="Deck"
+                  value={booking.cruiseDetail.deckNumber}
+                />
+                <DetailRow
+                  label="Cabin"
+                  value={booking.cruiseDetail.cabinNumber}
+                />
                 <DetailRow
                   label="Cabin category"
                   value={booking.cruiseDetail.cabinCategory}
@@ -652,11 +689,19 @@ export default async function BookingDetailPage({
                 />
                 <DetailRow
                   label="Gratuities"
-                  value={booking.cruiseDetail.gratuitiesIncluded ? "Included" : "Not included"}
+                  value={
+                    booking.cruiseDetail.gratuitiesIncluded
+                      ? "Included"
+                      : "Not included"
+                  }
                 />
                 <DetailRow
                   label="Insurance"
-                  value={booking.cruiseDetail.insuranceIncluded ? "Included" : "Not included"}
+                  value={
+                    booking.cruiseDetail.insuranceIncluded
+                      ? "Included"
+                      : "Not included"
+                  }
                 />
               </dl>
 
@@ -687,7 +732,6 @@ export default async function BookingDetailPage({
                   {booking.cruiseDetail.assistanceNotes}
                 </p>
               ) : null}
-
             </SailingPanel>
           ) : null}
 
@@ -740,13 +784,18 @@ export default async function BookingDetailPage({
               </Thead>
               <Tbody>
                 {passengers.length === 0 ? (
-                  <EmptyState colSpan={canViewSensitive ? 6 : 4} title="No passengers recorded" />
+                  <EmptyState
+                    colSpan={canViewSensitive ? 6 : 4}
+                    title="No passengers recorded"
+                  />
                 ) : (
                   passengers.map((passenger) => (
                     <Tr key={passenger.id}>
                       <Td numeric>{passenger.sequence}</Td>
                       <Td>{fullName(passenger)}</Td>
-                      <Td className="text-ink-muted">{humanise(passenger.type)}</Td>
+                      <Td className="text-ink-muted">
+                        {humanise(passenger.type)}
+                      </Td>
                       {canViewSensitive ? (
                         <Td className="text-ink-muted">
                           {formatCalendarDate(passenger.dateOfBirth)}
@@ -758,102 +807,91 @@ export default async function BookingDetailPage({
                         </Td>
                       ) : null}
                       <Td className="text-ink-muted">
-                        {(isCruise ? passenger.cabinNumber : passenger.ticketNumber) ?? "—"}
+                        {(isCruise
+                          ? passenger.cabinNumber
+                          : passenger.ticketNumber) ?? "—"}
                       </Td>
                     </Tr>
                   ))
                 )}
               </Tbody>
             </TableShell>
-
           </TravellersPanel>
 
           {!isCruise ? (
-          <Panel title="Ticketing" collapsible={false}>
-            <dl className="grid gap-x-6 sm:grid-cols-2 lg:grid-cols-3">
-              <DetailRow
-                label="Ticket status"
-                value={<TicketStatusBadge status={booking.ticketStatus} />}
-              />
-              <DetailRow label="Airline confirmation" value={booking.airlineConfirmation} />
-              <DetailRow label="Supplier reference" value={booking.ticketingReference} />
-              <DetailRow label="Ticketed at" value={formatDateTime(booking.ticketedAt)} />
-            </dl>
-            {booking.ticketingNotes ? (
-              <p className="mt-3 rounded-md bg-surface-muted p-3 text-sm whitespace-pre-wrap text-ink">
-                {booking.ticketingNotes}
-              </p>
-            ) : null}
+            <Panel title="Ticketing" collapsible={false}>
+              <dl className="grid gap-x-6 sm:grid-cols-2 lg:grid-cols-3">
+                <DetailRow
+                  label="Ticket status"
+                  value={<TicketStatusBadge status={booking.ticketStatus} />}
+                />
+                <DetailRow
+                  label="Airline confirmation"
+                  value={booking.airlineConfirmation}
+                />
+                <DetailRow
+                  label="Supplier reference"
+                  value={booking.ticketingReference}
+                />
+                <DetailRow
+                  label="Ticketed at"
+                  value={formatDateTime(booking.ticketedAt)}
+                />
+              </dl>
+              {booking.ticketingNotes ? (
+                <p className="mt-3 rounded-md bg-surface-muted p-3 text-sm whitespace-pre-wrap text-ink">
+                  {booking.ticketingNotes}
+                </p>
+              ) : null}
 
-            {/* Before the issue form, because it is the thing that unblocks
+              {/* Before the issue form, because it is the thing that unblocks
                 it: the gate reads `airlineConfirmation`, which until now could
                 only be set when the booking was created — before the airline
                 had sent one back. Hidden once issued, for the same reason the
                 issue form is: the confirmation is the evidence the ticket was
                 issued against, not something to revise afterwards. */}
-            {canUpdateBooking && booking.ticketStatus !== "ISSUED" ? (
-              <TicketingReferencesForm
-                bookingId={booking.id}
-                airlineConfirmation={booking.airlineConfirmation}
-                ticketingReference={booking.ticketingReference}
-              />
-            ) : null}
+              {canUpdateBooking && booking.ticketStatus !== "ISSUED" ? (
+                <TicketingReferencesForm
+                  bookingId={booking.id}
+                  airlineConfirmation={booking.airlineConfirmation}
+                  ticketingReference={booking.ticketingReference}
+                />
+              ) : null}
 
-            {/* Hidden once issued: re-issuing is a void-and-reissue, which is a
+              {/* Hidden once issued: re-issuing is a void-and-reissue, which is a
                 different operation with its own consequences, not this form
                 submitted twice. The service refuses it either way. */}
-            {canUpdateBooking && booking.ticketStatus !== "ISSUED" ? (
-              <TicketingControl
-                bookingId={booking.id}
-                outstandingLabel={outstandingLabel}
-                passengers={booking.passengers.map((passenger) => ({
-                  id: passenger.id,
-                  fullName: fullName(passenger),
-                  ticketNumber: passenger.ticketNumber,
-                }))}
-              />
-            ) : null}
-          </Panel>
+              {canUpdateBooking && booking.ticketStatus !== "ISSUED" ? (
+                <TicketingControl
+                  bookingId={booking.id}
+                  outstandingLabel={outstandingLabel}
+                  passengers={booking.passengers.map((passenger) => ({
+                    id: passenger.id,
+                    fullName: fullName(passenger),
+                    ticketNumber: passenger.ticketNumber,
+                  }))}
+                />
+              ) : null}
+            </Panel>
           ) : null}
 
           {canViewPayments ? (
-            <Panel title="Accounting" collapsible={false}>
+            <AccountingPanel
+              bookingId={booking.id}
+              canEdit={canUpdateBooking}
+              splitCharges={booking.splitCharges}
+              splits={booking.chargeSplits.map((split) => ({
+                title: split.title,
+                amount: minorToDecimalString(
+                  split.amountMinor,
+                  booking.currency,
+                ),
+              }))}
+              currency={booking.currency}
+              totalMinor={booking.totalMinor}
+              formatTotal={formatMoney(booking.totalMinor, booking.currency)}
+            >
               <dl className="grid gap-x-6 sm:grid-cols-2 lg:grid-cols-3">
-                <DetailRow label="Currency" value={booking.currency} />
-                <DetailRow
-                  label="Base fare"
-                  value={formatMoney(booking.baseFareMinor, booking.currency)}
-                />
-                <DetailRow
-                  label="Taxes and fees"
-                  value={formatMoney(booking.taxesFeesMinor, booking.currency)}
-                />
-                <DetailRow
-                  label="Gross booking value"
-                  value={formatMoney(booking.totalMinor, booking.currency)}
-                />
-                <DetailRow
-                  label="Supplier cost"
-                  value={formatMoney(booking.supplierCostMinor, booking.currency)}
-                />
-                <DetailRow
-                  label="Margin"
-                  value={
-                    <span
-                      className={margin < 0 ? "text-status-danger" : undefined}
-                    >
-                      {formatMoney(margin, booking.currency)}
-                    </span>
-                  }
-                />
-                <DetailRow
-                  label="Gross MCO"
-                  value={formatMoney(booking.grossMcoMinor, booking.currency)}
-                />
-                <DetailRow
-                  label="Net MCO"
-                  value={formatMoney(booking.netMcoMinor, booking.currency)}
-                />
                 <DetailRow
                   label="Split charges"
                   value={booking.splitCharges ? "Yes" : "No"}
@@ -907,106 +945,12 @@ export default async function BookingDetailPage({
                 </div>
               ) : null}
 
-              {position ? (
-                <>
-                  <h3 className="mt-4 mb-1 text-sm font-semibold text-ink">
-                    Position
-                  </h3>
-                  <dl className="grid gap-x-6 sm:grid-cols-2 lg:grid-cols-3">
-                    <DetailRow
-                      label="Collected"
-                      value={formatMoney(position.amountCollectedMinor, position.currency)}
-                    />
-                    <DetailRow
-                      label="Refunded"
-                      value={formatMoney(position.amountRefundedMinor, position.currency)}
-                    />
-                    <DetailRow
-                      label="Net collected"
-                      value={formatMoney(position.netCollectedMinor, position.currency)}
-                    />
-                    <DetailRow
-                      label="Outstanding"
-                      value={
-                        <span
-                          className={
-                            position.outstandingBalanceMinor > 0
-                              ? "font-medium text-status-warning"
-                              : undefined
-                          }
-                        >
-                          {formatMoney(
-                            position.outstandingBalanceMinor,
-                            position.currency,
-                          )}
-                        </span>
-                      }
-                    />
-                    <DetailRow
-                      label="Refundable"
-                      value={formatMoney(availableToRefundMinor, position.currency)}
-                    />
-                    <DetailRow
-                      label="Disputed"
-                      value={formatMoney(position.amountDisputedMinor, position.currency)}
-                    />
-                  </dl>
-                </>
-              ) : null}
-
-              <p className="mt-3 text-xs text-ink-muted">
-                Gross booking value is what the customer is charged. Collected is
-                what has actually been captured. The two are tracked separately
-                and routinely differ.
-              </p>
-
-              {canUpdateBooking ? (
-                <BookingFinancialsForm
-                  bookingId={booking.id}
-                  currency={booking.currency}
-                  amounts={{
-                    baseFare: minorToDecimalString(
-                      booking.baseFareMinor,
-                      booking.currency,
-                    ),
-                    taxesFees: minorToDecimalString(
-                      booking.taxesFeesMinor,
-                      booking.currency,
-                    ),
-                    total: minorToDecimalString(
-                      booking.totalMinor,
-                      booking.currency,
-                    ),
-                    supplierCost: minorToDecimalString(
-                      booking.supplierCostMinor,
-                      booking.currency,
-                    ),
-                    grossMco: minorToDecimalString(
-                      booking.grossMcoMinor,
-                      booking.currency,
-                    ),
-                    netMco: minorToDecimalString(
-                      booking.netMcoMinor,
-                      booking.currency,
-                    ),
-                  }}
-                  splitCharges={booking.splitCharges}
-                  splits={booking.chargeSplits.map((split) => ({
-                    title: split.title,
-                    amount: minorToDecimalString(
-                      split.amountMinor,
-                      booking.currency,
-                    ),
-                  }))}
-                />
-              ) : null}
-
               {booking.financialNotes ? (
                 <p className="mt-3 rounded-md bg-surface-muted p-3 text-sm whitespace-pre-wrap text-ink">
                   {booking.financialNotes}
                 </p>
               ) : null}
-            </Panel>
+            </AccountingPanel>
           ) : null}
 
           <Panel
@@ -1032,17 +976,24 @@ export default async function BookingDetailPage({
             ) : (
               <ul className="mb-4 divide-y divide-line">
                 {booking.documents.map((document) => (
-                  <li key={document.id} className="flex items-center justify-between gap-3 py-2">
+                  <li
+                    key={document.id}
+                    className="flex items-center justify-between gap-3 py-2"
+                  >
                     <div className="min-w-0">
-                      <p className="truncate text-sm text-ink">{document.title}</p>
+                      <p className="truncate text-sm text-ink">
+                        {document.title}
+                      </p>
                       <p className="text-xs text-ink-muted">
-                        {humanise(document.category)} · {formatDate(document.createdAt)}
+                        {humanise(document.category)} ·{" "}
+                        {formatDate(document.createdAt)}
                       </p>
                     </div>
                     <div className="flex shrink-0 items-center gap-2">
                       {/* A self-generated PDF is labelled as such; it is never
                           presented as something the provider issued. */}
-                      {document.origin === DocumentOrigin.INTERNALLY_GENERATED ? (
+                      {document.origin ===
+                      DocumentOrigin.INTERNALLY_GENERATED ? (
                         <Badge tone="warning">Internally generated</Badge>
                       ) : null}
                       {canViewDocuments ? (
@@ -1182,7 +1133,9 @@ export default async function BookingDetailPage({
                         }
                       >
                         Due {formatCalendarDate(followUp.dueAt)}
-                        {followUp.assignee ? ` · ${followUp.assignee.name}` : ""}
+                        {followUp.assignee
+                          ? ` · ${followUp.assignee.name}`
+                          : ""}
                       </p>
                     </li>
                   );
@@ -1211,20 +1164,26 @@ export default async function BookingDetailPage({
                     <div className="mb-1 flex items-center gap-2">
                       <Badge
                         tone={
-                          comment.visibility === CommentVisibility.CUSTOMER_FACING
+                          comment.visibility ===
+                          CommentVisibility.CUSTOMER_FACING
                             ? "info"
                             : "neutral"
                         }
                       >
-                        {comment.visibility === CommentVisibility.CUSTOMER_FACING
+                        {comment.visibility ===
+                        CommentVisibility.CUSTOMER_FACING
                           ? "Customer-facing"
                           : "Internal"}
                       </Badge>
                       {comment.category ? (
-                        <span className="text-xs text-ink-muted">{comment.category}</span>
+                        <span className="text-xs text-ink-muted">
+                          {comment.category}
+                        </span>
                       ) : null}
                     </div>
-                    <p className="text-sm whitespace-pre-wrap text-ink">{comment.body}</p>
+                    <p className="text-sm whitespace-pre-wrap text-ink">
+                      {comment.body}
+                    </p>
                     <p className="mt-1 text-xs text-ink-muted">
                       {comment.author?.name ?? "Unknown"} ·{" "}
                       {formatDateTime(comment.createdAt)}
@@ -1254,7 +1213,9 @@ export default async function BookingDetailPage({
                 <li key={entry.id} className="py-2">
                   <p className="text-sm text-ink">
                     {entry.fromStatus ? `${humanise(entry.fromStatus)} → ` : ""}
-                    <span className="font-medium">{humanise(entry.toStatus)}</span>
+                    <span className="font-medium">
+                      {humanise(entry.toStatus)}
+                    </span>
                   </p>
                   {entry.reason ? (
                     <p className="text-xs text-ink-muted">{entry.reason}</p>

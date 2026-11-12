@@ -36,6 +36,34 @@ export interface AuthorizationChargeSplit {
   amountMinor: number;
 }
 
+/**
+ * The sailing as the booking records it, for the cruise details table.
+ *
+ * Wider than `CruiseSummary` on `BookingEmailData`, which carries only what the
+ * e-ticket's one-line itinerary needs. The cardholder is being asked to agree
+ * to a specific cabin on a specific sailing, so the authorization prints the
+ * same fields the operator sees on the booking.
+ */
+export interface AuthorizationSailing {
+  cruiseLine: string;
+  ship: string | null;
+  reservationNumber: string | null;
+  sailingName: string | null;
+  specialRequest: string | null;
+  departurePort: string | null;
+  arrivalPort: string | null;
+  sailDate: Date | null;
+  returnDate: Date | null;
+  nights: number | null;
+  deckNumber: string | null;
+  cabinNumber: string | null;
+  cabinCategory: string | null;
+  cabinCount: number | null;
+  diningPreference: string | null;
+  gratuitiesIncluded: boolean;
+  insuranceIncluded: boolean;
+}
+
 export interface BookingAuthorizationData extends BookingEmailData {
   /** When the booking was taken, shown in the authorization block. */
   bookedAt: Date;
@@ -47,6 +75,8 @@ export interface BookingAuthorizationData extends BookingEmailData {
   billingAddress: string | null;
   /** Empty when the total is taken as a single charge. */
   chargeSplits: readonly AuthorizationChargeSplit[];
+  /** Null on a flight booking, and on a cruise with no detail record. */
+  sailing?: AuthorizationSailing | null;
 }
 
 const CELL = "padding:8px 10px;border:1px solid #d9dee5;font-size:13px;";
@@ -103,6 +133,107 @@ function chargeLines(data: BookingAuthorizationData): string[] {
     ),
     "The sum charged will be the same as the total quoted above.",
   ];
+}
+
+/**
+ * The sailing block, as the rows that have something to say.
+ *
+ * Empty fields are dropped rather than printed as a dash: the table is read as
+ * a statement of what was booked, and a column of em dashes reads as missing
+ * information rather than as detail that does not apply.
+ */
+function sailingPairs(sailing: AuthorizationSailing): Array<[string, string]> {
+  const rows: Array<[string, string | null]> = [
+    ["Cruise line", sailing.cruiseLine],
+    ["Ship", sailing.ship],
+    ["Reservation no.", sailing.reservationNumber],
+    ["Sailing", sailing.sailingName],
+    ["Departs from", sailing.departurePort],
+    ["Arrives at", sailing.arrivalPort],
+    ["Sail date", sailing.sailDate ? formatTicketDate(sailing.sailDate) : null],
+    [
+      "Return date",
+      sailing.returnDate ? formatTicketDate(sailing.returnDate) : null,
+    ],
+    ["Nights", sailing.nights === null ? null : String(sailing.nights)],
+    ["Deck", sailing.deckNumber],
+    ["Cabin", sailing.cabinNumber],
+    ["Cabin category", sailing.cabinCategory],
+    [
+      "Cabins held",
+      sailing.cabinCount === null ? null : String(sailing.cabinCount),
+    ],
+    ["Dining", sailing.diningPreference],
+    ["Gratuities", sailing.gratuitiesIncluded ? "Included" : "Not included"],
+    ["Insurance", sailing.insuranceIncluded ? "Included" : "Not included"],
+    ["Special request", sailing.specialRequest],
+  ];
+
+  return rows.flatMap(([label, value]) => {
+    const text = value?.trim();
+    return text ? [[label, text] as [string, string]] : [];
+  });
+}
+
+/** The sailing table, or nothing at all on a booking that has no sailing. */
+function sailingSection(data: BookingAuthorizationData): string {
+  const pairs = data.sailing ? sailingPairs(data.sailing) : [];
+  if (pairs.length === 0) return "";
+
+  return `${sectionHeading("Sailing Details")}
+
+  <tr><td style="padding:16px 20px;">
+    <table role="presentation" cellpadding="0" cellspacing="0" style="width:100%;border-collapse:collapse;">
+      ${pairs.map(([label, value]) => labelledRow(label, value)).join("")}
+    </table>
+  </td></tr>`;
+}
+
+/** The same sailing detail for the plain-text part. */
+function sailingText(data: BookingAuthorizationData): string[] {
+  const pairs = data.sailing ? sailingPairs(data.sailing) : [];
+  if (pairs.length === 0) return [];
+
+  return [
+    "",
+    "Sailing details:",
+    ...pairs.map(([label, value]) => `${label}: ${value}`),
+  ];
+}
+
+/**
+ * The charges as a table, matching the authorization block above it.
+ *
+ * The total is stated first and the splits beneath it, each on its own row, so
+ * the figure the cardholder agreed to and the figures that will appear on their
+ * statement are read side by side rather than out of a paragraph.
+ */
+function chargeRows(data: BookingAuthorizationData): string {
+  const isCruise = data.product === "CRUISE";
+  const total = formatMoney(data.totalMinor, data.currency);
+
+  const splits = data.chargeSplits
+    .map((split, index) =>
+      labelledRow(
+        split.title?.trim() || `Charge ${index + 1}`,
+        formatMoney(split.amountMinor, data.currency),
+      ),
+    )
+    .join("");
+
+  return [
+    labelledRow(
+      `Total ${isCruise ? "cruise" : "flight"} booking amount`,
+      total,
+    ),
+    labelledRow(
+      "How it will be charged",
+      data.chargeSplits.length === 0
+        ? "As a single transaction"
+        : `In ${data.chargeSplits.length} transactions, as below`,
+    ),
+    splits,
+  ].join("");
 }
 
 const ACKNOWLEDGEMENT =
@@ -226,6 +357,8 @@ export function renderBookingAuthorization(
     ...message.flatMap((part) => [part, ""]),
     `Booking ID: ${data.bookingNumber}`,
     `Confirmation: ${confirmation}`,
+    ...sailingText(data),
+    ...(data.sailing ? [""] : []),
     `Booked on: ${formatTicketDate(data.bookedAt)}`,
     ...(card ? [`Payment method: ${card}`] : []),
     ...(data.cardHolderName ? [`Card holder: ${data.cardHolderName}`] : []),
@@ -293,6 +426,8 @@ export function renderBookingAuthorization(
     </table>
   </td></tr>
 
+  ${sailingSection(data)}
+
   ${sectionHeading("Credit Card Authorization Details")}
 
   <tr><td style="padding:16px 20px;">
@@ -311,13 +446,14 @@ export function renderBookingAuthorization(
   ${sectionHeading("Total Charges & Authorization")}
 
   <tr><td style="padding:16px 20px;">
-    <p style="margin:0 0 10px;font-size:14px;"><strong>Total ${isCruise ? "cruise" : "flight"} booking amount:</strong> <span style="color:#0000cc;font-weight:bold;">${escapeHtml(total)}</span></p>
-    ${charges
-      .map(
-        (line) =>
-          `<p style="margin:0 0 6px;font-size:13px;color:#444444;">${escapeHtml(line)}</p>`,
-      )
-      .join("")}
+    <table role="presentation" cellpadding="0" cellspacing="0" style="width:100%;border-collapse:collapse;">
+      ${chargeRows(data)}
+    </table>
+    ${
+      data.chargeSplits.length > 0
+        ? `<p style="margin:12px 0 0;font-size:13px;color:#555555;">The sum charged will be the same as the total quoted above.</p>`
+        : ""
+    }
     <p style="margin:16px 0 0;font-size:13px;line-height:1.6;color:#333333;">${escapeHtml(ACKNOWLEDGEMENT)}</p>
   </td></tr>
 

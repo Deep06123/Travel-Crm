@@ -168,6 +168,13 @@ export const cruiseDetailSchema = z
     cruiseLine: requiredText(120, "Enter a cruise line."),
     ship: optionalText(120),
     reservationNumber: optionalText(60),
+    /**
+     * Lives on the booking, not the sailing, and is edited here because this
+     * is the only panel a cruise booking has for it — the Ticketing panel that
+     * carries it on a flight is not rendered for a cruise. It is what the
+     * authorization email prints as "Your Confirmation No.".
+     */
+    confirmationReference: optionalText(100),
     sailingName: optionalText(200),
     specialRequest: optionalText(500),
     departurePort: optionalText(120),
@@ -190,7 +197,10 @@ export const cruiseDetailSchema = z
       data.returnDate === undefined ||
       data.sailDate === undefined ||
       data.returnDate >= data.sailDate,
-    { message: "The return date cannot be before sailing.", path: ["returnDate"] },
+    {
+      message: "The return date cannot be before sailing.",
+      path: ["returnDate"],
+    },
   );
 
 export type CruiseDetailInput = z.infer<typeof cruiseDetailSchema>;
@@ -224,4 +234,18 @@ export type TravellerEditInput = z.infer<typeof travellerEditSchema>;
 
 export const travellersEditSchema = z.object({
   bookingId: requiredText(40, "Missing booking."),
+});
+
+/**
+ * Turning the split-charges flag on or off.
+ *
+ * A select submits the string, so the boolean is parsed rather than coerced:
+ * `Boolean("false")` is true, which would make "No" indistinguishable from
+ * "Yes" and silently leave a booking marked as split.
+ */
+export const chargeSplitsEditSchema = z.object({
+  bookingId: requiredText(40, "Missing booking."),
+  splitCharges: z
+    .enum(["true", "false"])
+    .transform((value) => value === "true"),
 });

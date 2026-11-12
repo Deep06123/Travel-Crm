@@ -234,6 +234,7 @@ export async function updateCruiseDetail(
         bookingNumber: true,
         travelStartDate: true,
         travelEndDate: true,
+        airlineConfirmation: true,
         cruiseDetail: true,
       },
     });
@@ -267,7 +268,25 @@ export async function updateCruiseDetail(
       itineraryHtml: sanitiseRichText(input.itineraryHtml),
     };
 
-    const changes = diff(booking.cruiseDetail, after);
+    // The confirmation reference sits on the booking rather than the sailing,
+    // so it is diffed against the booking and merged in: one save, one audit
+    // entry, whichever of the two rows the operator actually changed.
+    const confirmation = input.confirmationReference ?? null;
+    const confirmationChanged =
+      confirmation !== (booking.airlineConfirmation ?? null);
+
+    const changes = {
+      ...diff(booking.cruiseDetail, after),
+      ...(confirmationChanged
+        ? {
+            airlineConfirmation: {
+              before: booking.airlineConfirmation,
+              after: confirmation,
+            },
+          }
+        : {}),
+    };
+
     if (Object.keys(changes).length === 0) {
       return {
         bookingId: booking.id,
@@ -291,6 +310,7 @@ export async function updateCruiseDetail(
         travelStartDate: after.sailDate,
         travelEndDate: after.returnDate,
         priority: derivePriority(after.sailDate ?? undefined, new Date()),
+        airlineConfirmation: confirmation,
       },
     });
 
@@ -315,6 +335,134 @@ export async function updateCruiseDetail(
 }
 
 // --- Guests and passengers --------------------------------------------------
+
+// --- Charge splits ----------------------------------------------------------
+
+/** A split, with its amount already converted against the booking currency. */
+export interface ChargeSplitEdit {
+  title: string;
+  amountMinor: number;
+}
+
+/**
+ * Corrects how a booking's total is divided.
+ *
+ * Only `splitCharges` and the split rows. The amounts that make up the total —
+ * base fare, taxes, supplier cost — are money, and money is
+ * `updateBookingFinancials`'s to write. A division is a description of a total
+ * rather than a total, so correcting one must not be a way to quietly restate
+ * the other.
+ *
+ * The rows are replaced wholesale rather than diffed one by one: they have no
+ * identity worth preserving — "the 900.00 deposit" is the whole of what one is
+ * — and a replace cannot leave a half-applied division behind. Nothing points
+ * at a split row; which card a charge actually went to is on the Payment.
+ *
+ * Turning the flag off clears the rows rather than leaving them stored against
+ * a booking that no longer claims to be split, which would be a division
+ * nothing on screen admits to.
+ */
+export async function updateChargeSplits(
+  input: {
+    bookingId: string;
+    splitCharges: boolean;
+    splits: ChargeSplitEdit[];
+  },
+  actorId: string,
+): Promise<BookingEditResult> {
+  const { bookingId, splitCharges, splits } = input;
+
+  return prisma.$transaction(async (tx) => {
+    const booking = await tx.booking.findUnique({
+      where: { id: bookingId },
+      select: {
+        id: true,
+        bookingNumber: true,
+        currency: true,
+        splitCharges: true,
+        chargeSplits: {
+          select: { title: true, amountMinor: true },
+          orderBy: { sequence: "asc" as const },
+        },
+      },
+    });
+
+    if (!booking) throw new BookingNotFoundError(bookingId);
+
+    const wanted = splitCharges ? splits : [];
+
+    const describe = (rows: readonly ChargeSplitEdit[]) =>
+      rows.length === 0
+        ? "none"
+        : rows
+            .map(
+              (row) => `${row.title}: ${row.amountMinor} ${booking.currency}`,
+            )
+            .join("; ");
+
+    const changes: Changes = {};
+
+    if (booking.splitCharges !== splitCharges) {
+      changes["splitCharges"] = {
+        before: label(booking.splitCharges),
+        after: label(splitCharges),
+      };
+    }
+
+    const before = describe(booking.chargeSplits);
+    const after = describe(wanted);
+
+    if (before !== after) {
+      changes["chargeSplits"] = { before, after };
+    }
+
+    // Nothing moved: no write, and no audit entry claiming one happened.
+    if (Object.keys(changes).length === 0) {
+      return {
+        bookingId: booking.id,
+        bookingNumber: booking.bookingNumber,
+        changed: 0,
+      };
+    }
+
+    await tx.booking.update({
+      where: { id: booking.id },
+      data: {
+        splitCharges,
+        ...(before !== after
+          ? {
+              chargeSplits: {
+                deleteMany: {},
+                create: wanted.map((split, index) => ({
+                  sequence: index + 1,
+                  title: split.title,
+                  amountMinor: split.amountMinor,
+                })),
+              },
+            }
+          : {}),
+      },
+    });
+
+    await recordAudit(
+      {
+        action: AuditAction.UPDATE,
+        entityType: "Booking",
+        entityId: booking.id,
+        adminUserId: actorId,
+        summary: `Updated the charge splits on booking ${booking.bookingNumber}`,
+        changes,
+      },
+      tx,
+    );
+
+    return {
+      bookingId: booking.id,
+      bookingNumber: booking.bookingNumber,
+      changed: Object.keys(changes).length,
+    };
+  });
+}
 
 export class TicketedTravellerError extends Error {
   constructor(public readonly names: string[]) {

@@ -18,6 +18,7 @@ import {
   MissingEvidenceError,
   ReasonRequiredError,
 } from "@/lib/bookings/status";
+import { McoNotUpdatableError } from "@/lib/bookings/mco";
 import { prisma } from "@/lib/db/prisma";
 import {
   BookingNotDeletableError,
@@ -26,6 +27,7 @@ import {
   listBookings,
 } from "@/server/services/booking-service";
 import { transitionBooking } from "@/server/services/booking-status-service";
+import { updateMco } from "@/server/services/mco-service";
 import { flushPendingBookingEmails } from "@/server/services/customer-email-service";
 
 /**
@@ -40,6 +42,10 @@ const SUFFIX = Date.now();
 let actorId: string;
 let customerId: string;
 const bookingIds: string[] = [];
+/** Reference rows this file creates, cleaned up with the rest. */
+const mcoSupplierIds: string[] = [];
+/** Keeps each fixture signature's token hash unique within the run. */
+let signatureCount = 0;
 
 interface BookingOverrides {
   status?: BookingStatus;
@@ -49,11 +55,63 @@ interface BookingOverrides {
   airlineConfirmation?: string | undefined;
   ticketNumber?: string | undefined;
   withPassenger?: boolean;
+  /** Defaults to a real amount, which is what opens the MCO as Pending. */
+  grossMcoMinor?: number;
+  netMcoMinor?: number;
 }
 
 /** A date `days` from now, for exercising the derived priority thresholds. */
 function inDays(days: number): Date {
   return new Date(Date.now() + days * 24 * 60 * 60 * 1_000);
+}
+
+/**
+ * One authorization request against a booking, written directly.
+ *
+ * Not through `sendAuthorizationEmail`, which mints a token, revokes earlier
+ * rows and talks to a mail server. What the list reads is the stored shape,
+ * and these cases are about how several rows are reduced to one answer —
+ * which is a fact about the rows, not about how they came to exist.
+ */
+async function makeSignature(
+  bookingId: string,
+  { sentAt, signedAt }: { sentAt: Date; signedAt?: Date },
+): Promise<string> {
+  signatureCount += 1;
+
+  const { id } = await prisma.bookingSignature.create({
+    data: {
+      bookingId,
+      // Unique per row, and never a real token — nothing here is signable.
+      tokenHash: `test-${SUFFIX}-${signatureCount}`,
+      status: signedAt ? "SIGNED" : "SENT",
+      recipientEmail: `sig-${SUFFIX}@example.invalid`,
+      sentAt,
+      expiresAt: new Date(sentAt.getTime() + 14 * 24 * 60 * 60 * 1_000),
+      ...(signedAt ? { signedAt, signatureName: "Test Customer" } : {}),
+    },
+    select: { id: true },
+  });
+
+  return id;
+}
+
+/** The booking's row as the list builds it, with the page filtered to it. */
+async function findListRow(bookingId: string) {
+  const { bookingNumber } = await prisma.booking.findUniqueOrThrow({
+    where: { id: bookingId },
+    select: { bookingNumber: true },
+  });
+
+  const result = await listBookings(
+    { q: bookingNumber },
+    { page: 1, pageSize: 25 },
+  );
+
+  const row = result.rows.find((candidate) => candidate.id === bookingId);
+  if (!row) throw new Error(`Booking ${bookingNumber} is not in the list`);
+
+  return row;
 }
 
 async function makeBooking(overrides: BookingOverrides = {}): Promise<string> {
@@ -65,6 +123,8 @@ async function makeBooking(overrides: BookingOverrides = {}): Promise<string> {
     airlineConfirmation,
     ticketNumber,
     withPassenger = true,
+    grossMcoMinor = 102_997,
+    netMcoMinor = 92_697,
   } = overrides;
 
   const { id } = await createFlightBooking(
@@ -84,8 +144,8 @@ async function makeBooking(overrides: BookingOverrides = {}): Promise<string> {
         taxesFeesMinor: 12_997,
         totalMinor: 102_997,
         supplierCostMinor: 92_697,
-        grossMcoMinor: 102_997,
-        netMcoMinor: 92_697,
+        grossMcoMinor,
+        netMcoMinor,
       },
       passengers: withPassenger
         ? [
@@ -158,6 +218,7 @@ afterAll(async () => {
   await prisma.notification.deleteMany({ where: { bookingId: { in: bookingIds } } });
   await prisma.booking.deleteMany({ where: { id: { in: bookingIds } } });
   await prisma.customer.deleteMany({ where: { id: customerId } });
+  await prisma.mcoSupplier.deleteMany({ where: { id: { in: mcoSupplierIds } } });
   await prisma.adminUser.deleteMany({ where: { id: actorId } });
   await prisma.$disconnect();
 });
@@ -299,38 +360,88 @@ describe("transitionBooking", () => {
     expect(booking.status).toBe(BookingStatus.CONFIRMED);
   });
 
-  it("refuses confirmation without a supplier reference", async () => {
+  /**
+   * Confirmation is settled before the locator comes back.
+   *
+   * It is routinely agreed by phone, so requiring the reference left a
+   * booking the agent knew was held reading as unconfirmed until the
+   * airline's paperwork caught up. Ticketing still requires it — covered
+   * below — which is where the reference is evidence of something.
+   */
+  it("confirms a booking that has no reference yet", async () => {
     const id = await makeBooking({ airlineConfirmation: undefined });
+
+    await transitionBooking({
+      bookingId: id,
+      toStatus: BookingStatus.CONFIRMED,
+      actorId,
+    });
+
+    const booking = await prisma.booking.findUniqueOrThrow({
+      where: { id },
+      select: { status: true, airlineConfirmation: true },
+    });
+
+    expect(booking.status).toBe(BookingStatus.CONFIRMED);
+    expect(booking.airlineConfirmation).toBeNull();
+  });
+
+  /**
+   * The reference still gates the ticket, from a booking confirmed without
+   * one. This is the pairing the relaxation rests on: confirming early is
+   * only safe because ticketing cannot follow it through on nothing.
+   */
+  it("still refuses ticketing a booking confirmed without a reference", async () => {
+    const id = await makeBooking({
+      airlineConfirmation: undefined,
+      ticketNumber: "0012345678901",
+    });
+
+    await transitionBooking({
+      bookingId: id,
+      toStatus: BookingStatus.CONFIRMED,
+      actorId,
+    });
+
+    await prisma.booking.update({
+      where: { id },
+      data: { ticketStatus: TicketStatus.ISSUED },
+    });
 
     await expect(
       transitionBooking({
         bookingId: id,
-        toStatus: BookingStatus.CONFIRMED,
+        toStatus: BookingStatus.TICKETED,
         actorId,
       }),
     ).rejects.toBeInstanceOf(MissingEvidenceError);
+  });
 
-    // The stored status must be untouched by the rejected attempt.
+  /**
+   * Confirmation carries no evidence requirement at all.
+   *
+   * Neither a reference nor a passenger. Asserted against a booking missing
+   * both, so this fails loudly if either is reintroduced — the matrix is the
+   * only thing still governing CONFIRMED.
+   */
+  it("confirms a booking carrying neither a reference nor a passenger", async () => {
+    const id = await makeBooking({
+      airlineConfirmation: undefined,
+      withPassenger: false,
+    });
+
+    await transitionBooking({
+      bookingId: id,
+      toStatus: BookingStatus.CONFIRMED,
+      actorId,
+    });
+
     const booking = await prisma.booking.findUniqueOrThrow({
       where: { id },
       select: { status: true },
     });
-    expect(booking.status).toBe(BookingStatus.PENDING);
-  });
 
-  it("refuses confirmation with no passengers", async () => {
-    const id = await makeBooking({
-      airlineConfirmation: "ABC123",
-      withPassenger: false,
-    });
-
-    await expect(
-      transitionBooking({
-        bookingId: id,
-        toStatus: BookingStatus.CONFIRMED,
-        actorId,
-      }),
-    ).rejects.toBeInstanceOf(MissingEvidenceError);
+    expect(booking.status).toBe(BookingStatus.CONFIRMED);
   });
 
   it("refuses a transition the matrix does not allow", async () => {
@@ -541,6 +652,98 @@ describe("listBookings", () => {
     expect(result.rows.length).toBeLessThanOrEqual(2);
     expect(result.pageCount).toBeGreaterThanOrEqual(1);
   });
+
+  it("reports a booking with no authorization email as never sent", async () => {
+    const id = await makeBooking();
+
+    const row = await findListRow(id);
+
+    expect(row.latestSignature).toBeNull();
+    expect(row.authorizedAt).toBeNull();
+  });
+
+  it("carries the newest authorization request", async () => {
+    const id = await makeBooking();
+    await makeSignature(id, { sentAt: new Date("2026-11-01T09:00:00Z") });
+    const newest = await makeSignature(id, {
+      sentAt: new Date("2026-11-08T09:00:00Z"),
+    });
+
+    const row = await findListRow(id);
+
+    expect(row.latestSignature?.id).toBe(newest);
+    expect(row.authorizedAt).toBeNull();
+  });
+
+  /**
+   * The case the separate `authorizedAt` lookup exists for.
+   *
+   * Resending leaves the signed row alone and writes a new unsigned one on
+   * top, so the newest row reads SENT on a booking that is plainly authorized.
+   * Reading consent off that row would un-authorize the booking every time
+   * somebody resent the email.
+   */
+  it("keeps the signed date when a later request was sent on top", async () => {
+    const id = await makeBooking();
+    const signedAt = new Date("2026-11-01T10:00:00Z");
+    await makeSignature(id, { sentAt: new Date("2026-11-01T09:00:00Z"), signedAt });
+    const resent = await makeSignature(id, {
+      sentAt: new Date("2026-11-08T09:00:00Z"),
+    });
+
+    const row = await findListRow(id);
+
+    expect(row.latestSignature?.id).toBe(resent);
+    expect(row.latestSignature?.signedAt).toBeNull();
+    expect(row.authorizedAt).toEqual(signedAt);
+  });
+
+  it("reports the first signing when a booking was authorized twice", async () => {
+    const id = await makeBooking();
+    const first = new Date("2026-11-01T10:00:00Z");
+    await makeSignature(id, {
+      sentAt: new Date("2026-11-01T09:00:00Z"),
+      signedAt: first,
+    });
+    await makeSignature(id, {
+      sentAt: new Date("2026-11-08T09:00:00Z"),
+      signedAt: new Date("2026-11-08T10:00:00Z"),
+    });
+
+    const row = await findListRow(id);
+
+    expect(row.authorizedAt).toEqual(first);
+  });
+});
+
+describe("opening MCO status", () => {
+  /**
+   * Neither booking form submits an MCO status, so every row used to take the
+   * schema default of N/A — including rows carrying a gross MCO, which then
+   * read "no MCO" over a booking that had one.
+   */
+  it("raises the MCO on a booking created with an amount", async () => {
+    const id = await makeBooking();
+
+    const booking = await prisma.booking.findUniqueOrThrow({
+      where: { id },
+      select: { mcoStatus: true, grossMcoMinor: true },
+    });
+
+    expect(booking.grossMcoMinor).toBeGreaterThan(0);
+    expect(booking.mcoStatus).toBe("PENDING");
+  });
+
+  it("leaves a booking with no MCO amount at N/A", async () => {
+    const id = await makeBooking({ grossMcoMinor: 0, netMcoMinor: 0 });
+
+    const booking = await prisma.booking.findUniqueOrThrow({
+      where: { id },
+      select: { mcoStatus: true },
+    });
+
+    expect(booking.mcoStatus).toBe("NOT_APPLICABLE");
+  });
 });
 
 describe("deleteBooking", () => {
@@ -655,5 +858,89 @@ describe("deleteBooking", () => {
         confirmation: bookingNumber,
       }),
     ).rejects.toThrow(BookingNotDeletableError);
+  });
+});
+
+/**
+ * Submitting an MCO to its supplier.
+ *
+ * The evidence rule is a named supplier, and only that. It used to demand a
+ * gross MCO amount as well, which blocked the ordinary case — the figure is
+ * frequently agreed with the supplier after the claim is raised — from a
+ * panel that cannot set the amount, so the refusal was a dead end rather than
+ * a prompt.
+ */
+describe("updateMco", () => {
+  let supplierId: string;
+
+  beforeAll(async () => {
+    const supplier = await prisma.mcoSupplier.create({
+      data: { name: `MCO Supplier ${SUFFIX}` },
+      select: { id: true },
+    });
+    supplierId = supplier.id;
+    mcoSupplierIds.push(supplier.id);
+  });
+
+  /** A booking with its MCO raised and no amount against it. */
+  async function bookingWithRaisedMco(): Promise<string> {
+    const id = await makeBooking({ grossMcoMinor: 0, netMcoMinor: 0 });
+    await updateMco({
+      bookingId: id,
+      actorId,
+      toStatus: "PENDING",
+    });
+    return id;
+  }
+
+  it("submits an MCO that carries no amount yet", async () => {
+    const id = await bookingWithRaisedMco();
+
+    const result = await updateMco({
+      bookingId: id,
+      actorId,
+      mcoSupplierId: supplierId,
+      toStatus: "SUBMITTED",
+    });
+
+    expect(result.statusChanged).toBe(true);
+    expect(result.toStatus).toBe("SUBMITTED");
+
+    const booking = await prisma.booking.findUniqueOrThrow({
+      where: { id },
+      select: { mcoStatus: true, grossMcoMinor: true },
+    });
+
+    expect(booking.mcoStatus).toBe("SUBMITTED");
+    expect(booking.grossMcoMinor).toBe(0);
+  });
+
+  it("still refuses to submit without a supplier", async () => {
+    const id = await bookingWithRaisedMco();
+
+    await expect(
+      updateMco({ bookingId: id, actorId, toStatus: "SUBMITTED" }),
+    ).rejects.toBeInstanceOf(McoNotUpdatableError);
+
+    const booking = await prisma.booking.findUniqueOrThrow({
+      where: { id },
+      select: { mcoStatus: true },
+    });
+
+    expect(booking.mcoStatus).toBe("PENDING");
+  });
+
+  it("accepts a supplier named in the same submission", async () => {
+    const id = await bookingWithRaisedMco();
+
+    const result = await updateMco({
+      bookingId: id,
+      actorId,
+      mcoSupplierId: supplierId,
+      toStatus: "SUBMITTED",
+    });
+
+    expect(result.supplierChanged).toBe(true);
+    expect(result.statusChanged).toBe(true);
   });
 });

@@ -3,10 +3,10 @@ import "server-only";
 import {
   AuditAction,
   BookingProduct,
+  type BookingSignatureStatus,
   BookingStatus,
-  FollowUpStatus,
   type BookingPriority,
-  type McoStatus,
+  McoStatus,
   TicketStatus,
 } from "@/generated/prisma/enums";
 import type { Prisma } from "@/generated/prisma/client";
@@ -83,6 +83,32 @@ async function resolveMcoSupplierId(
   return supplier.id;
 }
 
+/**
+ * The MCO status a booking should open in.
+ *
+ * Neither booking form offers an MCO status field, so the schema default —
+ * `NOT_APPLICABLE` — reached every new row regardless of what was typed into
+ * the MCO amount. A booking carrying a gross MCO of 900.00 then showed "N/A"
+ * in the MCO column, which read as "this booking has no MCO" about a booking
+ * that plainly had one.
+ *
+ * An amount is the thing that makes an MCO exist, so it is the thing that
+ * decides: money entered means an MCO has been raised and not yet sent to the
+ * supplier, which is exactly `PENDING`. `NOT_APPLICABLE → PENDING` is the one
+ * move the matrix allows out of the default, so this is the same state the
+ * operator would have reached by hand — reached without the detour.
+ *
+ * An explicit status from the caller always wins. This only fills the gap the
+ * default left.
+ */
+function openingMcoStatus(
+  submitted: McoStatus,
+  grossMcoMinor: number,
+): McoStatus {
+  if (submitted !== McoStatus.NOT_APPLICABLE) return submitted;
+  return grossMcoMinor > 0 ? McoStatus.PENDING : McoStatus.NOT_APPLICABLE;
+}
+
 export interface CreateFlightBookingInput {
   booking: FlightBookingInput;
   /** Minor-unit amounts, already converted against the booking's currency. */
@@ -153,7 +179,7 @@ export async function createFlightBooking(
         ticketingReference: booking.ticketingReference ?? null,
         ticketingNotes: booking.ticketingNotes ?? null,
 
-        mcoStatus: booking.mcoStatus,
+        mcoStatus: openingMcoStatus(booking.mcoStatus, amounts.grossMcoMinor),
 
         currency: booking.currency,
         baseFareMinor: amounts.baseFareMinor,
@@ -366,13 +392,30 @@ export interface BookingListRow {
   createdBy: { id: string; name: string } | null;
   supplier: { name: string } | null;
   /**
-   * Only the follow-ups still outstanding.
+   * The most recent authorization email sent for this booking, if any.
    *
-   * The list column answers "is anything owed on this booking", so a resolved
-   * follow-up is not interesting here and a booking with ten of them has
-   * nothing outstanding.
+   * Null means none was ever sent — which the column has to say out loud,
+   * because "no authorization on file" and "sent, waiting" are the two states
+   * an operator does different things about.
    */
-  followUps: { id: string; dueAt: Date | null }[];
+  latestSignature: {
+    id: string;
+    status: BookingSignatureStatus;
+    sentAt: Date;
+    viewedAt: Date | null;
+    signedAt: Date | null;
+    expiresAt: Date;
+  } | null;
+  /**
+   * When this booking was authorized, from whichever request was signed.
+   *
+   * Separate from `latestSignature` because a resend writes a *new* unsigned
+   * row and leaves the signed one alone, so the newest row on an authorized
+   * booking routinely reads SENT. Answering "is this authorized" off the
+   * newest row would un-authorize a booking every time someone resent the
+   * email.
+   */
+  authorizedAt: Date | null;
 }
 
 export async function listBookings(
@@ -416,22 +459,76 @@ export async function listBookings(
         // Who raised the booking, which is not always who now owns it.
         createdBy: { select: { id: true, name: true } },
         supplier: { select: { name: true } },
-        // Only the open ones: the column answers "is anything outstanding",
-        // and a booking with ten resolved follow-ups has nothing outstanding.
-        followUps: {
-          where: {
-            status: {
-              in: [FollowUpStatus.OPEN, FollowUpStatus.IN_PROGRESS],
-            },
+        // Only the newest. The list says where the authorization request
+        // currently stands, and a booking emailed four times has three rows
+        // that are already revoked.
+        signatures: {
+          orderBy: { sentAt: "desc" as const },
+          take: 1,
+          select: {
+            id: true,
+            status: true,
+            sentAt: true,
+            viewedAt: true,
+            signedAt: true,
+            expiresAt: true,
           },
-          select: { id: true, dueAt: true },
         },
       },
     }),
     prisma.booking.count({ where }),
   ]);
 
-  return paginate(rows, total, pagination);
+  // Whether each booking has ever been signed, asked separately rather than
+  // widening the relation above. A resend leaves the signed row in place and
+  // adds an unsigned one on top, so the signed row is not reliably among the
+  // newest — and pulling every signature per booking to find it would read a
+  // whole history to answer a yes/no question.
+  const signedAt = await authorizationSignedAt(rows.map((row) => row.id));
+
+  const withAuthorization = rows.map(({ signatures, ...row }) => ({
+    ...row,
+    latestSignature: signatures[0] ?? null,
+    authorizedAt: signedAt.get(row.id) ?? null,
+  }));
+
+  return paginate(withAuthorization, total, pagination);
+}
+
+/**
+ * When each of these bookings was authorized, for those that were.
+ *
+ * One query for the page rather than one per row. Ordered oldest-first and
+ * only the first hit per booking is kept, so a booking signed twice reports
+ * the date it was *first* authorized — a later signature re-authorizes
+ * something already authorized, and moving the date forward would misdate the
+ * consent that actually governs the booking.
+ *
+ * Bookings with no signed request are simply absent from the map.
+ */
+async function authorizationSignedAt(
+  bookingIds: readonly string[],
+): Promise<Map<string, Date>> {
+  if (bookingIds.length === 0) return new Map();
+
+  const signed = await prisma.bookingSignature.findMany({
+    where: {
+      bookingId: { in: [...bookingIds] },
+      signedAt: { not: null },
+    },
+    select: { bookingId: true, signedAt: true },
+    orderBy: { signedAt: "asc" },
+  });
+
+  const byBooking = new Map<string, Date>();
+
+  for (const row of signed) {
+    if (!row.signedAt) continue;
+    if (byBooking.has(row.bookingId)) continue;
+    byBooking.set(row.bookingId, row.signedAt);
+  }
+
+  return byBooking;
 }
 
 /**
@@ -791,7 +888,7 @@ export async function createCruiseBooking(
         ticketStatus: TicketStatus.NOT_APPLICABLE,
         airlineConfirmation: booking.confirmationReference ?? null,
 
-        mcoStatus: booking.mcoStatus,
+        mcoStatus: openingMcoStatus(booking.mcoStatus, amounts.grossMcoMinor),
 
         currency: booking.currency,
         baseFareMinor: amounts.baseFareMinor,
@@ -1097,6 +1194,27 @@ export async function getBookingCurrency(
 }
 
 /**
+ * The figures a split division has to be checked against.
+ *
+ * Both, because neither is enough on its own: the total is what the splits
+ * must add up to, and the currency is what fixes how many minor units a typed
+ * amount has — 1.234 is a valid sum in KWD and a typo in USD. Reading them in
+ * one go also means the check cannot be made against a total and a currency
+ * that came from different reads of the row.
+ *
+ * Unlike the create form, the total is not the operator's to retype here: it
+ * is already stored, and the splits are divided into it.
+ */
+export async function getBookingSplitBasis(
+  bookingId: string,
+): Promise<{ currency: string; totalMinor: number } | null> {
+  return prisma.booking.findUnique({
+    where: { id: bookingId },
+    select: { currency: true, totalMinor: true },
+  });
+}
+
+/**
  * Corrects a booking's money fields after it was created.
  *
  * These are set on the create form and were unreachable afterwards, which left
@@ -1142,6 +1260,7 @@ export async function updateBookingFinancials(input: {
         supplierCostMinor: true,
         grossMcoMinor: true,
         netMcoMinor: true,
+        mcoStatus: true,
         splitCharges: true,
         chargeSplits: {
           select: { title: true, amountMinor: true },
@@ -1200,6 +1319,27 @@ export async function updateBookingFinancials(input: {
       changes["chargeSplits"] = { before: splitsBefore, after: splitsAfter };
     }
 
+    // An MCO amount typed in after the fact raises the MCO, exactly as one
+    // typed on the create form does. Without this the column would go on
+    // reading "N/A" over a booking that now carries a gross MCO, and the
+    // operator would have to go and say so a second time in the MCO panel.
+    //
+    // Only out of the default, and only upwards. A booking already at
+    // PENDING or beyond has an MCO with a history, and clearing the amount is
+    // a withdrawal — which the matrix makes a deliberate, reasoned move in the
+    // MCO panel rather than a side effect of editing a figure here.
+    const raisesMco =
+      booking.mcoStatus === McoStatus.NOT_APPLICABLE &&
+      booking.grossMcoMinor === 0 &&
+      amounts.grossMcoMinor > 0;
+
+    if (raisesMco) {
+      changes["mcoStatus"] = {
+        before: McoStatus.NOT_APPLICABLE,
+        after: McoStatus.PENDING,
+      };
+    }
+
     // Nothing moved: no write, and no audit entry claiming one happened.
     if (Object.keys(changes).length === 0) {
       return { bookingId: booking.id, bookingNumber: booking.bookingNumber };
@@ -1214,6 +1354,7 @@ export async function updateBookingFinancials(input: {
         supplierCostMinor: amounts.supplierCostMinor,
         grossMcoMinor: amounts.grossMcoMinor,
         netMcoMinor: amounts.netMcoMinor,
+        ...(raisesMco ? { mcoStatus: McoStatus.PENDING } : {}),
         splitCharges,
         ...(splitsChanged
           ? {

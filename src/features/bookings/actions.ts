@@ -2,16 +2,17 @@
 
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
+import { z } from "zod";
 
 import { requirePermission } from "@/lib/auth/dal";
 import {
   InvalidTransitionError,
+  LIST_EDITABLE_STATUSES,
   MissingEvidenceError,
   ReasonRequiredError,
 } from "@/lib/bookings/status";
 import { loggerFor } from "@/lib/logging/logger";
 import { retainedFormValues } from "@/lib/forms";
-import { formatMoney } from "@/lib/financial/money";
 import { PERMISSIONS } from "@/lib/permissions";
 import { isDatabaseUnavailable, DATABASE_UNAVAILABLE_MESSAGE } from "@/lib/db/errors";
 import {
@@ -26,6 +27,11 @@ import {
 } from "@/server/services/booking-service";
 import { transitionBooking } from "@/server/services/booking-status-service";
 
+import {
+  collectFieldErrors,
+  extractGroup,
+  parseChargeSplits,
+} from "./charge-split-input";
 import {
   attachBookingDocuments,
   selectedDocuments,
@@ -44,7 +50,6 @@ import {
 import {
   bookingDeleteSchema,
   bookingFinancialsSchema,
-  chargeSplitSchema,
   ticketingDetailsSchema,
   flightBookingSchema,
   flightSegmentSchema,
@@ -63,148 +68,8 @@ export interface BookingFormState {
   values?: Record<string, string>;
 }
 
-function collectFieldErrors(
-  issues: readonly { path: PropertyKey[]; message: string }[],
-  prefix = "",
-): Record<string, string> {
-  const fieldErrors: Record<string, string> = {};
-
-  for (const issue of issues) {
-    const field = `${prefix}${issue.path.join(".")}`;
-    if (!fieldErrors[field]) fieldErrors[field] = issue.message;
-  }
-
-  return fieldErrors;
-}
-
 function formValues(formData: FormData): Record<string, string> {
   return retainedFormValues(formData);
-}
-
-/**
- * Extracts repeated form groups such as `passengers.0.firstName`.
- *
- * Indices are collected from the submitted keys rather than assumed
- * contiguous, so removing the middle row of a repeater does not silently drop
- * every row after it.
- */
-function extractGroup(
-  formData: FormData,
-  prefix: string,
-): { index: number; data: Record<string, string> }[] {
-  const byIndex = new Map<number, Record<string, string>>();
-
-  for (const [key, value] of formData.entries()) {
-    if (typeof value !== "string") continue;
-    if (!key.startsWith(`${prefix}.`)) continue;
-
-    const [, rawIndex, ...rest] = key.split(".");
-    const index = Number(rawIndex);
-    if (!Number.isInteger(index) || rest.length === 0) continue;
-
-    const entry = byIndex.get(index) ?? {};
-    entry[rest.join(".")] = value;
-    byIndex.set(index, entry);
-  }
-
-  return [...byIndex.entries()]
-    .sort(([a], [b]) => a - b)
-    .map(([index, data]) => ({ index, data }));
-}
-
-/** A split, with its amount already converted against the booking currency. */
-export interface ChargeSplitDraft {
-  title: string;
-  amountMinor: number;
-}
-
-/**
- * Reads the split-charge rows, and checks they account for the whole total.
- *
- * Splits that do not add up are the mistake this is here to catch: a total
- * divided across two cards with one figure mistyped looks right on the form
- * and wrong in the ledger a week later. The division is therefore checked
- * where it is entered, in minor units so a cent cannot hide in a rounding.
- *
- * Returns the splits, and writes any problem into `fieldErrors` for the
- * caller to return with the rest.
- */
-function parseChargeSplits(
-  formData: FormData,
-  options: {
-    currency: string;
-    splitCharges: boolean;
-    totalMinor: number;
-    hasTotal: boolean;
-  },
-  fieldErrors: Record<string, string>,
-): ChargeSplitDraft[] {
-  // Not split: whatever the rows hold is ignored rather than stored against a
-  // booking that does not claim to be split.
-  if (!options.splitCharges) return [];
-
-  const splits: ChargeSplitDraft[] = [];
-
-  for (const group of extractGroup(formData, "splits")) {
-    const hasContent = Object.values(group.data).some(
-      (value) => value.trim() !== "",
-    );
-    if (!hasContent) continue;
-
-    const result = chargeSplitSchema.safeParse(group.data);
-
-    if (!result.success) {
-      Object.assign(
-        fieldErrors,
-        collectFieldErrors(result.error.issues, `splits.${group.index}.`),
-      );
-      continue;
-    }
-
-    const amount = moneyFieldToMinor(
-      result.data.amount,
-      options.currency,
-      `splits.${group.index}.amount`,
-    );
-
-    if (!amount.ok) {
-      fieldErrors[amount.field] = amount.message;
-      continue;
-    }
-
-    if (amount.minor <= 0) {
-      fieldErrors[`splits.${group.index}.amount`] =
-        "A split must be more than nothing.";
-      continue;
-    }
-
-    splits.push({ title: result.data.title, amountMinor: amount.minor });
-  }
-
-  // A later check would be comparing a sum that is already known to be wrong.
-  if (Object.keys(fieldErrors).some((key) => key.startsWith("splits."))) {
-    return splits;
-  }
-
-  if (splits.length < 2) {
-    fieldErrors["splits"] =
-      "A split total needs at least two charges. Set split charges to No if there is only one.";
-    return splits;
-  }
-
-  if (!options.hasTotal) {
-    fieldErrors["total"] = "Enter the total fare before splitting it.";
-    return splits;
-  }
-
-  const summed = splits.reduce((sum, split) => sum + split.amountMinor, 0);
-
-  if (summed !== options.totalMinor) {
-    fieldErrors["splits"] =
-      `The splits add up to ${formatMoney(summed, options.currency)}, but the total fare is ${formatMoney(options.totalMinor, options.currency)}.`;
-  }
-
-  return splits;
 }
 
 export async function createFlightBookingAction(
@@ -414,6 +279,82 @@ export async function changeBookingStatusAction(
     );
     return { error: "The status could not be changed. Try again." };
   }
+}
+
+const listStatusSchema = z.object({
+  bookingId: z.string().trim().min(1),
+  // The same set the list draws its menu from, so the door the action opens
+  // and the door the UI offers cannot drift apart.
+  toStatus: z.enum(LIST_EDITABLE_STATUSES),
+});
+
+export interface ListStatusState {
+  error?: string;
+}
+
+/**
+ * Moves a booking between Pending and Confirmed from the list.
+ *
+ * A narrower door than `changeBookingStatusAction`, not a looser one. It
+ * accepts only the two statuses the list offers, which are precisely the two
+ * that need no written reason — cancelling and sending back for review do, and
+ * a one-click control in a table row is the wrong place to be asked for one.
+ * Those stay on the booking page where there is room to explain.
+ *
+ * Everything else is unchanged: the same permission, the same
+ * `transitionBooking`, the same transition matrix and evidence checks. So
+ * Confirmed does not move back to Pending here, and a booking without an
+ * airline confirmation reference and a passenger cannot be confirmed — the
+ * refusal comes back as the service wrote it, and the operator is told why
+ * rather than watching a badge silently not change.
+ */
+export async function setListBookingStatusAction(
+  _previous: ListStatusState,
+  formData: FormData,
+): Promise<ListStatusState> {
+  const user = await requirePermission(PERMISSIONS.BOOKING_CHANGE_STATUS);
+
+  const parsed = listStatusSchema.safeParse(
+    Object.fromEntries(formData.entries()),
+  );
+
+  if (!parsed.success) {
+    return { error: "That status cannot be set from the list." };
+  }
+
+  try {
+    await transitionBooking({
+      bookingId: parsed.data.bookingId,
+      toStatus: parsed.data.toStatus,
+      actorId: user.id,
+    });
+  } catch (error) {
+    if (
+      error instanceof InvalidTransitionError ||
+      error instanceof MissingEvidenceError ||
+      error instanceof ReasonRequiredError
+    ) {
+      return { error: error.message };
+    }
+
+    if (isDatabaseUnavailable(error)) {
+      log.error({ err: error }, "List status change failed: database unreachable");
+      return { error: DATABASE_UNAVAILABLE_MESSAGE };
+    }
+
+    log.error(
+      { err: error, bookingId: parsed.data.bookingId },
+      "Failed to change booking status from the list",
+    );
+    return { error: "The status could not be changed. Try again." };
+  }
+
+  // Both, as the booking page renders the same status: leaving its cache alone
+  // would show the old badge to anyone who opened the booking next.
+  revalidatePath(`/admin/bookings/${parsed.data.bookingId}`);
+  revalidatePath("/admin/bookings");
+
+  return {};
 }
 
 export async function createCruiseBookingAction(

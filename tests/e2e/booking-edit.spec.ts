@@ -138,7 +138,94 @@ test("an MCO amount can be added to an existing booking", async ({ page }) => {
   expect(financials).toContain("0 USD");
 });
 
+/** The Accounting panel, opened for editing. */
+async function openAccounting(page: import("@playwright/test").Page) {
+  const accounting = page.locator("section", {
+    has: page.getByRole("heading", { name: "Accounting", exact: true }),
+  });
+
+  await accounting.getByRole("button", { name: /Edit Accounting/ }).click();
+  return accounting;
+}
+
 test("split charges can be corrected after the booking was created", async ({
+  page,
+}) => {
+  const booking = await openBooking(page);
+  const accounting = await openAccounting(page);
+
+  await accounting.locator('select[name="splitCharges"]').selectOption("true");
+
+  // Turning the flag on is not on its own a division: the panel refuses a
+  // split total with nothing to split it into, which is the rule being
+  // respected here rather than worked around. The two amounts are the
+  // booking's own total, because a division that does not add up is refused
+  // as well.
+  const splits = accounting.getByRole("group", {
+    name: "How the total is split",
+  });
+
+  await splits.getByLabel("Supplier").first().fill("Deposit");
+  await splits.getByLabel("Amount").first().fill("500.00");
+  await splits.getByLabel("Supplier").nth(1).fill("Balance");
+  await splits.getByLabel("Amount").nth(1).fill("529.97");
+
+  // Said as it is typed, so a division that does not add up is caught before
+  // the save rather than by it.
+  await expect(accounting).toContainText("Splits total $1,029.97 of $1,029.97");
+
+  await accounting.getByRole("button", { name: "Save splits" }).click();
+
+  await expect(accounting.getByText("Charge splits updated.")).toBeVisible();
+  // Read back from the detail row rather than the control that set it.
+  await expect(
+    accounting.locator("dt", { hasText: "Split charges" }).locator("+ dd"),
+  ).toHaveText("Yes");
+  await expect(accounting).toContainText("Deposit");
+  await expect(accounting).toContainText("$500.00");
+
+  const entries = await auditFor(booking.id);
+  const splitEntry = entries.find((entry) => entry.includes("charge splits"));
+  expect(splitEntry).toBeDefined();
+  expect(splitEntry).toContain("Deposit: 50000 USD");
+});
+
+test("a division that does not add up to the total is refused", async ({
+  page,
+}) => {
+  await openBooking(page);
+  const accounting = await openAccounting(page);
+
+  await accounting.locator('select[name="splitCharges"]').selectOption("true");
+
+  const splits = accounting.getByRole("group", {
+    name: "How the total is split",
+  });
+
+  await splits.getByLabel("Supplier").first().fill("Deposit");
+  await splits.getByLabel("Amount").first().fill("500.00");
+  await splits.getByLabel("Supplier").nth(1).fill("Balance");
+  // A hundred short of the booking's total.
+  await splits.getByLabel("Amount").nth(1).fill("429.97");
+
+  await accounting.getByRole("button", { name: "Save splits" }).click();
+
+  await expect(accounting.getByText("Charge splits updated.")).toHaveCount(0);
+  await expect(accounting).toContainText("add up to $929.97");
+  // Still "No": a refused save must not half-apply the division.
+  await expect(
+    accounting.locator("dt", { hasText: "Split charges" }).locator("+ dd"),
+  ).toHaveText("No");
+});
+
+/**
+ * The Position block was removed from this panel.
+ *
+ * It restated the payments ledger — which has its own page — inside the
+ * booking, and every figure in it read $0.00 on a booking whose money had not
+ * been captured yet, which is most of them.
+ */
+test("the accounting panel no longer restates the payment position", async ({
   page,
 }) => {
   await openBooking(page);
@@ -147,30 +234,17 @@ test("split charges can be corrected after the booking was created", async ({
     has: page.getByRole("heading", { name: "Accounting", exact: true }),
   });
 
-  await accounting
-    .locator('select[name="splitCharges"]')
-    .selectOption("true");
+  await expect(accounting).toBeVisible();
 
-  // Turning the flag on is not on its own a division: the form refuses a split
-  // total with nothing to split it into, which is the rule being respected
-  // here rather than worked around. The two amounts are the booking's own
-  // total, because a division that does not add up is refused as well.
-  const splits = accounting.getByRole("group", {
-    name: "How the total is split",
-  });
-
-  await splits.getByLabel("Title").first().fill("Deposit");
-  await splits.getByLabel("Amount").first().fill("500.00");
-  await splits.getByLabel("Title").nth(1).fill("Balance");
-  await splits.getByLabel("Amount").nth(1).fill("529.97");
-
-  await page.getByRole("button", { name: "Save amounts" }).click();
-
-  await expect(page.getByText("Amounts updated.")).toBeVisible();
-  // Read back from the detail row rather than the control that set it.
-  await expect(
-    accounting.locator("dt", { hasText: "Split charges" }).locator("+ dd"),
-  ).toHaveText("Yes");
+  for (const label of [
+    "Position",
+    "Net collected",
+    "Outstanding",
+    "Refundable",
+    "Disputed",
+  ]) {
+    await expect(accounting.getByText(label, { exact: true })).toHaveCount(0);
+  }
 });
 
 test("a bad amount is refused against the booking's currency", async ({

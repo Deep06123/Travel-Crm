@@ -80,15 +80,26 @@ export function isTerminal(status: BookingStatus): boolean {
 /**
  * Evidence a booking must already carry before entering a status.
  *
- * The brief is explicit that a booking may only be marked confirmed or ticketed
- * when the supporting record exists. These are the checks; the service applies
- * them against the stored row rather than trusting the caller.
+ * The brief is explicit that a booking may only be marked ticketed when the
+ * supporting record exists. These are the checks; the service applies them
+ * against the stored row rather than trusting the caller.
+ *
+ * Confirmation demands nothing. It required a confirmation reference and a
+ * passenger, and both were removed: confirmation is routinely agreed by phone
+ * before the airline or cruise line sends the locator through, and a booking
+ * an agent knew was held read as unconfirmed until the paperwork caught up.
+ * Which statuses may reach CONFIRMED is still the matrix's to say; what a
+ * booking carries when it gets there is now the operator's call.
+ *
+ * Ticketing is where the gate lives now, and it is the stronger claim: a
+ * ticket was issued, against a locator, with a number on a passenger. Nothing
+ * downstream re-checks what confirmation let through, so a booking confirmed
+ * empty will be stopped there rather than earlier.
  */
 export interface BookingEvidence {
   airlineConfirmation: string | null;
   ticketStatus: TicketStatus;
   ticketedAt: Date | null;
-  passengerCount: number;
   hasIssuedTicketNumbers: boolean;
 }
 
@@ -103,14 +114,9 @@ export function checkEvidenceFor(
 ): EvidenceResult {
   const missing: string[] = [];
 
-  if (target === BookingStatus.CONFIRMED) {
-    if (!evidence.airlineConfirmation?.trim()) {
-      missing.push("an airline or supplier confirmation reference");
-    }
-    if (evidence.passengerCount === 0) {
-      missing.push("at least one passenger");
-    }
-  }
+  // Nothing is checked for CONFIRMED. The transition matrix still governs
+  // which statuses may reach it; what it may carry is now entirely the
+  // operator's call.
 
   if (target === BookingStatus.TICKETED) {
     if (evidence.ticketStatus !== TicketStatus.ISSUED) {
@@ -130,6 +136,31 @@ export function checkEvidenceFor(
 /** Transitions that must carry a written reason. */
 export function requiresReason(to: BookingStatus): boolean {
   return to === BookingStatus.CANCELLED || to === BookingStatus.NEEDS_REVIEW;
+}
+
+/**
+ * The statuses the bookings list lets an operator move between in place.
+ *
+ * Exactly the two that need no written reason. Cancelling and sending back
+ * for review both do, and a one-click control in a table row is the wrong
+ * place to be asked for one — those stay on the booking page, where there is
+ * room to explain and the surrounding context to explain it from.
+ *
+ * Here rather than beside the control, because the list page needs it to
+ * decide which cells are editable and that page is a server component: a
+ * `"use client"` module cannot export a function the server calls.
+ */
+export const LIST_EDITABLE_STATUSES = [
+  BookingStatus.PENDING,
+  BookingStatus.CONFIRMED,
+] as const;
+
+export type ListEditableStatus = (typeof LIST_EDITABLE_STATUSES)[number];
+
+export function isListEditableStatus(
+  status: BookingStatus,
+): status is ListEditableStatus {
+  return (LIST_EDITABLE_STATUSES as readonly BookingStatus[]).includes(status);
 }
 
 export class InvalidTransitionError extends Error {

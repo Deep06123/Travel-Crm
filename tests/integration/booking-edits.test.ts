@@ -13,6 +13,7 @@ import {
   updateBookingBilling,
   updateBookingOverview,
   updateBookingTravellers,
+  updateChargeSplits,
   updateCruiseDetail,
 } from "@/server/services/booking-edit-service";
 
@@ -280,6 +281,34 @@ describe("updateCruiseDetail", () => {
     // The ship was not sent, so it is cleared rather than kept.
     expect(booking.cruiseDetail?.ship).toBeNull();
   });
+
+  /**
+   * The confirmation number the authorization email prints lives on the
+   * booking, and the Ticketing panel that edits it elsewhere is not rendered
+   * for a cruise — so the sailing form is the only place it can be corrected.
+   */
+  it("writes the confirmation reference onto the booking", async () => {
+    const id = await makeBooking();
+
+    await updateCruiseDetail(
+      {
+        bookingId: id,
+        cruiseLine: "Carnival",
+        confirmationReference: "RC-88213",
+        cabinCount: 1,
+        gratuitiesIncluded: false,
+        insuranceIncluded: false,
+      } as never,
+      actorId,
+    );
+
+    const booking = await prisma.booking.findUniqueOrThrow({
+      where: { id },
+      select: { airlineConfirmation: true },
+    });
+
+    expect(booking.airlineConfirmation).toBe("RC-88213");
+  });
 });
 
 describe("updateBookingTravellers", () => {
@@ -457,5 +486,165 @@ describe("updateBookingTravellers", () => {
     // Not blanked by a form that never showed them.
     expect(after.passportNumber).toBe("X1234567");
     expect(after.dateOfBirth?.toISOString()).toBe("1980-02-03T00:00:00.000Z");
+  });
+});
+
+describe("updateChargeSplits", () => {
+  /** A booking with a total to divide, which `makeBooking` opens at zero. */
+  async function bookingWithTotal(totalMinor: number): Promise<string> {
+    const id = await makeBooking();
+    await prisma.booking.update({ where: { id }, data: { totalMinor } });
+    return id;
+  }
+
+  const splits = [
+    { title: "Deposit", amountMinor: 50_000 },
+    { title: "Balance", amountMinor: 52_997 },
+  ];
+
+  it("records the division and flips the flag", async () => {
+    const id = await bookingWithTotal(102_997);
+
+    const result = await updateChargeSplits(
+      { bookingId: id, splitCharges: true, splits },
+      actorId,
+    );
+
+    expect(result.changed).toBeGreaterThan(0);
+
+    const booking = await prisma.booking.findUniqueOrThrow({
+      where: { id },
+      select: {
+        splitCharges: true,
+        chargeSplits: {
+          select: { sequence: true, title: true, amountMinor: true },
+          orderBy: { sequence: "asc" },
+        },
+      },
+    });
+
+    expect(booking.splitCharges).toBe(true);
+    expect(booking.chargeSplits).toEqual([
+      { sequence: 1, title: "Deposit", amountMinor: 50_000 },
+      { sequence: 2, title: "Balance", amountMinor: 52_997 },
+    ]);
+  });
+
+  it("writes nothing when the division has not moved", async () => {
+    const id = await bookingWithTotal(102_997);
+    await updateChargeSplits(
+      { bookingId: id, splitCharges: true, splits },
+      actorId,
+    );
+
+    const again = await updateChargeSplits(
+      { bookingId: id, splitCharges: true, splits },
+      actorId,
+    );
+
+    expect(again.changed).toBe(0);
+  });
+
+  /**
+   * Turning the flag off has to take the rows with it.
+   *
+   * Rows left behind would be a division the booking no longer claims to
+   * have — invisible on screen and still in the database for a report to
+   * find.
+   */
+  it("clears the rows when split charges is turned off", async () => {
+    const id = await bookingWithTotal(102_997);
+    await updateChargeSplits(
+      { bookingId: id, splitCharges: true, splits },
+      actorId,
+    );
+
+    await updateChargeSplits(
+      { bookingId: id, splitCharges: false, splits },
+      actorId,
+    );
+
+    const booking = await prisma.booking.findUniqueOrThrow({
+      where: { id },
+      select: { splitCharges: true, chargeSplits: { select: { id: true } } },
+    });
+
+    expect(booking.splitCharges).toBe(false);
+    expect(booking.chargeSplits).toHaveLength(0);
+  });
+
+  it("replaces the division rather than appending to it", async () => {
+    const id = await bookingWithTotal(102_997);
+    await updateChargeSplits(
+      { bookingId: id, splitCharges: true, splits },
+      actorId,
+    );
+
+    await updateChargeSplits(
+      {
+        bookingId: id,
+        splitCharges: true,
+        splits: [
+          { title: "One payment", amountMinor: 60_000 },
+          { title: "Another", amountMinor: 42_997 },
+        ],
+      },
+      actorId,
+    );
+
+    const rows = await prisma.bookingChargeSplit.findMany({
+      where: { bookingId: id },
+      select: { title: true },
+      orderBy: { sequence: "asc" },
+    });
+
+    expect(rows.map((row) => row.title)).toEqual(["One payment", "Another"]);
+  });
+
+  it("leaves the booking's money alone", async () => {
+    const id = await bookingWithTotal(102_997);
+    const before = await prisma.booking.findUniqueOrThrow({
+      where: { id },
+      select: {
+        totalMinor: true,
+        baseFareMinor: true,
+        supplierCostMinor: true,
+        grossMcoMinor: true,
+      },
+    });
+
+    await updateChargeSplits(
+      { bookingId: id, splitCharges: true, splits },
+      actorId,
+    );
+
+    const after = await prisma.booking.findUniqueOrThrow({
+      where: { id },
+      select: {
+        totalMinor: true,
+        baseFareMinor: true,
+        supplierCostMinor: true,
+        grossMcoMinor: true,
+      },
+    });
+
+    expect(after).toEqual(before);
+  });
+
+  it("audits the division with its before and after", async () => {
+    const id = await bookingWithTotal(102_997);
+    await updateChargeSplits(
+      { bookingId: id, splitCharges: true, splits },
+      actorId,
+    );
+
+    const entry = await prisma.auditLog.findFirst({
+      where: { entityId: id, adminUserId: actorId },
+      orderBy: { createdAt: "desc" },
+      select: { summary: true, changes: true },
+    });
+
+    expect(entry?.summary).toContain("charge splits");
+    expect(JSON.stringify(entry?.changes)).toContain("Deposit: 50000 USD");
   });
 });

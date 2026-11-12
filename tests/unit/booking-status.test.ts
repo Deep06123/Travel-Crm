@@ -92,40 +92,46 @@ function evidence(overrides: Partial<BookingEvidence> = {}): BookingEvidence {
     airlineConfirmation: "ABC123",
     ticketStatus: TicketStatus.ISSUED,
     ticketedAt: new Date(),
-    passengerCount: 1,
     hasIssuedTicketNumbers: true,
     ...overrides,
   };
 }
 
 describe("checkEvidenceFor", () => {
-  it("accepts a confirmation that has a reference and a passenger", () => {
-    expect(checkEvidenceFor(BookingStatus.CONFIRMED, evidence()).ok).toBe(true);
-  });
+  /**
+   * Confirmation checks nothing at all.
+   *
+   * It required a confirmation reference and a passenger; both were removed.
+   * Confirmation is routinely agreed by phone before the locator arrives, and
+   * the refusal left a booking the agent knew was held reading as unconfirmed
+   * until the paperwork caught up.
+   *
+   * The matrix still says which statuses may reach CONFIRMED. What a booking
+   * carries when it gets there is the operator's call, and the gate that
+   * remains is on ticketing below — asserted with an entirely bare booking so
+   * this fails loudly if any requirement is reintroduced here.
+   */
+  it("imposes no evidence requirement on confirmation", () => {
+    expect(
+      checkEvidenceFor(
+        BookingStatus.CONFIRMED,
+        evidence({
+          airlineConfirmation: null,
+          ticketStatus: TicketStatus.PENDING,
+          ticketedAt: null,
+          hasIssuedTicketNumbers: false,
+        }),
+      ).ok,
+    ).toBe(true);
 
-  it("refuses confirmation without a supplier reference", () => {
-    const result = checkEvidenceFor(
-      BookingStatus.CONFIRMED,
-      evidence({ airlineConfirmation: null }),
-    );
-
-    expect(result.ok).toBe(false);
-    expect(result.missing.join(" ")).toContain("confirmation reference");
-  });
-
-  it("treats a whitespace-only reference as absent", () => {
+    // Whitespace is not a reference either, and must not be treated as one
+    // now that neither counts.
     expect(
       checkEvidenceFor(
         BookingStatus.CONFIRMED,
         evidence({ airlineConfirmation: "   " }),
       ).ok,
-    ).toBe(false);
-  });
-
-  it("refuses confirmation with no passengers", () => {
-    expect(
-      checkEvidenceFor(BookingStatus.CONFIRMED, evidence({ passengerCount: 0 })).ok,
-    ).toBe(false);
+    ).toBe(true);
   });
 
   it("refuses ticketing until a ticket was actually issued", () => {
@@ -167,7 +173,6 @@ describe("checkEvidenceFor", () => {
         BookingStatus.CANCELLED,
         evidence({
           airlineConfirmation: null,
-          passengerCount: 0,
           ticketStatus: TicketStatus.PENDING,
           hasIssuedTicketNumbers: false,
         }),

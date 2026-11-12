@@ -114,10 +114,21 @@ const AUTHORIZATION_SELECT = {
     select: {
       cruiseLine: true,
       ship: true,
+      reservationNumber: true,
+      sailingName: true,
+      specialRequest: true,
       departurePort: true,
+      arrivalPort: true,
       sailDate: true,
       returnDate: true,
       nights: true,
+      deckNumber: true,
+      cabinNumber: true,
+      cabinCategory: true,
+      cabinCount: true,
+      diningPreference: true,
+      gratuitiesIncluded: true,
+      insuranceIncluded: true,
       itineraryHtml: true,
     },
   },
@@ -213,6 +224,13 @@ function toAuthorizationData(
     cardLast4: booking.cardLast4,
     billingAddress: billingAddress(booking),
     chargeSplits: booking.chargeSplits,
+    // Only on a cruise: a flight booking can carry a stale cruise detail row
+    // from a product change, and printing the sailing it was never for would
+    // be worse than printing nothing.
+    sailing:
+      booking.product === BookingProduct.CRUISE && booking.cruiseDetail
+        ? booking.cruiseDetail
+        : null,
   };
 }
 
@@ -367,7 +385,11 @@ export async function sendAuthorizationEmail({
 
   const record = async (
     status: NotificationStatus,
-    extra: { lastError?: string; sentAt?: Date; providerReference?: string } = {},
+    extra: {
+      lastError?: string;
+      sentAt?: Date;
+      providerReference?: string;
+    } = {},
   ) =>
     prisma.notification.create({
       data: {
@@ -411,7 +433,11 @@ export async function sendAuthorizationEmail({
   // The confirmation that comes back after the customer signs is addressed to
   // this mailbox — which can be days later, by which time the default for an
   // authorization may well be a different account.
-  const { id: signatureId, token, expiresAt } = await createSignatureRequest(
+  const {
+    id: signatureId,
+    token,
+    expiresAt,
+  } = await createSignatureRequest(
     bookingId,
     recipient,
     actorId,
@@ -490,7 +516,10 @@ export async function sendAuthorizationEmail({
         { label: "Sent to", value: recipient },
         { label: "Sent from", value: mailer.label },
         { label: "Sent by", value: await actorName(actorId) },
-        { label: "Amount", value: formatMoney(booking.totalMinor, booking.currency) },
+        {
+          label: "Amount",
+          value: formatMoney(booking.totalMinor, booking.currency),
+        },
         { label: "Link expires", value: formatDate(expiresAt) },
         { label: "Edited before sending", value: override.body ? "Yes" : null },
       ],
@@ -506,7 +535,8 @@ export async function sendAuthorizationEmail({
       sentFrom: mailer.label,
     };
   } catch (error) {
-    const reason = error instanceof Error ? error.message : "Unknown transport error";
+    const reason =
+      error instanceof Error ? error.message : "Unknown transport error";
     await record(NotificationStatus.FAILED, { lastError: reason });
     log.error({ err: error, bookingId }, "Authorization email failed");
     return { result: "failed", reason };

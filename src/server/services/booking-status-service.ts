@@ -110,7 +110,6 @@ export async function transitionBooking({
       airlineConfirmation: booking.airlineConfirmation,
       ticketStatus: booking.ticketStatus,
       ticketedAt: booking.ticketedAt,
-      passengerCount: booking.passengers.length,
       hasIssuedTicketNumbers: booking.passengers.some(
         (passenger) => (passenger.ticketNumber ?? "").trim() !== "",
       ),

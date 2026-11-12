@@ -184,6 +184,43 @@ async function ensureConfirmationPdf(
 }
 
 /**
+ * The signed authorization for a booking, as bytes an operator can download.
+ *
+ * Reads the same stored object the confirmation email attached, and renders
+ * one only if nothing is stored — so the file an operator downloads for a
+ * chargeback is byte-identical to the one already sent, rather than a second
+ * rendering of the same evidence with different timestamps that a bank would
+ * be entitled to ask about.
+ *
+ * The *earliest* signed request, which is the one the bookings list dates in
+ * its authorization column. A booking signed twice would otherwise show one
+ * date on screen and hand over a document bearing another, and reconciling
+ * those is nobody's idea of a good afternoon.
+ *
+ * Null when the booking has no signed authorization at all — there is no
+ * document, and inventing an unsigned one would be worse than saying so.
+ */
+export async function signedAuthorizationPdf(
+  bookingId: string,
+): Promise<{ bytes: Buffer; filename: string } | null> {
+  const row = await prisma.bookingSignature.findFirst({
+    where: { bookingId, signedAt: { not: null } },
+    orderBy: { signedAt: "asc" },
+    select: SIGNATURE_SELECT,
+  });
+
+  if (!row) return null;
+
+  const evidence = toEvidence(row);
+  if (!evidence) return null;
+
+  return {
+    bytes: await ensureConfirmationPdf(row, evidence),
+    filename: confirmationFilename(evidence.bookingNumber),
+  };
+}
+
+/**
  * Claims the right to send this confirmation.
  *
  * The insert is the lock. `dedupeKey` is unique, so exactly one caller creates

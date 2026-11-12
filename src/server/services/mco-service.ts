@@ -73,7 +73,6 @@ export async function updateMco({
         id: true,
         mcoStatus: true,
         mcoSupplierId: true,
-        grossMcoMinor: true,
       },
     });
 
@@ -133,23 +132,23 @@ export async function updateMco({
         throw new InvalidMcoTransitionError(fromStatus, nextStatus);
       }
 
-      // Evidence for submission. An MCO is a claim against a named supplier
-      // for a stated amount; sending one with neither is not a claim at all,
-      // and would leave the supplier report with a row it cannot attribute.
-      // Checked against `nextSupplierId`, so a supplier named in this same
-      // submission satisfies it.
-      if (nextStatus === McoStatus.SUBMITTED) {
-        if (!nextSupplierId) {
-          throw new McoNotUpdatableError(
-            "Set the MCO supplier before submitting the MCO.",
-          );
-        }
-
-        if (booking.grossMcoMinor <= 0) {
-          throw new McoNotUpdatableError(
-            "This booking has no gross MCO amount, so there is nothing to submit.",
-          );
-        }
+      // Evidence for submission: a named supplier, and only that. An MCO is a
+      // claim, and a claim with nobody to make it against would leave the
+      // supplier report with a row it cannot attribute. Checked against
+      // `nextSupplierId`, so a supplier named in this same submission
+      // satisfies it.
+      //
+      // The amount used to be required here too, and it was the wrong gate.
+      // The MCO figure is frequently agreed with the supplier after the claim
+      // is raised, so insisting on it up front blocked the ordinary case; and
+      // it blocked it from the one screen that cannot fix it, since the amount
+      // is not editable from the MCO panel. An MCO sitting at Submitted for
+      // nothing is visible and correctable. One that could not be submitted at
+      // all was neither.
+      if (nextStatus === McoStatus.SUBMITTED && !nextSupplierId) {
+        throw new McoNotUpdatableError(
+          "Set the MCO supplier before submitting the MCO.",
+        );
       }
     }
 

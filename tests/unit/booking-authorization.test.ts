@@ -126,10 +126,58 @@ describe("renderBookingAuthorization", () => {
       LINK,
     );
 
-    expect(html).toContain("Deposit: $50.00");
-    expect(html).toContain("Balance: $73.00");
+    // The HTML part states the splits as rows of the charges table, so the
+    // label and the figure sit in their own cells rather than on one line.
+    expect(html).toContain(">Deposit</td>");
+    expect(html).toContain(">$50.00</td>");
+    expect(html).toContain(">Balance</td>");
+    expect(html).toContain(">$73.00</td>");
     expect(text).toContain("may be charged in more than one transaction");
     expect(text).toContain("The sum charged will be the same as the total");
+  });
+
+  it("prints the sailing as a table on a cruise booking", () => {
+    const { html, text } = renderBookingAuthorization(
+      {
+        ...BASE,
+        product: "CRUISE",
+        sailing: {
+          cruiseLine: "Royal Caribbean",
+          ship: "Allure of the Seas",
+          reservationNumber: "RC-88213",
+          sailingName: "7 Night Western Caribbean",
+          specialRequest: null,
+          departurePort: "Galveston",
+          arrivalPort: null,
+          sailDate: new Date("2027-01-10T00:00:00Z"),
+          returnDate: new Date("2027-01-17T00:00:00Z"),
+          nights: 7,
+          deckNumber: "Deck 08",
+          cabinNumber: "8420",
+          cabinCategory: "Balcony",
+          cabinCount: 2,
+          diningPreference: "Early seating",
+          gratuitiesIncluded: true,
+          insuranceIncluded: false,
+        },
+      },
+      LINK,
+    );
+
+    expect(html).toContain("Sailing Details");
+    expect(html).toContain(">Allure of the Seas</td>");
+    expect(html).toContain(">Deck 08</td>");
+    expect(html).toContain(">Included</td>");
+    // Nothing is recorded against these two, so no row is drawn for them.
+    expect(html).not.toContain(">Arrives at</td>");
+    expect(html).not.toContain(">Special request</td>");
+    expect(text).toContain("Cabin category: Balcony");
+  });
+
+  it("omits the sailing table on a flight booking", () => {
+    const { html } = renderBookingAuthorization(BASE, LINK);
+
+    expect(html).not.toContain("Sailing Details");
   });
 
   it("carries the acknowledgement the signature is given against", () => {
@@ -192,7 +240,8 @@ describe("renderBookingAuthorization", () => {
     const { html, text } = renderBookingAuthorization(
       {
         ...BASE,
-        itineraryHtml: '<p>JFK to LHR, 10 Jan</p><img src="cid:ticket@booking">',
+        itineraryHtml:
+          '<p>JFK to LHR, 10 Jan</p><img src="cid:ticket@booking">',
       },
       LINK,
     );

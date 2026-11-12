@@ -1,45 +1,56 @@
 import Link from "next/link";
-import { Eye, FileText, Mail, Ticket } from "lucide-react";
+import { Download, Eye, FileText, Mail, Ticket } from "lucide-react";
 
 import { Badge } from "@/components/ui/status-badge";
 import { DeleteBookingButton } from "@/features/bookings/delete-booking-button";
-import { isOverdue } from "@/lib/format";
+import type {
+  AuthorizationState,
+  AuthorizationSummary,
+} from "@/lib/bookings/authorization-state";
+import { formatDate } from "@/lib/format";
 
 /**
- * Follow-up state for one booking, as a single badge.
+ * How far the authorization email has got, as one badge and one date.
  *
- * The reference CRM shows DON or PEN. The wording here is the application's
- * own, but the question is the same: is anything still owed on this booking.
+ * This column replaced the follow-up one. A follow-up count restated what the
+ * Booked column was already saying in words, while the question an operator
+ * actually works this list for — has this customer authorized the charge, and
+ * if not, have we even asked — was not on the screen at all.
  *
- * Overdue is called out separately from merely pending. A list that shows both
- * as "pending" hides the only distinction an operator acts on — and the
- * overdue ones are the reason to look at the column at all.
+ * The badge carries the state and the line beneath carries when, because
+ * "Pending" means something quite different under a date from this morning
+ * than under one from three weeks ago, and only one of those is worth chasing.
  */
-export function FollowUpState({
-  followUps,
-}: {
-  followUps: readonly { id: string; dueAt: Date | null }[];
-}) {
-  if (followUps.length === 0) {
-    return <Badge tone="success">Done</Badge>;
-  }
+const AUTHORIZATION_PRESENTATION: Record<
+  AuthorizationState,
+  { label: string; tone: "success" | "warning" | "danger" | "info" | "neutral"; prefix: string }
+> = {
+  // Neutral rather than alarming. Plenty of bookings legitimately have not
+  // reached the point of asking yet, and a red badge on every one of them
+  // would train people to ignore the column.
+  NOT_SENT: { label: "Not sent", tone: "neutral", prefix: "" },
+  SENT: { label: "Pending", tone: "warning", prefix: "Sent" },
+  // Distinct from merely sent: the customer has the link and has looked at it.
+  // That is a different conversation from one who never opened the email.
+  VIEWED: { label: "Opened", tone: "info", prefix: "Opened" },
+  SIGNED: { label: "Confirmed", tone: "success", prefix: "Signed" },
+  EXPIRED: { label: "Expired", tone: "danger", prefix: "Expired" },
+};
 
-  const overdue = followUps.filter(
-    (followUp) => followUp.dueAt !== null && isOverdue(followUp.dueAt),
-  ).length;
-
-  if (overdue > 0) {
-    return (
-      <Badge tone="danger">
-        {overdue} overdue
-      </Badge>
-    );
-  }
+export function AuthEmailState({ summary }: { summary: AuthorizationSummary }) {
+  const presentation = AUTHORIZATION_PRESENTATION[summary.state];
 
   return (
-    <Badge tone="warning">
-      {followUps.length} pending
-    </Badge>
+    <div>
+      <Badge tone={presentation.tone}>{presentation.label}</Badge>
+      {summary.at ? (
+        <div className="mt-0.5 text-xs whitespace-nowrap text-ink-muted">
+          {presentation.prefix} {formatDate(summary.at)}
+        </div>
+      ) : (
+        <div className="mt-0.5 text-xs text-ink-subtle">No email yet</div>
+      )}
+    </div>
   );
 }
 
@@ -67,6 +78,8 @@ export function RowActions({
   canViewDocuments,
   canSeeETicket,
   canDelete,
+  canDownloadAuthorization,
+  authorizationSigned,
 }: {
   bookingId: string;
   /** Shown in the delete dialog and typed back to confirm. */
@@ -75,6 +88,16 @@ export function RowActions({
   /** A cruise is confirmed by the cruise line; there is no air ticket. */
   canSeeETicket: boolean;
   canDelete: boolean;
+  /** `booking.signature.send` — the same trust the email itself takes. */
+  canDownloadAuthorization: boolean;
+  /**
+   * Whether this booking has a signed authorization.
+   *
+   * Only changes what the tooltip promises. The route decides what it actually
+   * serves by re-reading the booking, so a stale page cannot talk it into
+   * handing over evidence that does not exist.
+   */
+  authorizationSigned: boolean;
 }) {
   const iconClass =
     "flex size-7 items-center justify-center rounded text-ink-muted hover:bg-surface-sunken hover:text-navy-500 [&_svg]:size-4";
@@ -130,6 +153,31 @@ export function RowActions({
         <Mail />
         <span className="sr-only">Customer email</span>
       </Link>
+
+      {/* The authorization, as a file.
+          Once signed that is the signed PDF with the captured evidence —
+          until this there was no way at all to get it out of the system except
+          as an attachment on the email it was sent in, which made producing it
+          for a chargeback a hunt through a mailbox.
+          Before signing it is the email itself, so an agent can forward or
+          keep a copy of exactly what the customer was asked to agree to.
+          A plain link, not a fetch: the browser's own download handling is
+          what makes Content-Disposition work. */}
+      {canDownloadAuthorization ? (
+        <a
+          href={`/api/admin/bookings/${bookingId}/authorization/download`}
+          download
+          className={iconClass}
+          title={
+            authorizationSigned
+              ? "Download the signed authorization (PDF)"
+              : "Download the authorization email — not signed yet"
+          }
+        >
+          <Download />
+          <span className="sr-only">Download authorization</span>
+        </a>
+      ) : null}
 
       {/* Last, and visually separated from the four read-only icons, so the
           destructive one is not the neighbour of the one beside it. */}

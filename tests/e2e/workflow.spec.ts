@@ -97,10 +97,18 @@ test("a booking appears in the list and opens its detail page", async ({ page })
   await expect(page.getByRole("heading", { name: "Passengers" })).toBeVisible();
 });
 
-test("the lifecycle refuses to confirm a booking without its evidence", async ({
+/**
+ * Confirming before the locator arrives.
+ *
+ * This used to be refused. Confirmation is routinely agreed by phone, and the
+ * reference arrives afterwards, so the refusal made a booking the agent knew
+ * was held read as unconfirmed until the paperwork caught up. The gate moved
+ * to ticketing, which is the claim it was really protecting — see the
+ * ticketing spec.
+ */
+test("a booking confirms before its confirmation reference arrives", async ({
   page,
 }) => {
-  // No airline confirmation recorded, so confirmation must be refused.
   const booking = await createTestBooking(customer.id, operations.id, {
     airlineConfirmation: undefined,
   });
@@ -111,12 +119,39 @@ test("the lifecycle refuses to confirm a booking without its evidence", async ({
   await page.locator("#toStatus").selectOption("CONFIRMED");
   await page.getByRole("button", { name: "Apply status change" }).click();
 
-  await expect(page.locator("p[role='alert']")).toContainText(
-    "confirmation reference",
-  );
+  // By its wording, not by the role: the outstanding-balance notice is also a
+  // `status` paragraph on this page.
+  await expect(
+    page.getByText("Status changed from PENDING to CONFIRMED."),
+  ).toBeVisible();
+  expect(await getBookingStatus(booking.id)).toBe("CONFIRMED");
+});
 
-  // The stored status is untouched by the rejected attempt.
-  expect(await getBookingStatus(booking.id)).toBe("PENDING");
+/**
+ * Confirmation carries no evidence requirement at all now — not a reference,
+ * not a passenger. Asserted against a booking with neither, from the booking
+ * page, so this fails loudly if either is reintroduced.
+ *
+ * The gate is on ticketing, which the ticketing spec covers.
+ */
+test("a booking with neither a reference nor a passenger still confirms", async ({
+  page,
+}) => {
+  const booking = await createTestBooking(customer.id, operations.id, {
+    airlineConfirmation: undefined,
+    withPassenger: false,
+  });
+
+  await signIn(page, operations);
+  await page.goto(`/admin/bookings/${booking.id}`);
+
+  await page.locator("#toStatus").selectOption("CONFIRMED");
+  await page.getByRole("button", { name: "Apply status change" }).click();
+
+  await expect(
+    page.getByText("Status changed from PENDING to CONFIRMED."),
+  ).toBeVisible();
+  expect(await getBookingStatus(booking.id)).toBe("CONFIRMED");
 });
 
 test("a booking with its evidence confirms and records the change", async ({
@@ -162,7 +197,17 @@ test("cancelling requires a typed confirmation and a reason", async ({ page }) =
   expect(await getBookingStatus(booking.id)).toBe("CANCELLED");
 });
 
-test("a collected payment shows in the booking position", async ({ page }) => {
+/**
+ * What a part-paid booking still says, now the Position block has gone.
+ *
+ * That block restated the payments ledger inside the booking — collected,
+ * refunded, net, outstanding, refundable, disputed — and on most bookings
+ * every figure in it read $0.00. The ledger has its own page, and the only
+ * part of the position the booking itself acts on is the shortfall, because
+ * that is what holds up a ticket. So the shortfall stays and the rest does
+ * not; the collected figure is read on the Payments page.
+ */
+test("a part-paid booking still reports what it is owed", async ({ page }) => {
   const booking = await createTestBooking(customer.id, operations.id, {
     totalMinor: 100_000,
   });
@@ -171,14 +216,53 @@ test("a collected payment shows in the booking position", async ({ page }) => {
     amountMinor: 40_000,
   });
 
+  // As operations, who hold `booking.update` and so are shown the ticketing
+  // gate. Finance do not, which is why the shortfall is not on their copy of
+  // this page at all — see below.
+  await signIn(page, operations);
+  await page.goto(`/admin/bookings/${booking.id}`);
+
+  // Collected is 400.00 against a 1,000.00 booking, so 600.00 is still owed —
+  // and the ticketing gate says so, in the panel it blocks.
+  await expect(
+    page.getByText(/\$600\.00 is still outstanding on this booking/),
+  ).toBeVisible();
+
+  // The ledger is no longer restated here. Were it still drawn, the collected
+  // figure would be on the page.
+  await expect(page.getByText("$400.00")).toHaveCount(0);
+});
+
+/**
+ * What finance see on a booking, which is now no money at all.
+ *
+ * The shortfall rides on the ticketing gate, and that gate is drawn only for
+ * `booking.update` — which finance do not hold. So removing the Position
+ * block took the last figure off this page for them. Asserted rather than
+ * left implicit, because it is the cost of that removal and the Payments
+ * page is where they are expected to read instead.
+ */
+test("finance read a booking's money on the payments page, not the booking", async ({
+  page,
+}) => {
+  const booking = await createTestBooking(customer.id, operations.id, {
+    totalMinor: 100_000,
+  });
+
+  const payment = await recordTestPayment(booking.id, customer.id, finance.id, {
+    amountMinor: 40_000,
+  });
+
   await signIn(page, finance);
   await page.goto(`/admin/bookings/${booking.id}`);
 
-  // Collected is 400.00 against a 1,000.00 booking, so 600.00 is still owed.
-  // The Accounting panel derives both from the payment rows, which is what
-  // survives the removal of the Payments panel.
-  await expect(page.getByText("$400.00").first()).toBeVisible();
-  await expect(page.getByText("$600.00").first()).toBeVisible();
+  await expect(page.getByText("$400.00")).toHaveCount(0);
+  await expect(page.getByText(/still outstanding/)).toHaveCount(0);
+
+  await page.goto(`/admin/payments?q=${payment.reference}`);
+  await expect(
+    page.locator("tr").filter({ hasText: payment.reference }),
+  ).toContainText("$400.00");
 });
 
 test("a manually entered payment is never shown as provider-confirmed", async ({

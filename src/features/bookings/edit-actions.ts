@@ -8,19 +8,23 @@ import { loggerFor } from "@/lib/logging/logger";
 import { PERMISSIONS } from "@/lib/permissions";
 import {
   BookingNotFoundError,
+  getBookingSplitBasis,
 } from "@/server/services/booking-service";
 import {
   TicketedTravellerError,
   updateBookingBilling,
   updateBookingOverview,
   updateBookingTravellers,
+  updateChargeSplits,
   updateCruiseDetail,
   type BookingEditResult,
 } from "@/server/services/booking-edit-service";
 
+import { parseChargeSplits } from "./charge-split-input";
 import {
   bookingBillingSchema,
   bookingOverviewSchema,
+  chargeSplitsEditSchema,
   cruiseDetailSchema,
   travellerEditSchema,
   travellersEditSchema,
@@ -230,5 +234,72 @@ export async function updateBookingTravellersAction(
     );
   } catch (error) {
     return failure(error, parsed.data.bookingId, "travellers");
+  }
+}
+
+/**
+ * Corrects how a booking's total is divided.
+ *
+ * The division is checked by `parseChargeSplits` — the same function the
+ * create form uses, so "a valid split" means one thing in this application
+ * rather than two. The difference is where the total comes from: on the
+ * create form it is a sibling field being typed, here it is already stored
+ * and is read off the booking, so the splits are divided into a figure the
+ * operator cannot move from this panel.
+ *
+ * `booking.update`, as every other editor here takes. This writes no money —
+ * the amounts that make up the total stay with `updateBookingFinancials` —
+ * only how an unchanged total is described.
+ */
+export async function updateChargeSplitsAction(
+  _previous: BookingEditState,
+  formData: FormData,
+): Promise<BookingEditState> {
+  const user = await requirePermission(PERMISSIONS.BOOKING_UPDATE);
+
+  const parsed = chargeSplitsEditSchema.safeParse({
+    bookingId: formData.get("bookingId"),
+    splitCharges: formData.get("splitCharges"),
+  });
+
+  if (!parsed.success) {
+    return { error: parsed.error.issues[0]?.message ?? "Invalid request." };
+  }
+
+  const basis = await getBookingSplitBasis(parsed.data.bookingId);
+  if (!basis) return { error: "That booking no longer exists." };
+
+  const fieldErrors: Record<string, string> = {};
+
+  const splits = parseChargeSplits(
+    formData,
+    {
+      currency: basis.currency,
+      splitCharges: parsed.data.splitCharges,
+      totalMinor: basis.totalMinor,
+      // The total is stored rather than submitted, so the only way it is
+      // missing is that the booking genuinely carries none — which is a
+      // booking there is nothing to divide.
+      hasTotal: basis.totalMinor > 0,
+    },
+    fieldErrors,
+  );
+
+  if (Object.keys(fieldErrors).length > 0) return { fieldErrors };
+
+  try {
+    return saved(
+      await updateChargeSplits(
+        {
+          bookingId: parsed.data.bookingId,
+          splitCharges: parsed.data.splitCharges,
+          splits,
+        },
+        user.id,
+      ),
+      "Charge splits",
+    );
+  } catch (error) {
+    return failure(error, parsed.data.bookingId, "charge splits");
   }
 }

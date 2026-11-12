@@ -12,7 +12,7 @@ import {
   Thead,
   Tr,
 } from "@/components/tables/data-table";
-import { FollowUpState, RowActions } from "@/components/tables/booking-row";
+import { AuthEmailState, RowActions } from "@/components/tables/booking-row";
 import { PaginationControls } from "@/components/tables/pagination-controls";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Input, Select } from "@/components/ui/field";
@@ -29,11 +29,14 @@ import {
   TicketStatus,
 } from "@/generated/prisma/enums";
 import { currentUserCan, requirePermission } from "@/lib/auth/dal";
+import { authorizationSummary } from "@/lib/bookings/authorization-state";
+import { isListEditableStatus } from "@/lib/bookings/status";
 import { prisma } from "@/lib/db/prisma";
 import { formatMoney } from "@/lib/financial/money";
 import { formatDateTime, formatRelativeDays, isOverdue } from "@/lib/format";
 import { paginationSchema } from "@/lib/pagination";
 import { PERMISSIONS } from "@/lib/permissions";
+import { ListStatusControl } from "@/features/bookings/list-status-control";
 import { bookingSearchSchema } from "@/features/bookings/schemas";
 import { listBookings } from "@/server/services/booking-service";
 
@@ -55,12 +58,18 @@ export default async function BookingsPage({
     canExport,
     canViewDocuments,
     canDeleteBooking,
+    canChangeStatus,
+    canReadAuthorization,
   ] = await Promise.all([
     currentUserCan(PERMISSIONS.BOOKING_CREATE),
     currentUserCan(PERMISSIONS.PAYMENT_VIEW),
     currentUserCan(PERMISSIONS.BOOKING_EXPORT),
     currentUserCan(PERMISSIONS.DOCUMENT_VIEW),
     currentUserCan(PERMISSIONS.BOOKING_DELETE),
+    currentUserCan(PERMISSIONS.BOOKING_CHANGE_STATUS),
+    // The download serves a document carrying the card's last four and the
+    // billing address, so it takes the same permission as sending it.
+    currentUserCan(PERMISSIONS.BOOKING_SIGNATURE_SEND),
   ]);
 
   const params = await searchParams;
@@ -122,7 +131,7 @@ export default async function BookingsPage({
   };
 
   // Booking, customer, confirmation, status, ticketing, MCO, agent, created
-  // by, follow-up, booked, actions — plus the money column when permitted.
+  // by, auth email, booked, actions — plus the money column when permitted.
   const columnCount = canViewMoney ? 12 : 11;
 
   // The export carries exactly the filters the list is showing, so the file
@@ -358,7 +367,7 @@ export default async function BookingsPage({
               <Th>MCO</Th>
               <Th>Agent</Th>
               <Th>Created by</Th>
-              <Th>Follow-up</Th>
+              <Th>Auth email</Th>
               <Th>Booked</Th>
               <Th>Actions</Th>
             </Tr>
@@ -431,8 +440,22 @@ export default async function BookingsPage({
                     </Td>
                   ) : null}
 
+                  {/* Editable in place only between Pending and Confirmed,
+                      and only for a role that may change a status at all.
+                      Every other state — draft, cancelled, ticketed — renders
+                      as a plain badge, because moving out of those is a
+                      decision with a reason attached and that belongs on the
+                      booking page. */}
                   <Td>
-                    <BookingStatusBadge status={row.status} />
+                    {canChangeStatus && isListEditableStatus(row.status) ? (
+                      <ListStatusControl
+                        bookingId={row.id}
+                        bookingNumber={row.bookingNumber}
+                        currentStatus={row.status}
+                      />
+                    ) : (
+                      <BookingStatusBadge status={row.status} />
+                    )}
                   </Td>
                   <Td>
                     <TicketStatusBadge status={row.ticketStatus} />
@@ -448,7 +471,12 @@ export default async function BookingsPage({
                   <Td className="text-ink-muted">{row.createdBy?.name ?? "—"}</Td>
 
                   <Td>
-                    <FollowUpState followUps={row.followUps} />
+                    <AuthEmailState
+                      summary={authorizationSummary(
+                        row.latestSignature,
+                        row.authorizedAt,
+                      )}
+                    />
                   </Td>
 
                   <Td className="whitespace-nowrap text-ink-muted">
@@ -473,6 +501,8 @@ export default async function BookingsPage({
                       canViewDocuments={canViewDocuments}
                       canSeeETicket={row.product === "FLIGHT"}
                       canDelete={canDeleteBooking}
+                      canDownloadAuthorization={canReadAuthorization}
+                      authorizationSigned={row.authorizedAt !== null}
                     />
                   </Td>
                 </Tr>

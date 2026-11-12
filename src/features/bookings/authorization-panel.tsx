@@ -1,7 +1,8 @@
 "use client";
 
 import { ExternalLink, Loader2, Pencil, RefreshCw, Send } from "lucide-react";
-import { useActionState, useState } from "react";
+import { useRouter } from "next/navigation";
+import { useActionState, useEffect, useState } from "react";
 import { useFormStatus } from "react-dom";
 
 import { Button, buttonVariants } from "@/components/ui/button";
@@ -271,6 +272,8 @@ export function AuthorizationPanel({
   /** Whether this user could act on "no accounts configured". */
   canManageSettings?: boolean;
 }) {
+  const router = useRouter();
+
   const [state, formAction] = useActionState<AuthorizationState, FormData>(
     sendAuthorizationEmailAction,
     {},
@@ -311,6 +314,44 @@ export function AuthorizationPanel({
     recipient === ""
       ? "This booking has no contact address to send to."
       : undefined;
+
+  /**
+   * Picks the signature up without the operator reloading the page.
+   *
+   * The customer signs in their own browser, so nothing in this one knows it
+   * happened — the panel was only ever right as of the last full page load.
+   * While a link is out and unsigned, the page is re-fetched on an interval;
+   * `router.refresh()` re-runs the server component and the panel re-renders
+   * with whatever came back, including the e-ticket button this gates.
+   *
+   * Only while there is something to wait for: once signed, or with no link
+   * outstanding, nothing can change here on its own and the polling stops. It
+   * also pauses while the tab is hidden, so a booking left open in a
+   * background tab overnight is not re-fetched hundreds of times, and refreshes
+   * once on becoming visible again — which is the moment the operator is
+   * actually looking.
+   */
+  const waiting =
+    (!signed && Boolean(outstanding)) ||
+    // Signed moments ago: the confirmation email is still going out, and its
+    // badge settles a beat after the signature itself lands.
+    signed?.confirmation?.status === "PENDING";
+
+  useEffect(() => {
+    if (!waiting) return;
+
+    const refresh = () => {
+      if (document.visibilityState === "visible") router.refresh();
+    };
+
+    const timer = setInterval(refresh, 15_000);
+    document.addEventListener("visibilitychange", refresh);
+
+    return () => {
+      clearInterval(timer);
+      document.removeEventListener("visibilitychange", refresh);
+    };
+  }, [waiting, router]);
 
   return (
     <div className="space-y-4">

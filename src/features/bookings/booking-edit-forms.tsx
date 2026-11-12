@@ -15,10 +15,13 @@ import {
   PassengerType,
 } from "@/generated/prisma/enums";
 
+import { formatMoney, parseAmountToMinor } from "@/lib/financial/money";
+
 import {
   updateBookingBillingAction,
   updateBookingOverviewAction,
   updateBookingTravellersAction,
+  updateChargeSplitsAction,
   updateCruiseDetailAction,
   type BookingEditState,
 } from "./edit-actions";
@@ -221,9 +224,17 @@ export function OverviewPanel({
       submitLabel="Save overview"
       fields={(error) => (
         <div className={GRID}>
-          <Field id="edit-bookingTypeId" label="Booking type" error={error("bookingTypeId")}>
+          <Field
+            id="edit-bookingTypeId"
+            label="Booking type"
+            error={error("bookingTypeId")}
+          >
             {(props) => (
-              <StickySelect {...props} name="bookingTypeId" defaultValue={values.bookingTypeId}>
+              <StickySelect
+                {...props}
+                name="bookingTypeId"
+                defaultValue={values.bookingTypeId}
+              >
                 <option value="">— None —</option>
                 {bookingTypes.map((type) => (
                   <option key={type.id} value={type.id}>
@@ -234,9 +245,17 @@ export function OverviewPanel({
             )}
           </Field>
 
-          <Field id="edit-chargeOutcome" label="Charge outcome" error={error("chargeOutcome")}>
+          <Field
+            id="edit-chargeOutcome"
+            label="Charge outcome"
+            error={error("chargeOutcome")}
+          >
             {(props) => (
-              <StickySelect {...props} name="chargeOutcome" defaultValue={values.chargeOutcome}>
+              <StickySelect
+                {...props}
+                name="chargeOutcome"
+                defaultValue={values.chargeOutcome}
+              >
                 {Object.values(ChargeOutcome).map((outcome) => (
                   <option key={outcome} value={outcome}>
                     {humanise(outcome)}
@@ -247,12 +266,18 @@ export function OverviewPanel({
           </Field>
 
           <Field id="edit-source" label="Source" error={error("source")}>
-            {(props) => <Input {...props} name="source" defaultValue={values.source} />}
+            {(props) => (
+              <Input {...props} name="source" defaultValue={values.source} />
+            )}
           </Field>
 
           <Field id="edit-language" label="Language" error={error("language")}>
             {(props) => (
-              <StickySelect {...props} name="language" defaultValue={values.language}>
+              <StickySelect
+                {...props}
+                name="language"
+                defaultValue={values.language}
+              >
                 <option value="">— None —</option>
                 <option value="en">English</option>
                 <option value="es">Spanish</option>
@@ -268,13 +293,26 @@ export function OverviewPanel({
             error={error("bookedAt")}
           >
             {(props) => (
-              <Input {...props} name="bookedAt" type="date" defaultValue={values.bookedAt} />
+              <Input
+                {...props}
+                name="bookedAt"
+                type="date"
+                defaultValue={values.bookedAt}
+              />
             )}
           </Field>
 
-          <Field id="edit-assignedAgentId" label="Assigned agent" error={error("assignedAgentId")}>
+          <Field
+            id="edit-assignedAgentId"
+            label="Assigned agent"
+            error={error("assignedAgentId")}
+          >
             {(props) => (
-              <StickySelect {...props} name="assignedAgentId" defaultValue={values.assignedAgentId}>
+              <StickySelect
+                {...props}
+                name="assignedAgentId"
+                defaultValue={values.assignedAgentId}
+              >
                 <option value="">— Unassigned —</option>
                 {agents.map((agent) => (
                   <option key={agent.id} value={agent.id}>
@@ -285,9 +323,17 @@ export function OverviewPanel({
             )}
           </Field>
 
-          <Field id="edit-supplierId" label="Supplier" error={error("supplierId")}>
+          <Field
+            id="edit-supplierId"
+            label="Supplier"
+            error={error("supplierId")}
+          >
             {(props) => (
-              <StickySelect {...props} name="supplierId" defaultValue={values.supplierId}>
+              <StickySelect
+                {...props}
+                name="supplierId"
+                defaultValue={values.supplierId}
+              >
                 <option value="">— None —</option>
                 {suppliers.map((supplier) => (
                   <option key={supplier.id} value={supplier.id}>
@@ -298,18 +344,47 @@ export function OverviewPanel({
             )}
           </Field>
 
-          <Field id="edit-contactName" label="Contact" error={error("contactName")}>
-            {(props) => <Input {...props} name="contactName" defaultValue={values.contactName} />}
-          </Field>
-
-          <Field id="edit-contactEmail" label="Email" error={error("contactEmail")}>
+          <Field
+            id="edit-contactName"
+            label="Contact"
+            error={error("contactName")}
+          >
             {(props) => (
-              <Input {...props} name="contactEmail" type="email" defaultValue={values.contactEmail} />
+              <Input
+                {...props}
+                name="contactName"
+                defaultValue={values.contactName}
+              />
             )}
           </Field>
 
-          <Field id="edit-contactPhone" label="Phone" error={error("contactPhone")}>
-            {(props) => <Input {...props} name="contactPhone" defaultValue={values.contactPhone} />}
+          <Field
+            id="edit-contactEmail"
+            label="Email"
+            error={error("contactEmail")}
+          >
+            {(props) => (
+              <Input
+                {...props}
+                name="contactEmail"
+                type="email"
+                defaultValue={values.contactEmail}
+              />
+            )}
+          </Field>
+
+          <Field
+            id="edit-contactPhone"
+            label="Phone"
+            error={error("contactPhone")}
+          >
+            {(props) => (
+              <Input
+                {...props}
+                name="contactPhone"
+                defaultValue={values.contactPhone}
+              />
+            )}
           </Field>
         </div>
       )}
@@ -358,15 +433,31 @@ export function BillingPanel({
       fields={(error) => (
         <>
           <div className={GRID}>
-            <Field id="edit-cardHolderName" label="Card holder" error={error("cardHolderName")}>
+            <Field
+              id="edit-cardHolderName"
+              label="Card holder"
+              error={error("cardHolderName")}
+            >
               {(props) => (
-                <Input {...props} name="cardHolderName" defaultValue={values.cardHolderName} />
+                <Input
+                  {...props}
+                  name="cardHolderName"
+                  defaultValue={values.cardHolderName}
+                />
               )}
             </Field>
 
-            <Field id="edit-cardType" label="Card type" error={error("cardType")}>
+            <Field
+              id="edit-cardType"
+              label="Card type"
+              error={error("cardType")}
+            >
               {(props) => (
-                <StickySelect {...props} name="cardType" defaultValue={values.cardType}>
+                <StickySelect
+                  {...props}
+                  name="cardType"
+                  defaultValue={values.cardType}
+                >
                   <option value="">— None —</option>
                   {Object.values(CardType).map((type) => (
                     <option key={type} value={type}>
@@ -413,15 +504,31 @@ export function BillingPanel({
               )}
             </Field>
 
-            <Field id="edit-inboundPhone" label="Inbound no." error={error("inboundPhone")}>
+            <Field
+              id="edit-inboundPhone"
+              label="Inbound no."
+              error={error("inboundPhone")}
+            >
               {(props) => (
-                <Input {...props} name="inboundPhone" defaultValue={values.inboundPhone} />
+                <Input
+                  {...props}
+                  name="inboundPhone"
+                  defaultValue={values.inboundPhone}
+                />
               )}
             </Field>
 
-            <Field id="edit-billingPhone" label="Billing no." error={error("billingPhone")}>
+            <Field
+              id="edit-billingPhone"
+              label="Billing no."
+              error={error("billingPhone")}
+            >
               {(props) => (
-                <Input {...props} name="billingPhone" defaultValue={values.billingPhone} />
+                <Input
+                  {...props}
+                  name="billingPhone"
+                  defaultValue={values.billingPhone}
+                />
               )}
             </Field>
 
@@ -433,7 +540,11 @@ export function BillingPanel({
               className="sm:col-span-2"
             >
               {(props) => (
-                <Input {...props} name="billingEmails" defaultValue={values.billingEmails} />
+                <Input
+                  {...props}
+                  name="billingEmails"
+                  defaultValue={values.billingEmails}
+                />
               )}
             </Field>
 
@@ -453,25 +564,59 @@ export function BillingPanel({
               )}
             </Field>
 
-            <Field id="edit-billingCity" label="City" error={error("billingCity")}>
-              {(props) => <Input {...props} name="billingCity" defaultValue={values.billingCity} />}
-            </Field>
-
-            <Field id="edit-billingState" label="State" error={error("billingState")}>
+            <Field
+              id="edit-billingCity"
+              label="City"
+              error={error("billingCity")}
+            >
               {(props) => (
-                <Input {...props} name="billingState" defaultValue={values.billingState} />
+                <Input
+                  {...props}
+                  name="billingCity"
+                  defaultValue={values.billingCity}
+                />
               )}
             </Field>
 
-            <Field id="edit-billingPostalCode" label="Zip code" error={error("billingPostalCode")}>
+            <Field
+              id="edit-billingState"
+              label="State"
+              error={error("billingState")}
+            >
               {(props) => (
-                <Input {...props} name="billingPostalCode" defaultValue={values.billingPostalCode} />
+                <Input
+                  {...props}
+                  name="billingState"
+                  defaultValue={values.billingState}
+                />
               )}
             </Field>
 
-            <Field id="edit-billingCountry" label="Country" error={error("billingCountry")}>
+            <Field
+              id="edit-billingPostalCode"
+              label="Zip code"
+              error={error("billingPostalCode")}
+            >
               {(props) => (
-                <Input {...props} name="billingCountry" defaultValue={values.billingCountry} />
+                <Input
+                  {...props}
+                  name="billingPostalCode"
+                  defaultValue={values.billingPostalCode}
+                />
+              )}
+            </Field>
+
+            <Field
+              id="edit-billingCountry"
+              label="Country"
+              error={error("billingCountry")}
+            >
+              {(props) => (
+                <Input
+                  {...props}
+                  name="billingCountry"
+                  defaultValue={values.billingCountry}
+                />
               )}
             </Field>
           </div>
@@ -495,6 +640,8 @@ export interface SailingValues {
   cruiseLine: string;
   ship: string;
   reservationNumber: string;
+  /** The booking's `airlineConfirmation` — see `cruiseDetailSchema`. */
+  confirmationReference: string;
   sailingName: string;
   specialRequest: string;
   departurePort: string;
@@ -535,14 +682,25 @@ export function SailingPanel({
       fields={(error) => (
         <>
           <div className={GRID}>
-            <Field id="edit-cruiseLine" label="Cruise line" required error={error("cruiseLine")}>
+            <Field
+              id="edit-cruiseLine"
+              label="Cruise line"
+              required
+              error={error("cruiseLine")}
+            >
               {(props) => (
-                <Input {...props} name="cruiseLine" defaultValue={values.cruiseLine} />
+                <Input
+                  {...props}
+                  name="cruiseLine"
+                  defaultValue={values.cruiseLine}
+                />
               )}
             </Field>
 
             <Field id="edit-ship" label="Ship" error={error("ship")}>
-              {(props) => <Input {...props} name="ship" defaultValue={values.ship} />}
+              {(props) => (
+                <Input {...props} name="ship" defaultValue={values.ship} />
+              )}
             </Field>
 
             <Field
@@ -551,7 +709,26 @@ export function SailingPanel({
               error={error("reservationNumber")}
             >
               {(props) => (
-                <Input {...props} name="reservationNumber" defaultValue={values.reservationNumber} />
+                <Input
+                  {...props}
+                  name="reservationNumber"
+                  defaultValue={values.reservationNumber}
+                />
+              )}
+            </Field>
+
+            <Field
+              id="edit-confirmationReference"
+              label="Cruise line confirmation"
+              hint="Printed on the authorization email as the confirmation number."
+              error={error("confirmationReference")}
+            >
+              {(props) => (
+                <Input
+                  {...props}
+                  name="confirmationReference"
+                  defaultValue={values.confirmationReference}
+                />
               )}
             </Field>
 
@@ -562,37 +739,79 @@ export function SailingPanel({
               className="sm:col-span-2"
             >
               {(props) => (
-                <Input {...props} name="sailingName" defaultValue={values.sailingName} />
+                <Input
+                  {...props}
+                  name="sailingName"
+                  defaultValue={values.sailingName}
+                />
               )}
             </Field>
 
-            <Field id="edit-specialRequest" label="Special request" error={error("specialRequest")}>
+            <Field
+              id="edit-specialRequest"
+              label="Special request"
+              error={error("specialRequest")}
+            >
               {(props) => (
-                <Input {...props} name="specialRequest" defaultValue={values.specialRequest} />
+                <Input
+                  {...props}
+                  name="specialRequest"
+                  defaultValue={values.specialRequest}
+                />
               )}
             </Field>
 
-            <Field id="edit-departurePort" label="Departs from" error={error("departurePort")}>
+            <Field
+              id="edit-departurePort"
+              label="Departs from"
+              error={error("departurePort")}
+            >
               {(props) => (
-                <Input {...props} name="departurePort" defaultValue={values.departurePort} />
+                <Input
+                  {...props}
+                  name="departurePort"
+                  defaultValue={values.departurePort}
+                />
               )}
             </Field>
 
-            <Field id="edit-arrivalPort" label="Arrives at" error={error("arrivalPort")}>
+            <Field
+              id="edit-arrivalPort"
+              label="Arrives at"
+              error={error("arrivalPort")}
+            >
               {(props) => (
-                <Input {...props} name="arrivalPort" defaultValue={values.arrivalPort} />
+                <Input
+                  {...props}
+                  name="arrivalPort"
+                  defaultValue={values.arrivalPort}
+                />
               )}
             </Field>
 
             <Field id="edit-nights" label="Nights" error={error("nights")}>
               {(props) => (
-                <Input {...props} name="nights" inputMode="numeric" defaultValue={values.nights} />
+                <Input
+                  {...props}
+                  name="nights"
+                  inputMode="numeric"
+                  defaultValue={values.nights}
+                />
               )}
             </Field>
 
-            <Field id="edit-sailDate" label="Sail date" error={error("sailDate")}>
+            <Field
+              id="edit-sailDate"
+              label="Sail date"
+              error={error("sailDate")}
+            >
               {(props) => (
-                <Input {...props} name="sailDate" type="date" defaultValue={values.sailDate} />
+                <Input
+                  {...props}
+                  name="sailDate"
+                  type="date"
+                  defaultValue={values.sailDate}
+                />
               )}
             </Field>
 
@@ -603,25 +822,62 @@ export function SailingPanel({
               error={error("returnDate")}
             >
               {(props) => (
-                <Input {...props} name="returnDate" type="date" defaultValue={values.returnDate} />
+                <Input
+                  {...props}
+                  name="returnDate"
+                  type="date"
+                  defaultValue={values.returnDate}
+                />
               )}
             </Field>
 
-            <Field id="edit-deckNumber" label="Deck" error={error("deckNumber")}>
-              {(props) => <Input {...props} name="deckNumber" defaultValue={values.deckNumber} />}
-            </Field>
-
-            <Field id="edit-cabinNumber" label="Cabin" error={error("cabinNumber")}>
-              {(props) => <Input {...props} name="cabinNumber" defaultValue={values.cabinNumber} />}
-            </Field>
-
-            <Field id="edit-cabinCategory" label="Cabin category" error={error("cabinCategory")}>
+            <Field
+              id="edit-deckNumber"
+              label="Deck"
+              error={error("deckNumber")}
+            >
               {(props) => (
-                <Input {...props} name="cabinCategory" defaultValue={values.cabinCategory} />
+                <Input
+                  {...props}
+                  name="deckNumber"
+                  defaultValue={values.deckNumber}
+                />
               )}
             </Field>
 
-            <Field id="edit-cabinCount" label="Cabins held" error={error("cabinCount")}>
+            <Field
+              id="edit-cabinNumber"
+              label="Cabin"
+              error={error("cabinNumber")}
+            >
+              {(props) => (
+                <Input
+                  {...props}
+                  name="cabinNumber"
+                  defaultValue={values.cabinNumber}
+                />
+              )}
+            </Field>
+
+            <Field
+              id="edit-cabinCategory"
+              label="Cabin category"
+              error={error("cabinCategory")}
+            >
+              {(props) => (
+                <Input
+                  {...props}
+                  name="cabinCategory"
+                  defaultValue={values.cabinCategory}
+                />
+              )}
+            </Field>
+
+            <Field
+              id="edit-cabinCount"
+              label="Cabins held"
+              error={error("cabinCount")}
+            >
               {(props) => (
                 <Input
                   {...props}
@@ -632,9 +888,17 @@ export function SailingPanel({
               )}
             </Field>
 
-            <Field id="edit-diningPreference" label="Dining" error={error("diningPreference")}>
+            <Field
+              id="edit-diningPreference"
+              label="Dining"
+              error={error("diningPreference")}
+            >
               {(props) => (
-                <Input {...props} name="diningPreference" defaultValue={values.diningPreference} />
+                <Input
+                  {...props}
+                  name="diningPreference"
+                  defaultValue={values.diningPreference}
+                />
               )}
             </Field>
 
@@ -877,7 +1141,11 @@ export function TravellersPanel({
                       )}
                     </Field>
 
-                    <Field id={field("type")} label="Type" error={error(field("type"))}>
+                    <Field
+                      id={field("type")}
+                      label="Type"
+                      error={error(field("type"))}
+                    >
                       {(props) => (
                         <StickySelect
                           {...props}
@@ -893,7 +1161,11 @@ export function TravellersPanel({
                       )}
                     </Field>
 
-                    <Field id={field("gender")} label="Gender" error={error(field("gender"))}>
+                    <Field
+                      id={field("gender")}
+                      label="Gender"
+                      error={error(field("gender"))}
+                    >
                       {(props) => (
                         <StickySelect
                           {...props}
@@ -1006,6 +1278,269 @@ export function TravellersPanel({
             <p className="mt-2 text-xs text-ink-subtle">
               Passport details and dates of birth are hidden for your role, and
               are left exactly as they are when this is saved.
+            </p>
+          )}
+        </>
+      )}
+    >
+      {children}
+    </EditablePanel>
+  );
+}
+
+// --- Accounting -------------------------------------------------------------
+
+export interface SplitValues {
+  title: string;
+  /** A decimal string for the input, e.g. "900.00". */
+  amount: string;
+}
+
+function emptySplit(): SplitValues {
+  return { title: "", amount: "" };
+}
+
+/**
+ * The accounting panel, with the division of the total editable in place.
+ *
+ * Split charges were a flag with nowhere to change it: a booking saved as
+ * "No" stayed "No", and a division typed wrongly on the create form could
+ * only be corrected by deleting the booking. This is the same `EditablePanel`
+ * the guest and billing panels use — the figures stay on screen while the
+ * correction is made, because the figures are the reference for getting it
+ * right.
+ *
+ * Only the division. The amounts that make up the total are money and belong
+ * to the financials editor; this describes an unchanged total rather than
+ * restating one. The running sum below the rows is checked against the stored
+ * total so a division that does not add up is caught while it is being typed,
+ * not from a refusal after saving.
+ */
+export function AccountingPanel({
+  bookingId,
+  canEdit,
+  splitCharges,
+  splits,
+  currency,
+  totalMinor,
+  formatTotal,
+  children,
+}: {
+  bookingId: string;
+  canEdit: boolean;
+  splitCharges: boolean;
+  splits: SplitValues[];
+  currency: string;
+  /** The stored total the splits must add up to. */
+  totalMinor: number;
+  /** The same figure, pre-formatted on the server for the hint text. */
+  formatTotal: string;
+  children: ReactNode;
+}) {
+  const [enabled, setEnabled] = useState(splitCharges);
+  const [rows, setRows] = useState<{ key: number; values: SplitValues }[]>(
+    () =>
+      splits.length >= 2
+        ? splits.map((values, index) => ({ key: index, values }))
+        : [
+            { key: 0, values: splits[0] ?? emptySplit() },
+            { key: 1, values: emptySplit() },
+          ],
+  );
+  const [nextKey, setNextKey] = useState(() => Math.max(rows.length, 2));
+
+  const addRow = () => {
+    setRows((current) => [...current, { key: nextKey, values: emptySplit() }]);
+    setNextKey((key) => key + 1);
+  };
+
+  // Two is the floor, as on the create form: one charge is not a division of
+  // anything, and the answer for a booking with a single charge is to set
+  // split charges to No.
+  const removeRow = (key: number) =>
+    setRows((current) =>
+      current.length <= 2 ? current : current.filter((row) => row.key !== key),
+    );
+
+  const update = (key: number, patch: Partial<SplitValues>) =>
+    setRows((current) =>
+      current.map((row) =>
+        row.key === key ? { ...row, values: { ...row.values, ...patch } } : row,
+      ),
+    );
+
+  // Summed in minor units: adding decimal strings as floats is how a cent of
+  // drift gets into a figure that is then compared for equality.
+  let summedMinor = 0;
+  let everyAmountParsed = true;
+
+  for (const row of rows) {
+    const typed = row.values.amount.trim();
+    if (typed === "") {
+      everyAmountParsed = false;
+      continue;
+    }
+
+    const minor = parseAmountToMinor(typed, currency);
+    if (minor === null) {
+      everyAmountParsed = false;
+      continue;
+    }
+
+    summedMinor += minor;
+  }
+
+  const matches = everyAmountParsed && summedMinor === totalMinor;
+
+  return (
+    <EditablePanel
+      title="Accounting"
+      collapsible={false}
+      canEdit={canEdit}
+      bookingId={bookingId}
+      action={updateChargeSplitsAction}
+      submitLabel="Save splits"
+      fields={(error) => (
+        <>
+          <div className="sm:max-w-xs">
+            <Field
+              id="splitCharges"
+              label="Split charges"
+              error={error("splitCharges")}
+            >
+              {(props) => (
+                <StickySelect
+                  {...props}
+                  name="splitCharges"
+                  defaultValue={enabled ? "true" : "false"}
+                  onChange={(event) =>
+                    setEnabled(event.target.value === "true")
+                  }
+                >
+                  <option value="false">No</option>
+                  <option value="true">Yes</option>
+                </StickySelect>
+              )}
+            </Field>
+          </div>
+
+          {/* Hidden rather than unmounted would still submit. Not rendering
+              them is what makes "No" mean the division is dropped. */}
+          {enabled ? (
+            <fieldset className="mt-4">
+              <legend className="text-xs font-semibold tracking-wider text-ink-muted uppercase">
+                How the total is split
+              </legend>
+
+              {error("splits") ? (
+                <p role="alert" className="mt-1 text-xs text-status-danger">
+                  {error("splits")}
+                </p>
+              ) : null}
+
+              <div className="mt-2 flex flex-col gap-3">
+                {rows.map((row, index) => {
+                  const field = (key: string) => `splits.${index}.${key}`;
+
+                  return (
+                    <div
+                      key={row.key}
+                      className="rounded-md border border-line bg-surface-muted/50 p-3"
+                    >
+                      <div className="mb-2 flex items-center justify-between">
+                        <span className="text-xs font-semibold tracking-wider text-ink-muted uppercase">
+                          Split {index + 1}
+                        </span>
+                        {rows.length > 2 ? (
+                          <button
+                            type="button"
+                            onClick={() => removeRow(row.key)}
+                            className="rounded p-1 text-ink-muted hover:bg-status-danger-bg hover:text-status-danger"
+                          >
+                            <Trash2 className="size-4" />
+                            <span className="sr-only">
+                              Remove split {index + 1}
+                            </span>
+                          </button>
+                        ) : null}
+                      </div>
+
+                      <div className="grid gap-3 sm:grid-cols-2">
+                        <Field
+                          id={field("title")}
+                          label="Supplier"
+                          hint="Who this part of the total is paid to."
+                          error={error(field("title"))}
+                        >
+                          {(props) => (
+                            <Input
+                              {...props}
+                              name={field("title")}
+                              placeholder="Skyhyplanners"
+                              value={row.values.title}
+                              onChange={(event) =>
+                                update(row.key, { title: event.target.value })
+                              }
+                            />
+                          )}
+                        </Field>
+
+                        <Field
+                          id={field("amount")}
+                          label="Amount"
+                          hint="Digits and a decimal point."
+                          error={error(field("amount"))}
+                        >
+                          {(props) => (
+                            <Input
+                              {...props}
+                              name={field("amount")}
+                              inputMode="decimal"
+                              placeholder="900.00"
+                              value={row.values.amount}
+                              onChange={(event) =>
+                                update(row.key, { amount: event.target.value })
+                              }
+                            />
+                          )}
+                        </Field>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+
+              <div className="mt-3 flex flex-wrap items-center gap-3">
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="sm"
+                  onClick={addRow}
+                >
+                  <Plus />
+                  Add split
+                </Button>
+
+                {/* Said as it is typed. Splits that do not add up are the
+                    common mistake, and finding out here beats finding out
+                    from a refused save. */}
+                <p
+                  className={
+                    matches
+                      ? "text-xs text-status-success"
+                      : "text-xs text-ink-muted"
+                  }
+                >
+                  Splits total {formatMoney(summedMinor, currency)} of{" "}
+                  {formatTotal}
+                  {matches ? " ✓" : null}
+                </p>
+              </div>
+            </fieldset>
+          ) : (
+            <p className="mt-2 text-xs text-ink-subtle">
+              Saving with this set to No clears any division currently recorded
+              against the booking.
             </p>
           )}
         </>

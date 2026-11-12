@@ -127,6 +127,14 @@ export async function createTestBooking(
     status?: "DRAFT" | "PENDING" | "CONFIRMED" | "TICKETED";
     airlineConfirmation?: string;
     withPassenger?: boolean;
+    /**
+     * Defaults to N/A, which is what a booking with no MCO raised reads.
+     *
+     * The create service derives this from the gross MCO amount; a raw insert
+     * does not go through it, so a spec about the MCO column states the state
+     * it wants rather than relying on a default that means something else.
+     */
+    mcoStatus?: "NOT_APPLICABLE" | "PENDING" | "SUBMITTED" | "CONFIRMED" | "REJECTED";
   } = {},
 ): Promise<TestBooking> {
   const {
@@ -134,6 +142,7 @@ export async function createTestBooking(
     status = "PENDING",
     airlineConfirmation = null,
     withPassenger = true,
+    mcoStatus = "NOT_APPLICABLE",
   } = overrides;
 
   const id = newId();
@@ -153,7 +162,7 @@ export async function createTestBooking(
         \`ticketStatus\`, \`airlineConfirmation\`, \`mcoStatus\`,
         \`splitCharges\`, \`bookedAt\`, \`createdAt\`, \`updatedAt\`)
      VALUES (?, ?, 'FLIGHT', ?, 'NORMAL', ?, ?, ?, 'USD',
-             ?, ?, ?, ?, ?, ?, 'PENDING', ?, 'NOT_APPLICABLE', false,
+             ?, ?, ?, ?, ?, ?, 'PENDING', ?, ?, false,
              NOW(3), NOW(3), NOW(3))`,
     [
       id,
@@ -169,6 +178,7 @@ export async function createTestBooking(
       totalMinor,
       supplierCost,
       airlineConfirmation,
+      mcoStatus,
     ],
   );
 

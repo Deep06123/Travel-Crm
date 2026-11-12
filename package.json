@@ -26,6 +26,7 @@
     "smoke": "tsx scripts/smoke-test.mts",
     "mail:check-sent": "tsx --conditions=react-server scripts/check-sent-copy.mts",
     "dev:db:reset": "bash scripts/start-local-mysql.sh reset",
+    "db:backfill:mco": "tsx scripts/backfill-mco-status.mts",
     "db:sample": "tsx scripts/seed-sample-data.mts",
     "db:sample:clear": "tsx scripts/clear-sample-data.mts"
   },
