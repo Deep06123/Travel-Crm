@@ -89,13 +89,13 @@ function labelledRow(label: string, value: string): string {
 }
 
 /** The traveller table's columns — one fewer on a cruise, which has no ticket. */
-function travellerColumns(data: BookingAuthorizationData): string[] {
+function travellerColumns(data: BookingEmailData): string[] {
   const columns = ["SL No.", "Passenger's Name", "Gender", "Date of Birth"];
 
   return data.product === "CRUISE" ? columns : [...columns, "E-Ticket No."];
 }
 
-function travellerCells(data: BookingAuthorizationData): string[][] {
+function travellerCells(data: BookingEmailData): string[][] {
   const isCruise = data.product === "CRUISE";
 
   return data.passengers.map((passenger, index) => {
@@ -221,8 +221,9 @@ function sailingText(data: BookingAuthorizationData): string[] {
  * the figure the cardholder agreed to and the figures that will appear on their
  * statement are read side by side rather than out of a paragraph.
  */
-function chargePairs(data: BookingAuthorizationData): Array<[string, string]> {
+function chargePairs(data: BookingEmailData): Array<[string, string]> {
   const isCruise = data.product === "CRUISE";
+  const splits = data.chargeSplits ?? [];
 
   return [
     [
@@ -231,11 +232,11 @@ function chargePairs(data: BookingAuthorizationData): Array<[string, string]> {
     ],
     [
       "How it will be charged",
-      data.chargeSplits.length === 0
+      splits.length === 0
         ? "As a single transaction"
-        : `In ${data.chargeSplits.length} transactions, as below`,
+        : `In ${splits.length} transactions, as below`,
     ],
-    ...data.chargeSplits.map(
+    ...splits.map(
       (split, index): [string, string] => [
         split.title?.trim() || `Charge ${index + 1}`,
         formatMoney(split.amountMinor, data.currency),
@@ -245,17 +246,17 @@ function chargePairs(data: BookingAuthorizationData): Array<[string, string]> {
 }
 
 /** What the cardholder is being asked to authorize a charge against. */
-function cardPairs(data: BookingAuthorizationData): Array<[string, string]> {
+function cardPairs(data: BookingEmailData): Array<[string, string]> {
   const card = maskedCard(data.cardType, data.cardLast4);
 
   const rows: Array<[string, string | null]> = [
     ["Booking ID", data.bookingNumber],
-    ["Booked on", formatTicketDate(data.bookedAt)],
-    ["Phone", data.contactPhone],
-    ["Email", data.contactEmail],
+    ["Booked on", data.bookedAt ? formatTicketDate(data.bookedAt) : null],
+    ["Phone", data.contactPhone ?? null],
+    ["Email", data.contactEmail ?? null],
     ["Payment method", card],
     ["Card holder name", data.cardHolderName],
-    ["Billing address", data.billingAddress],
+    ["Billing address", data.billingAddress ?? null],
   ];
 
   return rows.flatMap(([label, value]) => {
@@ -309,7 +310,7 @@ export type AuthorizationSection =
  * state the booking slightly differently.
  */
 export function authorizationSections(
-  data: BookingAuthorizationData,
+  data: BookingEmailData,
 ): AuthorizationSection[] {
   const sailing = data.sailing ? sailingPairs(data.sailing) : [];
 
@@ -334,7 +335,7 @@ export function authorizationSections(
       kind: "pairs",
       title: "Total Charges & Authorization",
       rows: chargePairs(data),
-      ...(data.chargeSplits.length > 0
+      ...((data.chargeSplits?.length ?? 0) > 0
         ? { note: "The sum charged will be the same as the total quoted above." }
         : {}),
       statement: ACKNOWLEDGEMENT,
@@ -352,6 +353,19 @@ function pairsSectionHtml(section: AuthorizationPairsSection): string {
     ${section.note ? `<p style="margin:12px 0 0;font-size:13px;color:#555555;">${escapeHtml(section.note)}</p>` : ""}
     ${section.statement ? `<p style="margin:16px 0 0;font-size:13px;line-height:1.6;color:#333333;">${escapeHtml(section.statement)}</p>` : ""}
   </td></tr>`;
+}
+
+/**
+ * One section as `<tr>` rows, for a caller assembling its own document.
+ *
+ * The e-ticket uses this to print the sailing, card and charge tables the
+ * authorization email states, without taking the traveller table — it has its
+ * own, which redacts dates of birth for staff who may not see them.
+ */
+export function authorizationSectionHtml(section: AuthorizationSection): string {
+  return section.kind === "table"
+    ? tableSectionHtml(section)
+    : pairsSectionHtml(section);
 }
 
 function tableSectionHtml(section: AuthorizationTableSection): string {
@@ -383,14 +397,10 @@ function tableSectionHtml(section: AuthorizationTableSection): string {
  * in. The itinerary is appended last, as markup rather than escaped text.
  */
 export function authorizationDocumentHtml(
-  data: BookingAuthorizationData,
+  data: BookingEmailData,
 ): string {
   const sections = authorizationSections(data)
-    .map((section) =>
-      section.kind === "table"
-        ? tableSectionHtml(section)
-        : pairsSectionHtml(section),
-    )
+    .map(authorizationSectionHtml)
     .join("\n\n  ");
 
   return `

@@ -3,12 +3,10 @@ import "server-only";
 import { after } from "next/server";
 
 import {
-  BookingProduct,
   BookingStatus,
   NotificationChannel,
   NotificationStatus,
 } from "@/generated/prisma/enums";
-import type { Prisma } from "@/generated/prisma/client";
 import { renderETicket } from "@/lib/mail/eticket";
 import {
   bookingRecipientLine,
@@ -27,13 +25,19 @@ import {
   renderEditedEmail,
   type BookingEmailData,
 } from "@/lib/mail/templates";
-import type { PolicyOverrides } from "@/lib/mail/policies";
 import { formatMoney } from "@/lib/financial/money";
 
 import {
   ADMIN_CUSTOMER_EMAIL_SENT,
   dispatchAdminNotice,
 } from "./admin-notification-service";
+
+import {
+  AUTHORIZATION_SELECT,
+  customerNameOf,
+  storedItinerary,
+  toAuthorizationData,
+} from "./authorization-data";
 
 import { loadPolicyOverrides } from "./email-policy-service";
 
@@ -83,70 +87,6 @@ const TEMPLATES = {
 function dedupeKeyFor(bookingId: string, event: BookingEmailEvent): string {
   return `booking:${bookingId}:${event}`;
 }
-
-const BOOKING_SELECT = {
-  id: true,
-  bookingNumber: true,
-  product: true,
-  currency: true,
-  totalMinor: true,
-  travelStartDate: true,
-  airlineConfirmation: true,
-  customEmailSubject: true,
-  emailTopHeading: true,
-  contactName: true,
-  contactEmail: true,
-  billingEmails: true,
-  // The cardholder name and last four digits, which is all of the card the
-  // database holds. No PAN and no CVV column exists to select.
-  cardHolderName: true,
-  cardType: true,
-  cardLast4: true,
-  customer: { select: { firstName: true, lastName: true, email: true } },
-  segments: {
-    orderBy: { sequence: "asc" },
-    select: {
-      airline: true,
-      flightNumber: true,
-      origin: true,
-      destination: true,
-      departureAt: true,
-      arrivalAt: true,
-    },
-  },
-  cruiseDetail: {
-    select: {
-      cruiseLine: true,
-      ship: true,
-      departurePort: true,
-      sailDate: true,
-      returnDate: true,
-      nights: true,
-      itineraryHtml: true,
-    },
-  },
-  // Only the itinerary. The rest of the flight detail — the raw PNR, the
-  // locator — is working material for staff and has no place in a customer's
-  // inbox.
-  flightDetail: { select: { itineraryHtml: true } },
-  // Passport numbers are deliberately not selected: nothing in a customer
-  // email may carry one, and the safest way to guarantee that is for the data
-  // never to be loaded.
-  passengers: {
-    // By the sequence captured on the booking form, so the traveller table on
-    // the e-ticket is numbered the way the agent entered it.
-    orderBy: { sequence: "asc" },
-    select: {
-      firstName: true,
-      lastName: true,
-      ticketNumber: true,
-      gender: true,
-      dateOfBirth: true,
-    },
-  },
-  // The support number printed in the e-ticket header.
-  tfn: { select: { number: true } },
-} as const;
 
 export interface SendBookingEmailInput {
   bookingId: string;
@@ -198,7 +138,7 @@ export async function previewBookingEmail(
 ): Promise<EmailPreview> {
   const booking = await prisma.booking.findUnique({
     where: { id: bookingId },
-    select: BOOKING_SELECT,
+    select: AUTHORIZATION_SELECT,
   });
 
   if (!booking) {
@@ -209,7 +149,7 @@ export async function previewBookingEmail(
   // rather than read raw: `htmlToPlainText` names an image it cannot flatten,
   // and that count should match the images the sent message will carry.
   const data: BookingEmailData = {
-    ...toEmailData(booking, await loadPolicyOverrides()),
+    ...toAuthorizationData(booking, await loadPolicyOverrides()),
     itineraryHtml: await prepareItineraryForPreview(storedItinerary(booking)),
   };
 
@@ -250,7 +190,7 @@ export async function getETicketPreview(
 ): Promise<ETicketPreview | null> {
   const booking = await prisma.booking.findUnique({
     where: { id: bookingId },
-    select: { ...BOOKING_SELECT, status: true },
+    select: { ...AUTHORIZATION_SELECT, status: true },
   });
 
   if (!booking) return null;
@@ -260,7 +200,7 @@ export async function getETicketPreview(
   // relative path, so the image would be broken here for the same reason it
   // would be in a mailbox.
   const data: BookingEmailData = {
-    ...toEmailData(booking, await loadPolicyOverrides()),
+    ...toAuthorizationData(booking, await loadPolicyOverrides()),
     itineraryHtml: await prepareItineraryForPreview(storedItinerary(booking)),
   };
 
@@ -318,7 +258,7 @@ export async function sendBookingEmail({
 
   const booking = await prisma.booking.findUnique({
     where: { id: bookingId },
-    select: BOOKING_SELECT,
+    select: AUTHORIZATION_SELECT,
   });
 
   if (!booking) {
@@ -417,7 +357,7 @@ export async function sendBookingEmail({
     : await prepareItineraryForEmail(storedItinerary(booking));
 
   const data: BookingEmailData = {
-    ...toEmailData(booking, await loadPolicyOverrides()),
+    ...toAuthorizationData(booking, await loadPolicyOverrides()),
     itineraryHtml: itinerary.html,
   };
 
@@ -503,60 +443,6 @@ export async function sendBookingEmail({
 
     return { result: "failed", notificationId: row.id, reason };
   }
-}
-
-/** Derived from the select above, so adding a field cannot desync the two. */
-type BookingRow = Prisma.BookingGetPayload<{ select: typeof BOOKING_SELECT }>;
-
-/**
- * The itinerary as stored, before its images have been relocated.
- *
- * Never rendered directly: every `src` in it points at an administrator-only
- * route. Callers pass it through `prepareItineraryForEmail` (or the preview
- * equivalent) and set the result on the data, which is why `toEmailData` below
- * leaves `itineraryHtml` unset rather than filling it in with this.
- */
-function storedItinerary(booking: BookingRow): string | null {
-  return booking.product === BookingProduct.CRUISE
-    ? (booking.cruiseDetail?.itineraryHtml ?? null)
-    : (booking.flightDetail?.itineraryHtml ?? null);
-}
-
-/** The booking's own contact name, falling back to the customer record. */
-function customerNameOf(booking: BookingRow): string {
-  return (
-    booking.contactName?.trim() ||
-    `${booking.customer.firstName} ${booking.customer.lastName}`.trim() ||
-    "traveller"
-  );
-}
-
-function toEmailData(
-  booking: BookingRow,
-  policyOverrides: PolicyOverrides,
-): BookingEmailData {
-  const customerName = customerNameOf(booking);
-
-  return {
-    bookingNumber: booking.bookingNumber,
-    customerName,
-    product:
-      booking.product === BookingProduct.CRUISE ? "CRUISE" : "FLIGHT",
-    currency: booking.currency,
-    totalMinor: booking.totalMinor,
-    travelStartDate: booking.travelStartDate,
-    airlineConfirmation: booking.airlineConfirmation,
-    segments: booking.segments,
-    cruise: booking.cruiseDetail,
-    passengers: booking.passengers,
-    cardHolderName: booking.cardHolderName,
-    cardType: booking.cardType,
-    cardLast4: booking.cardLast4,
-    customEmailSubject: booking.customEmailSubject,
-    emailTopHeading: booking.emailTopHeading,
-    supportPhone: booking.tfn?.number ?? null,
-    policyOverrides,
-  };
 }
 
 /**

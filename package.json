@@ -18,6 +18,7 @@
     "db:studio": "prisma studio",
     "db:seed": "tsx prisma/seed.ts",
     "admin:reset-password": "tsx --env-file=.env scripts/reset-admin-password.mts",
+    "auth:rerender": "tsx --env-file=.env scripts/rerender-signed-authorization.mts",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:e2e": "playwright test",

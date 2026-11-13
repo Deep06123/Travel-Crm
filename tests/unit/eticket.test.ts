@@ -325,3 +325,103 @@ describe("the emails use the same document", () => {
     expect(mail.text).not.toContain("Itinerary:");
   });
 });
+
+/**
+ * The tables the e-ticket shares with the authorization email.
+ *
+ * The customer keeps the e-ticket, not the message they signed from, so it has
+ * to answer the same questions: which cabin, which card, how the total was
+ * taken.
+ */
+describe("the authorization detail on the e-ticket", () => {
+  const WITH_DETAIL: BookingEmailData = {
+    ...BASE,
+    bookedAt: new Date("2026-10-31T12:00:00Z"),
+    contactEmail: "gopinder@example.invalid",
+    contactPhone: "+1 234 555 0100",
+    billingAddress: "12 Example Street, Leeds, LS1 1AA, United Kingdom",
+    chargeSplits: [
+      { title: "Airline deposit", amountMinor: 100_000 },
+      { title: "Balance", amountMinor: 148_000 },
+    ],
+  };
+
+  it("prints the card and charge tables, split exactly as quoted", () => {
+    const html = renderETicket(WITH_DETAIL, CONFIRMED, "x");
+
+    expect(html).toContain("Credit Card Authorization Details");
+    expect(html).toContain("12 Example Street");
+    expect(html).toContain("Total Charges &amp; Authorization");
+    expect(html).toContain("Airline deposit");
+    expect(html).toContain("In 2 transactions, as below");
+  });
+
+  it("does not ask the customer to acknowledge a document they did not sign", () => {
+    const html = renderETicket(WITH_DETAIL, CONFIRMED, "x");
+
+    expect(html).not.toContain("I acknowledge receipt");
+  });
+
+  it("states the flight legs once and the total once", () => {
+    const html = renderETicket(WITH_DETAIL, CONFIRMED, "x");
+
+    // The legs are the e-ticket's own; nothing else prints them.
+    expect(html).toContain("Flight 1");
+    // The total belongs to the charges table now, not to both.
+    expect(html.match(/\$2,480\.00/g) ?? []).toHaveLength(1);
+  });
+
+  it("gives a cruise the full sailing table in place of the summary", () => {
+    const html = renderETicket(
+      {
+        ...WITH_DETAIL,
+        product: "CRUISE",
+        segments: [],
+        cruise: {
+          cruiseLine: "Royal Caribbean",
+          ship: "Wonder of the Seas",
+          departurePort: "Miami, FL",
+          sailDate: new Date("2027-02-14T00:00:00Z"),
+          returnDate: new Date("2027-02-21T00:00:00Z"),
+          nights: 7,
+        },
+        sailing: {
+          cruiseLine: "Royal Caribbean",
+          ship: "Wonder of the Seas",
+          reservationNumber: "RCL88213",
+          sailingName: "7-night Eastern Caribbean",
+          specialRequest: null,
+          departurePort: "Miami, FL",
+          arrivalPort: "Miami, FL",
+          sailDate: new Date("2027-02-14T00:00:00Z"),
+          returnDate: new Date("2027-02-21T00:00:00Z"),
+          nights: 7,
+          deckNumber: "10",
+          cabinNumber: "10214",
+          cabinCategory: "Balcony",
+          cabinCount: 2,
+          diningPreference: "Late seating",
+          gratuitiesIncluded: true,
+          insuranceIncluded: false,
+        },
+      },
+      CONFIRMED,
+      "x",
+    );
+
+    expect(html).toContain("Sailing Details");
+    // Detail the one-line cruise summary never carried.
+    expect(html).toContain("10214");
+    expect(html).toContain("Late seating");
+    // And the summary it replaces is gone rather than repeated above it.
+    expect(html).not.toContain("Booking Details");
+  });
+
+  it("leaves the e-ticket untouched when none of it was loaded", () => {
+    const html = renderETicket(BASE, CONFIRMED, "x");
+
+    expect(html).toContain("Booking Details");
+    expect(html).not.toContain("Credit Card Authorization Details");
+    expect(html).not.toContain("Total Charges");
+  });
+});

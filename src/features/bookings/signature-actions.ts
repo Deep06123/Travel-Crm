@@ -20,8 +20,15 @@ const schema = z.object({
   bookingId: z.string().min(1),
   intent: z.enum(["preview", "send"]).default("send"),
   // Which configured identity to send from. Empty means "whatever the
-  // settings say for an authorization" — the select's first option.
-  mailAccountId: z.string().trim().min(1).optional(),
+  // settings say for an authorization" — the select's first option, which
+  // posts an empty string rather than nothing at all. Normalised here instead
+  // of rejected: `min(1)` failed the whole form, so every submit made with the
+  // default sender selected came back as "Invalid request."
+  mailAccountId: z
+    .string()
+    .trim()
+    .optional()
+    .transform((value) => (value === "" ? undefined : value)),
   // Present only when the operator edited the message in the preview. Both
   // must arrive together — a subject with no body, or the reverse, is a
   // half-built message rather than an edit.

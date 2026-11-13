@@ -2,6 +2,11 @@ import { maskedCard } from "@/lib/financial/card-display";
 import { formatMoney } from "@/lib/financial/money";
 
 import {
+  authorizationSectionHtml,
+  authorizationSections,
+  type AuthorizationPairsSection,
+} from "./booking-authorization";
+import {
   escapeHtml,
   formatTicketDate,
   itinerarySection,
@@ -73,7 +78,59 @@ function travellerRows(
     .join("");
 }
 
-function bookingDetailRows(data: BookingEmailData): string {
+/**
+ * The sailing, card and charge tables, exactly as the authorization email
+ * states them.
+ *
+ * A customer who comes back months later has the e-ticket in their inbox, not
+ * the authorization email, so the document they keep has to answer the same
+ * questions: which cabin, which card, and how the total was taken. The same
+ * builder renders all three, which is what stops this drifting from the
+ * message they agreed to.
+ *
+ * The traveller table is left behind deliberately — `Traveler Details` above
+ * is the e-ticket's own, and it redacts dates of birth for staff who may not
+ * see them. So is the acknowledgement: it is the wording of a signature, and
+ * nobody signs an e-ticket.
+ *
+ * Empty when the builder loaded none of this, which keeps an older caller's
+ * e-ticket exactly as it was rather than drawing blank tables.
+ */
+function authorizationDetail(data: BookingEmailData): AuthorizationPairsSection[] {
+  const present =
+    data.bookedAt != null ||
+    data.billingAddress != null ||
+    data.sailing != null ||
+    (data.chargeSplits?.length ?? 0) > 0;
+
+  if (!present) return [];
+
+  return authorizationSections(data)
+    .filter(
+      (section): section is AuthorizationPairsSection => section.kind === "pairs",
+    )
+    // Rebuilt without `statement` rather than spread-and-deleted, so the
+    // acknowledgement cannot creep back in behind a rename.
+    .map(({ title, rows, note }) => ({
+      kind: "pairs" as const,
+      title,
+      rows,
+      ...(note ? { note } : {}),
+    }));
+}
+
+/**
+ * The booking's own summary table.
+ *
+ * `withDetail` says the authorization tables below will state the reference,
+ * the card and the total in full. The cruise summary is then entirely
+ * contained in `Sailing Details` and drops out; a flight keeps its legs, which
+ * nothing else prints, and sheds only the rows that would be said twice.
+ */
+function bookingDetailRows(
+  data: BookingEmailData,
+  withDetail: boolean,
+): string {
   const cell = (label: string, value: string) =>
     `<tr>
   <td style="padding:8px 10px;border:1px solid #d9dee5;font-size:13px;font-weight:bold;width:40%;">${escapeHtml(label)}</td>
@@ -90,6 +147,8 @@ function bookingDetailRows(data: BookingEmailData): string {
     (card ? cell("Payment method", card) : "");
 
   if (data.product === "CRUISE") {
+    if (withDetail) return "";
+
     return [
       cell("Cruise line", data.cruise?.cruiseLine ?? "—"),
       cell("Ship", data.cruise?.ship ?? "—"),
@@ -118,12 +177,14 @@ function bookingDetailRows(data: BookingEmailData): string {
     )
     .join("");
 
-  return (
-    (legs || cell("Itinerary", "To be confirmed")) +
-    cell("Booking reference", data.bookingNumber) +
-    cell("Total", formatMoney(data.totalMinor, data.currency)) +
-    paymentRows
-  );
+  const flights = legs || cell("Itinerary", "To be confirmed");
+
+  return withDetail
+    ? flights
+    : flights +
+        cell("Booking reference", data.bookingNumber) +
+        cell("Total", formatMoney(data.totalMinor, data.currency)) +
+        paymentRows;
 }
 
 /**
@@ -152,6 +213,9 @@ export function renderETicket(
   const confirmation = data.airlineConfirmation?.trim() || data.bookingNumber;
 
   const columns = isCruise ? 4 : 5;
+
+  const detail = authorizationDetail(data);
+  const detailRows = bookingDetailRows(data, detail.length > 0);
 
   return `<!doctype html>
 <html><body style="margin:0;padding:0;background:#ffffff;font-family:Arial,Helvetica,sans-serif;color:#333333;">
@@ -209,13 +273,19 @@ export function renderETicket(
     </table>
   </td></tr>
 
-  ${sectionHeading("Booking Details")}
+  ${
+    detailRows
+      ? `${sectionHeading("Booking Details")}
 
   <tr><td style="padding:16px 20px;">
     <table role="presentation" cellpadding="0" cellspacing="0" style="width:100%;border-collapse:collapse;">
-      ${bookingDetailRows(data)}
+      ${detailRows}
     </table>
-  </td></tr>
+  </td></tr>`
+      : ""
+  }
+
+  ${detail.map(authorizationSectionHtml).join("\n\n  ")}
 
   <!-- The itinerary as the agent composed it, below the structured detail it
        elaborates on. Sometimes it is the carrier's own ticket as an image, in

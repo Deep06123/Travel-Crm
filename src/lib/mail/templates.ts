@@ -4,6 +4,10 @@ import type { CardType } from "@/generated/prisma/enums";
 import { formatCalendarDate, formatDate } from "@/lib/format";
 import { formatMoney } from "@/lib/financial/money";
 
+import type {
+  AuthorizationChargeSplit,
+  AuthorizationSailing,
+} from "./booking-authorization";
 import { renderETicket } from "./eticket";
 import { htmlToPlainText } from "./html";
 import type { PolicyOverrides } from "./policies";
@@ -100,6 +104,24 @@ export interface BookingEmailData {
    * section rather than as an empty one.
    */
   itineraryHtml?: string | null;
+  /**
+   * The authorization detail, where the builder loaded it.
+   *
+   * Optional because these fields describe what the cardholder agreed to
+   * rather than what was booked, and not every document needs them. The
+   * e-ticket prints the same sailing, card and charge tables as the
+   * authorization email when they are present — see `authorizationSections` —
+   * and leaves each one out when it is not, rather than drawing an empty one.
+   *
+   * `BookingAuthorizationData` narrows these to required: an email that asks a
+   * cardholder to agree to a charge cannot be built without them.
+   */
+  bookedAt?: Date | null;
+  contactEmail?: string | null;
+  contactPhone?: string | null;
+  billingAddress?: string | null;
+  chargeSplits?: readonly AuthorizationChargeSplit[];
+  sailing?: AuthorizationSailing | null;
   /**
    * The policy wording an operator has rewritten in Settings.
    *

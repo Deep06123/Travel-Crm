@@ -21,8 +21,15 @@ const resendSchema = z.object({
   event: z.enum([BOOKING_CONFIRMED, BOOKING_TICKETED]),
   intent: z.enum(["preview", "send"]).default("send"),
   // Which configured identity to send from; empty means the default for this
-  // kind of message. Ignored by a preview, which transmits nothing.
-  mailAccountId: z.string().trim().min(1).optional(),
+  // kind of message. Ignored by a preview, which transmits nothing. The
+  // select's first option posts an empty string, so that is normalised to
+  // "unset" rather than rejected — `min(1)` failed the whole form and the
+  // operator was told "Invalid request." for choosing the default.
+  mailAccountId: z
+    .string()
+    .trim()
+    .optional()
+    .transform((value) => (value === "" ? undefined : value)),
   // Present only when the operator edited the message in the preview. Both
   // must arrive together — a subject with no body, or the reverse, is a
   // half-built message rather than an edit.

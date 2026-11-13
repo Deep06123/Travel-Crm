@@ -597,6 +597,32 @@ export async function deleteTestReferenceData(): Promise<void> {
 }
 
 /**
+ * A sending account, so the "Send from" picker is drawn at all.
+ *
+ * Without one configured the picker renders nothing, and the forms it sits in
+ * post no `mailAccountId` — which is precisely the arrangement that hid the
+ * bug where choosing its default option failed the whole submit. Inserted
+ * directly rather than through the settings form: the spec that needs this
+ * cares about the booking page, not about how the account got there.
+ */
+export async function createTestMailAccount(
+  name = "sender",
+): Promise<{ id: string; label: string }> {
+  const id = newId();
+  const label = `${name} ${E2E_TAG} ${randomBytes(3).toString("hex")}`;
+
+  await query(
+    `INSERT INTO \`MailAccount\`
+       (\`id\`, \`label\`, \`fromEmail\`, \`fromName\`, \`host\`, \`port\`,
+        \`secure\`, \`isActive\`, \`createdAt\`, \`updatedAt\`)
+     VALUES (?, ?, ?, ?, 'localhost', 587, false, true, NOW(3), NOW(3))`,
+    [id, label, `${id}@example.test`, "E2E Sender"],
+  );
+
+  return { id, label };
+}
+
+/**
  * Removes the sending accounts this suite created.
  *
  * Named rather than id-matched, because an account is created through the form

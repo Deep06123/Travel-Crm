@@ -4,6 +4,7 @@ import {
   cleanupFixtures,
   createTestBooking,
   createTestCustomer,
+  createTestMailAccount,
   createTestUser,
   signIn,
   type TestCustomer,
@@ -106,6 +107,67 @@ test("the e-ticket can be read while its send is still blocked", async ({
   await expect(preview).toHaveURL(
     new RegExp(`/admin/bookings/${booking.id}/eticket$`),
   );
+});
+
+/**
+ * The sender picker's first option is "Default for this email", and it posts
+ * an empty string. The action's schema required a non-empty id when the field
+ * was present at all, so every submit made without choosing a named account —
+ * the normal case — came back "Invalid request." and the editor never opened.
+ *
+ * Only reproducible with an account configured: with none, the picker is not
+ * drawn and the field is absent, which the schema accepts.
+ */
+test("the email editor opens with the default sender selected", async ({
+  page,
+}) => {
+  await createTestMailAccount("authview");
+  const booking = await createTestBooking(customer.id, operations.id);
+
+  await signIn(page, operations);
+  await page.goto(`/admin/bookings/${booking.id}`);
+
+  const panel = page.locator("section", {
+    has: page.getByRole("heading", {
+      name: "Customer authorization",
+      exact: true,
+    }),
+  });
+
+  const sender = panel.getByLabel("Send from").first();
+  await expect(sender).toHaveValue("");
+
+  await panel.getByRole("button", { name: "Edit email" }).first().click();
+
+  await expect(panel.getByText("Invalid request.")).toHaveCount(0);
+  await expect(
+    panel.getByRole("button", { name: "Send this version" }),
+  ).toBeVisible();
+});
+
+/** The same defect, in the action behind the e-ticket's own editor. */
+test("the e-ticket editor opens with the default sender selected", async ({
+  page,
+}) => {
+  await createTestMailAccount("authview-eticket");
+  const booking = await createTestBooking(customer.id, operations.id);
+
+  await signIn(page, operations);
+  await page.goto(`/admin/bookings/${booking.id}`);
+
+  const panel = page.locator("section", {
+    has: page.getByRole("heading", {
+      name: "Customer authorization",
+      exact: true,
+    }),
+  });
+
+  // The second picker and the second Edit belong to the e-ticket block.
+  await expect(panel.getByLabel("Send from").nth(1)).toHaveValue("");
+  await panel.getByRole("button", { name: "Edit email" }).nth(1).click();
+
+  await expect(panel.getByText("Invalid request.")).toHaveCount(0);
+  await expect(panel.getByText("E-ticket email", { exact: true })).toBeVisible();
 });
 
 test("reading the authorization email needs the same permission as sending it", async ({
