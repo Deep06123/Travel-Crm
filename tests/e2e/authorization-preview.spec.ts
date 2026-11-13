@@ -64,8 +64,14 @@ test("the authorization email can be read without sending or issuing a link", as
   await expect(body.getByText("CLICK TO CONFIRM")).toBeVisible();
   await expect(body.getByText(booking.bookingNumber).first()).toBeVisible();
 
-  // The preview says the link is inert, and means it.
-  await expect(preview.getByText("This is a preview")).toBeVisible();
+  // The page states what the confirm button will do. Production says the
+  // button is inert; a development build says it issues a real link, because
+  // there it is the only way to reach the signing page on a machine with no
+  // mail transport. Either wording satisfies the property under test — that
+  // the operator is told, rather than left to assume.
+  await expect(
+    preview.getByText(/This is a preview|Development build/),
+  ).toBeVisible();
 
   await preview.close();
 
@@ -94,9 +100,17 @@ test("the e-ticket can be read while its send is still blocked", async ({
   });
 
   // Unsigned, so sending is refused — but checking the document is not.
+  //
+  // The button stays clickable on purpose: a greyed-out Send reads as broken,
+  // and the operator never finds the sentence underneath explaining why. The
+  // rule lives in `bookingEmailAction`, which refuses the send and answers in
+  // words, so the control says why rather than merely resisting.
   await expect(
     panel.getByRole("button", { name: /Send E-Ticket Email/i }),
-  ).toBeDisabled();
+  ).toBeEnabled();
+  await expect(
+    panel.getByText("The customer has not signed the authorization yet."),
+  ).toBeVisible();
 
   const [preview] = await Promise.all([
     context.waitForEvent("page"),
@@ -107,6 +121,16 @@ test("the e-ticket can be read while its send is still blocked", async ({
   await expect(preview).toHaveURL(
     new RegExp(`/admin/bookings/${booking.id}/eticket$`),
   );
+  await preview.close();
+
+  // And the refusal is real, not a disabled button: clicking Send on an
+  // unsigned booking is turned away by the action before anything is
+  // transmitted. This is the half the old `toBeDisabled` assertion stood in
+  // for, now checked where the rule actually lives.
+  await panel.getByRole("button", { name: /Send E-Ticket Email/i }).click();
+  await expect(
+    panel.getByText("so the e-ticket cannot be sent"),
+  ).toBeVisible();
 });
 
 /**

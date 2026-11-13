@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
-import { SmtpMailAdapter } from "@/lib/mail/smtp-adapter";
+import { flushSentCopies, SmtpMailAdapter } from "@/lib/mail/smtp-adapter";
 import { resetSentFolderCache } from "@/lib/mail/sent-copy";
 
 import { ImapSink } from "../helpers/imap-sink";
@@ -8,6 +8,12 @@ import { SmtpSink } from "../helpers/smtp-sink";
 
 /**
  * Filing a copy of a sent message in the mailbox's Sent folder.
+ *
+ * The copy is dispatched rather than awaited — the message is already with the
+ * SMTP server by then, and making the sender wait for a second upload of the
+ * same bytes is what made sending feel slow. Every assertion below therefore
+ * waits on `flushSentCopies()` first, which is also the honest shape of the
+ * guarantee: the copy is attempted after the send, not during it.
  *
  * Both ends are real servers on loopback — SMTP accepts the message, IMAP
  * accepts the copy — because the whole point of this feature is that a second
@@ -74,6 +80,7 @@ const message = {
 describe("saving a copy to the Sent folder", () => {
   it("appends the message to the folder the server flags \\Sent", async () => {
     await adapter().send(message);
+    await flushSentCopies();
 
     const copy = imap.only();
 
@@ -86,6 +93,7 @@ describe("saving a copy to the Sent folder", () => {
 
   it("files the same message that was delivered, Message-ID and all", async () => {
     const result = await adapter().send(message);
+    await flushSentCopies();
 
     const delivered = smtp.only().data;
     const copy = imap.only().message;
@@ -114,6 +122,7 @@ describe("saving a copy to the Sent folder", () => {
         },
       ],
     });
+    await flushSentCopies();
 
     const copy = imap.only().message;
 
@@ -124,6 +133,7 @@ describe("saving a copy to the Sent folder", () => {
 
   it("opens no IMAP connection at all when no copy is configured", async () => {
     await adapter({ sentCopy: false }).send(message);
+    await flushSentCopies();
 
     expect(smtp.messages).toHaveLength(1);
     expect(imap.connections).toBe(0);
@@ -135,6 +145,7 @@ describe("when the mailbox will not take the copy", () => {
     imap.rejectAppend = true;
 
     const result = await adapter().send(message);
+    await flushSentCopies();
 
     // The customer has their e-ticket. A refused copy is a bookkeeping
     // problem, and throwing here would make it a booking problem.
@@ -147,6 +158,8 @@ describe("when the mailbox will not take the copy", () => {
     imap.rejectLogin = true;
 
     await expect(adapter().send(message)).resolves.toBeDefined();
+    await flushSentCopies();
+
     expect(smtp.messages).toHaveLength(1);
     expect(imap.appends).toHaveLength(0);
   });
@@ -169,6 +182,31 @@ describe("when the mailbox will not take the copy", () => {
     });
 
     await expect(unreachable.send(message)).resolves.toBeDefined();
+    await flushSentCopies();
+
     expect(smtp.messages).toHaveLength(1);
+  });
+
+  /**
+   * The reason the copy is dispatched rather than awaited.
+   *
+   * A mailbox that accepts the connection and then stops talking is held for
+   * fifteen seconds before the append is abandoned. That used to be fifteen
+   * seconds of an operator watching a Send button for a message the SMTP
+   * server had already taken.
+   */
+  it("does not hold the send open while a stalled mailbox is waited on", async () => {
+    imap.stallAppend = true;
+
+    const startedAt = performance.now();
+    await adapter().send(message);
+    const elapsed = performance.now() - startedAt;
+
+    // Comfortably under the 15s append timeout, and under anything that could
+    // be explained by the loopback SMTP conversation.
+    expect(elapsed).toBeLessThan(2_000);
+    expect(smtp.messages).toHaveLength(1);
+
+    imap.stallAppend = false;
   });
 });

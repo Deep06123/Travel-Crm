@@ -43,6 +43,14 @@ export class ImapSink {
   /** Set to accept nothing at all, exercising a mailbox that will not sign in. */
   rejectLogin = false;
 
+  /**
+   * Set to take an APPEND and never answer it.
+   *
+   * A refused copy fails fast; a mailbox that goes quiet mid-upload is the one
+   * that used to hold a send open until the append timed out.
+   */
+  stallAppend = false;
+
   /** Counts connections, so a test can prove none was opened. */
   connections = 0;
 
@@ -81,6 +89,7 @@ export class ImapSink {
     this.appends.length = 0;
     this.rejectAppend = false;
     this.rejectLogin = false;
+    this.stallAppend = false;
     this.connections = 0;
   }
 
@@ -125,6 +134,11 @@ export class ImapSink {
 
           const append = pending;
           pending = undefined;
+
+          if (this.stallAppend) {
+            // Deliberately no response: the client waits for its own timeout.
+            return;
+          }
 
           if (this.rejectAppend) {
             socket.write(`${append.tag} NO [CANNOT] Append refused\r\n`);

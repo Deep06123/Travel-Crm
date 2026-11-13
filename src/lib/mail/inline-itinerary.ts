@@ -106,39 +106,71 @@ async function loadImages(
   if (sources.size === 0) return loaded;
 
   const storage = getStorage();
+  const startedAt = performance.now();
+
+  // Fetched together rather than one after another. An itinerary that is four
+  // screenshots used to pay four round trips end to end, which on object
+  // storage is most of the time spent preparing the message — and the operator
+  // waits for all of it before the send even begins.
+  //
+  // The budget below still applies in source order, so which images survive an
+  // over-budget itinerary does not depend on which request happened to return
+  // first.
+  const fetched = await Promise.all(
+    [...sources].map(async (src) => {
+      const key = storageKeyFromPath(src);
+      const contentType = key ? contentTypeForKey(key) : null;
+
+      if (!key || !contentType) return null;
+
+      try {
+        return { src, key, contentType, buffer: await storage.get(key) };
+      } catch (error: unknown) {
+        // A referenced image that is no longer in storage must not cost the
+        // customer their email. The reference is dropped below and the rest of
+        // the itinerary is sent.
+        if (error instanceof ObjectNotFoundError) {
+          log.warn({ key }, "Itinerary image missing from storage; dropped");
+          return null;
+        }
+
+        throw error;
+      }
+    }),
+  );
+
   let totalBytes = 0;
 
-  for (const src of sources) {
-    const key = storageKeyFromPath(src);
-    const contentType = key ? contentTypeForKey(key) : null;
+  for (const image of fetched) {
+    if (!image) continue;
 
-    if (!key || !contentType) continue;
-
-    try {
-      const buffer = await storage.get(key);
-
-      if (totalBytes + buffer.byteLength > MAX_TOTAL_IMAGE_BYTES) {
-        log.warn(
-          { key, totalBytes, imageBytes: buffer.byteLength },
-          "Itinerary image dropped from email: attachment budget exhausted",
-        );
-        continue;
-      }
-
-      totalBytes += buffer.byteLength;
-      loaded.set(src, { buffer, contentType, key });
-    } catch (error: unknown) {
-      // A referenced image that is no longer in storage must not cost the
-      // customer their email. The reference is dropped below and the rest of
-      // the itinerary is sent.
-      if (error instanceof ObjectNotFoundError) {
-        log.warn({ key }, "Itinerary image missing from storage; dropped");
-        continue;
-      }
-
-      throw error;
+    if (totalBytes + image.buffer.byteLength > MAX_TOTAL_IMAGE_BYTES) {
+      log.warn(
+        { key: image.key, totalBytes, imageBytes: image.buffer.byteLength },
+        "Itinerary image dropped from email: attachment budget exhausted",
+      );
+      continue;
     }
+
+    totalBytes += image.buffer.byteLength;
+    loaded.set(image.src, {
+      buffer: image.buffer,
+      contentType: image.contentType,
+      key: image.key,
+    });
   }
+
+  // The other half of a slow send: these bytes travel to the mail server, and
+  // base64 adds a third again on top. An itinerary of raw phone screenshots is
+  // routinely heavier than everything else in the message put together.
+  log.info(
+    {
+      images: loaded.size,
+      totalBytes,
+      durationMs: Math.round(performance.now() - startedAt),
+    },
+    "Itinerary images prepared",
+  );
 
   return loaded;
 }

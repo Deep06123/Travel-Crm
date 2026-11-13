@@ -555,8 +555,13 @@ export async function verifyMailAccount(id: string): Promise<
 const adapters = new Map<string, SmtpMailAdapter>();
 
 function forgetAdapter(id: string): void {
-  for (const key of adapters.keys()) {
-    if (key.startsWith(`${id}:`)) adapters.delete(key);
+  for (const [key, adapter] of adapters) {
+    if (!key.startsWith(`${id}:`)) continue;
+
+    // Closed, not merely dropped: the transport pools its connections, and an
+    // adapter nobody holds a reference to still holds authenticated sockets.
+    adapter.close();
+    adapters.delete(key);
   }
 
   // The discovered Sent folder is keyed by host and user, not by account, so
@@ -567,6 +572,7 @@ function forgetAdapter(id: string): void {
 
 /** Test seam, and the counterpart to `resetMailerCache`. */
 export function resetMailAccountCache(): void {
+  for (const adapter of adapters.values()) adapter.close();
   adapters.clear();
 }
 
@@ -620,6 +626,16 @@ function buildAdapter(account: MailAccountRow): SmtpMailAdapter {
   const key = `${account.id}:${account.updatedAt.getTime()}`;
   const cached = adapters.get(key);
   if (cached) return cached;
+
+  // An earlier build of this same account — the row has been edited since,
+  // here or in another process. Its pool is closed before the replacement
+  // opens one, so an account edited repeatedly cannot accumulate sockets.
+  for (const [stale, adapter] of adapters) {
+    if (!stale.startsWith(`${account.id}:`)) continue;
+
+    adapter.close();
+    adapters.delete(stale);
+  }
 
   const password = account.passwordCipher
     ? openSecret(account.passwordCipher, SECRET_PURPOSE)

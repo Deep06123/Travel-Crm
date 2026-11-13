@@ -118,9 +118,13 @@ test("the e-ticket cannot be sent before the customer has signed", async ({
   await expect(
     panel.getByText("has not been asked to authorize"),
   ).toBeVisible();
-  await expect(
-    panel.getByRole("button", { name: /Send E-Ticket Email/i }),
-  ).toBeDisabled();
+
+  // The button is clickable by design — a greyed-out Send reads as broken and
+  // hides its own explanation. The rule is enforced by `bookingEmailAction`,
+  // which turns the send away in words before anything is transmitted, so that
+  // is where this asserts it.
+  await panel.getByRole("button", { name: /Send E-Ticket Email/i }).click();
+  await expect(panel.getByText("so the e-ticket cannot be sent")).toBeVisible();
 });
 
 test("an unknown link shows nothing about any booking", async ({

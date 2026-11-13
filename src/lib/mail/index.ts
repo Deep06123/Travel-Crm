@@ -10,7 +10,11 @@ import { type MailAdapter, MailNotConfiguredError } from "./types";
 const log = loggerFor("mail");
 
 export * from "./types";
-export { SmtpMailAdapter, type SmtpAdapterOptions } from "./smtp-adapter";
+export {
+  flushSentCopies,
+  SmtpMailAdapter,
+  type SmtpAdapterOptions,
+} from "./smtp-adapter";
 export {
   appendToSentFolder,
   deriveImapHost,

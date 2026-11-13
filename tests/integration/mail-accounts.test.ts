@@ -10,7 +10,11 @@ import {
 import { hashPassword } from "@/lib/auth/password";
 import { prisma } from "@/lib/db/prisma";
 import { resetEnvCache } from "@/lib/env";
-import { resetMailerCache, resetSentFolderCache } from "@/lib/mail";
+import {
+  flushSentCopies,
+  resetMailerCache,
+  resetSentFolderCache,
+} from "@/lib/mail";
 import { sendAuthorizationEmail } from "@/server/services/booking-authorization-service";
 import { createFlightBooking } from "@/server/services/booking-service";
 import {
@@ -504,6 +508,7 @@ describe("saving sent mail to the mailbox's Sent folder", () => {
       subject: "Authorize your booking",
       text: "Please authorize.",
     });
+    await flushSentCopies();
 
     expect(sink.messages).toHaveLength(1);
 
@@ -528,6 +533,7 @@ describe("saving sent mail to the mailbox's Sent folder", () => {
       subject: "No copy",
       text: "No copy.",
     });
+    await flushSentCopies();
 
     expect(sink.messages).toHaveLength(1);
     expect(imap.connections).toBe(0);
@@ -545,6 +551,7 @@ describe("saving sent mail to the mailbox's Sent folder", () => {
       subject: "Before the edit",
       text: "Before the edit.",
     });
+    await flushSentCopies();
     expect(imap.appends).toHaveLength(1);
 
     await updateMailAccount(
@@ -570,6 +577,7 @@ describe("saving sent mail to the mailbox's Sent folder", () => {
       subject: "After the edit",
       text: "After the edit.",
     });
+    await flushSentCopies();
 
     // The cached adapter held the old configuration until the row's
     // `updatedAt` changed the key — this is that, from the outside: a second

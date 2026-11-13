@@ -1,11 +1,16 @@
 import "server-only";
 
+import { after } from "next/server";
 import nodemailer, { type Transporter } from "nodemailer";
 import MailComposer from "nodemailer/lib/mail-composer";
 import type { Options as MailOptions } from "nodemailer/lib/mailer";
 
+import { loggerFor } from "@/lib/logging/logger";
+
 import { trySaveToSentFolder, type SentCopyOptions } from "./sent-copy";
 import type { MailAdapter, MailMessage, MailResult } from "./types";
+
+const log = loggerFor("smtp");
 
 export interface SmtpAdapterOptions {
   host: string;
@@ -21,6 +26,47 @@ export interface SmtpAdapterOptions {
    * with no mailbox behind it.
    */
   sentCopy?: SentCopyOptions | undefined;
+}
+
+/** Sent-folder copies still in flight, so a test can wait for them. */
+const pendingCopies = new Set<Promise<unknown>>();
+
+/**
+ * Files the Sent copy without the sender waiting for it.
+ *
+ * Saving to Sent is a second IMAP conversation — connect, log in, and upload
+ * the whole message a second time — and the message has already been accepted
+ * by the SMTP server before it starts. Awaiting it meant an operator sending an
+ * authorization watched a progress spinner through two uploads of the same
+ * megabytes, the second of which changes nothing for the customer.
+ *
+ * `after()` for the same reason the admin notices use it: a bare floating
+ * promise races the response and can be abandoned when a platform freezes the
+ * process between invocations. The fallback covers scripts and tests, which
+ * run outside any request scope.
+ */
+function fileSentCopy(options: SentCopyOptions, raw: Buffer): void {
+  const run = () => {
+    const promise = trySaveToSentFolder(options, raw).finally(() => {
+      pendingCopies.delete(promise);
+    });
+
+    pendingCopies.add(promise);
+    return promise;
+  };
+
+  try {
+    after(run);
+  } catch {
+    void run();
+  }
+}
+
+/** Waits for every Sent-folder copy still in flight. For tests. */
+export async function flushSentCopies(): Promise<void> {
+  while (pendingCopies.size > 0) {
+    await Promise.allSettled([...pendingCopies]);
+  }
 }
 
 /**
@@ -51,9 +97,22 @@ export class SmtpMailAdapter implements MailAdapter {
   /**
    * The transporter is built on first use and reused.
    *
-   * nodemailer pools connections per transporter, so constructing one per
-   * message would open a fresh TCP and TLS handshake every time — slow, and
-   * enough to trip the connection-rate limits providers apply.
+   * `pool` is what makes reuse mean anything. Without it nodemailer opens a
+   * connection, sends one message and closes it — so every email paid for a
+   * TCP handshake, a TLS handshake and an AUTH round trip before a single byte
+   * of the message moved. Against a provider a few hundred milliseconds away
+   * that is most of the time an operator spends watching the Send button.
+   * Pooled, the second message onwards reuses an authenticated socket.
+   *
+   * The limits are deliberately modest: shared mail hosts cap concurrent
+   * connections per account aggressively, and being throttled is slower than
+   * queueing behind three sockets. `maxMessages` recycles a connection before
+   * a provider's own per-connection message cap closes it underneath a send.
+   *
+   * The timeouts matter as much as the pool. A mail host that accepts a socket
+   * and then stops talking would otherwise hold the operator's request open
+   * until something upstream gave up; these fail it in seconds, and the
+   * Notification row records the failure so it can be retried.
    */
   private getTransporter(): Transporter {
     if (this.transporter) return this.transporter;
@@ -64,6 +123,12 @@ export class SmtpMailAdapter implements MailAdapter {
       host,
       port,
       secure,
+      pool: true,
+      maxConnections: 3,
+      maxMessages: 50,
+      connectionTimeout: 10_000,
+      greetingTimeout: 10_000,
+      socketTimeout: 30_000,
       // Anonymous relay is legitimate for a local catcher and for an internal
       // relay that authorises by network, so credentials stay optional.
       ...(user && password ? { auth: { user, pass: password } } : {}),
@@ -105,7 +170,11 @@ export class SmtpMailAdapter implements MailAdapter {
     // to the server are also the bytes filed in Sent. Composing twice would
     // mint a second Message-ID, and the copy would no longer be the message
     // the customer's reply threads against.
+    const composedAt = performance.now();
     const raw = await new MailComposer(options).compile().build();
+    const composeMs = performance.now() - composedAt;
+
+    const sentAt = performance.now();
 
     const info = await this.getTransporter().sendMail({
       raw,
@@ -114,8 +183,22 @@ export class SmtpMailAdapter implements MailAdapter {
       envelope: { from: this.options.from, to: message.to },
     });
 
+    // Logged on every send, not only a slow one: "the email is slow" is a
+    // report nobody can act on, and the three numbers below say whether the
+    // time went into building a message full of images or into the provider.
+    log.info(
+      {
+        host: this.options.host,
+        bytes: raw.byteLength,
+        attachments: message.attachments?.length ?? 0,
+        composeMs: Math.round(composeMs),
+        sendMs: Math.round(performance.now() - sentAt),
+      },
+      "SMTP send complete",
+    );
+
     if (this.options.sentCopy) {
-      await trySaveToSentFolder(this.options.sentCopy, raw);
+      fileSentCopy(this.options.sentCopy, raw);
     }
 
     // The message's own id first, not nodemailer's. Handed a `raw` buffer it
@@ -124,6 +207,20 @@ export class SmtpMailAdapter implements MailAdapter {
     // `providerReference` with an id that matches nothing in the provider's
     // logs and nothing in the mailbox.
     return { providerReference: messageIdOf(raw) ?? info.messageId };
+  }
+
+  /**
+   * Closes the pool's idle connections.
+   *
+   * Required now that the transport pools: an adapter dropped from the cache
+   * — because its account was edited or disabled — would otherwise hold its
+   * authenticated sockets open for the life of the process, and a provider
+   * counts those against the account's connection limit whether or not
+   * anything is being sent through them.
+   */
+  close(): void {
+    this.transporter?.close();
+    this.transporter = undefined;
   }
 
   /**
