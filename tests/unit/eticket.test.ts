@@ -61,6 +61,54 @@ describe("renderETicket", () => {
     expect(html).toContain("GOPINDER AIRLINE");
   });
 
+  /**
+   * The generated opening block, markup and all.
+   *
+   * Pinned literally because the block became overridable: an operator may now
+   * replace these three paragraphs, and the rendering had to be generalised to
+   * allow that. A booking nobody has edited must still produce exactly the
+   * document it always did, which a `toContain` on the words alone would not
+   * catch — spacing and weight are part of what the customer sees.
+   */
+  it("renders the generated opening exactly as it always has", () => {
+    const html = renderETicket(BASE, CONFIRMED, "Thank you for booking with us.");
+
+    expect(html).toContain(
+      '<p style="margin:0 0 8px;font-size:14px;font-weight:bold;color:#333333;">Dear gopinder kumar,</p>',
+    );
+    expect(html).toContain(
+      '<p style="margin:0 0 6px;font-size:14px;">Greetings for the day!</p>',
+    );
+    expect(html).toContain(
+      '<p style="margin:0;font-size:14px;">You are all set to fly with GOPINDER AIRLINE.</p>',
+    );
+  });
+
+  /** Only this block changes; the document under it is not editable. */
+  it("replaces the opening with an operator's message, keeping the document", () => {
+    const html = renderETicket(BASE, CONFIRMED, "Thank you for booking with us.", {
+      intro: "Dear gopinder,\n\nAs discussed, the amended details are below.",
+    });
+
+    expect(html).toContain(
+      '<p style="margin:0 0 8px;font-size:14px;font-weight:bold;color:#333333;">Dear gopinder,</p>',
+    );
+    expect(html).toContain("As discussed, the amended details are below.");
+    expect(html).not.toContain("Greetings for the day!");
+    // The document itself is untouched.
+    expect(html).toContain(CONFIRMED);
+    expect(html).toContain("GOPINDER AIRLINE");
+  });
+
+  it("escapes an edited opening rather than interpolating markup", () => {
+    const html = renderETicket(BASE, CONFIRMED, "x", {
+      intro: "<script>alert(1)</script>",
+    });
+
+    expect(html).not.toContain("<script>");
+    expect(html).toContain("&lt;script&gt;");
+  });
+
   it("shows the support number from the booking's TFN", () => {
     const html = renderETicket(BASE, CONFIRMED, "x");
 

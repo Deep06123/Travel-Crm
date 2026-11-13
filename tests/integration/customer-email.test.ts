@@ -22,6 +22,8 @@ import {
   BOOKING_CONFIRMED,
   BOOKING_TICKETED,
   flushPendingBookingEmails,
+  getETicketPreview,
+  previewBookingEmail,
   sendBookingEmail,
 } from "@/server/services/customer-email-service";
 
@@ -363,6 +365,200 @@ describe("confirming a booking", () => {
 
     expect(resent.result).toBe("sent");
     expect(sink.messages).toHaveLength(2);
+  });
+});
+
+/**
+ * An operator's wording, once sent, is the message for this booking.
+ *
+ * The same complaint as the authorization email: an edit went out, every
+ * preview afterwards re-rendered the booking and showed the generated
+ * document, and the next send quietly reverted to it.
+ */
+describe("an edited lifecycle email", () => {
+  const EDIT = {
+    subject: "Your documents, as discussed",
+    body: "As agreed on the phone, here are the amended details.",
+  };
+
+  /**
+   * An edit changes the subject and the opening message. It does not change
+   * the document — the traveller table, the ticket numbers and the charges are
+   * what the customer is being sent, and an edited send used to replace the
+   * whole thing with a plain note, deleting the ticket from their email.
+   */
+  it("keeps the document and replaces only the opening", async () => {
+    const id = await makeBooking({
+      status: BookingStatus.TICKETED,
+      ticketStatus: TicketStatus.ISSUED,
+      airlineConfirmation: "ABC123",
+      ticketNumber: "0062345678901",
+    });
+
+    const sent = await sendBookingEmail({
+      bookingId: id,
+      event: BOOKING_TICKETED,
+      force: true,
+      override: EDIT,
+    });
+
+    expect(sent).toMatchObject({ result: "sent", edited: true });
+
+    const message = readMessage();
+    expect(message).toContain(`Subject: ${EDIT.subject}`);
+    expect(message).toContain(EDIT.body);
+    // The document is intact.
+    expect(message).toContain("YOUR E-TICKET IS ISSUED!!");
+    expect(message).toContain("0062345678901");
+    expect(message).toContain("Ada Lovelace");
+    // And the generated opening is gone, rather than sitting above the edit.
+    expect(message).not.toContain("Greetings for the day");
+  });
+
+  it("is what the preview and a later resend both use", async () => {
+    const id = await makeBooking();
+
+    await sendBookingEmail({
+      bookingId: id,
+      event: BOOKING_CONFIRMED,
+      force: true,
+      override: EDIT,
+    });
+    sink.reset();
+
+    const preview = await previewBookingEmail(id, BOOKING_CONFIRMED);
+    expect(preview.subject).toBe(EDIT.subject);
+    expect(preview.body).toBe(EDIT.body);
+    // The editable block is the opening message, not the whole document.
+    expect(preview.generatedBody).toContain("Greetings for the day");
+    expect(preview.generatedBody).not.toContain("Booking reference");
+
+    // The plain Send button: forced, but carrying no override of its own.
+    const resent = await sendBookingEmail({
+      bookingId: id,
+      event: BOOKING_CONFIRMED,
+      force: true,
+    });
+
+    expect(resent).toMatchObject({ result: "sent", edited: true });
+    expect(readMessage()).toContain(EDIT.body);
+  });
+
+  it("is what the e-ticket page shows, document and all", async () => {
+    const id = await makeBooking({
+      status: BookingStatus.TICKETED,
+      ticketStatus: TicketStatus.ISSUED,
+      airlineConfirmation: "ABC123",
+      ticketNumber: "0062345678901",
+    });
+
+    const before = await getETicketPreview(id);
+    expect(before?.html).toContain("E-TICKET IS ISSUED");
+    expect(before?.html).toContain("Greetings for the day");
+
+    await sendBookingEmail({
+      bookingId: id,
+      event: BOOKING_TICKETED,
+      force: true,
+      override: EDIT,
+    });
+
+    const after = await getETicketPreview(id);
+    expect(after?.subject).toBe(EDIT.subject);
+    expect(after?.html).toContain(EDIT.body);
+    // Still the document, with the ticket numbers and the traveller table.
+    expect(after?.html).toContain("E-TICKET IS ISSUED");
+    expect(after?.html).toContain("0062345678901");
+    expect(after?.html).not.toContain("Greetings for the day");
+  });
+
+  /**
+   * The e-ticket page draws the document for the booking's own status, but its
+   * Send button posts BOOKING_TICKETED whatever that status is. Looking the
+   * stored wording up by status therefore wrote an edit under one event and
+   * looked for it under another, and a booking still PENDING went on showing
+   * the generated opening after an edited send.
+   */
+  it("is shown on the e-ticket page even before the booking is ticketed", async () => {
+    const id = await makeBooking();
+
+    await sendBookingEmail({
+      bookingId: id,
+      event: BOOKING_TICKETED,
+      force: true,
+      override: EDIT,
+    });
+
+    const preview = await getETicketPreview(id);
+
+    expect(preview?.html).toContain(EDIT.body);
+    expect(preview?.html).not.toContain("Greetings for the day");
+    // The booking has no tickets yet, so the document is still the
+    // confirmation — only the opening changed.
+    expect(preview?.html).toContain("RESERVATION IS CONFIRMED");
+  });
+
+  it("is not disturbed by the status change that follows it", async () => {
+    const id = await makeBooking({
+      status: BookingStatus.CONFIRMED,
+      ticketStatus: TicketStatus.ISSUED,
+      airlineConfirmation: "ABC123",
+      ticketNumber: "0062345678901",
+    });
+
+    await sendBookingEmail({
+      bookingId: id,
+      event: BOOKING_TICKETED,
+      force: true,
+      override: EDIT,
+    });
+    sink.reset();
+
+    // A status change, with nobody at a keyboard. It is deduped — this event
+    // has already been sent for this booking — so it neither re-sends the
+    // operator's message nor replaces it with the generated one.
+    await transitionBooking({
+      bookingId: id,
+      toStatus: BookingStatus.TICKETED,
+      actorId,
+    });
+    await flushPendingBookingEmails();
+
+    expect(sink.messages).toHaveLength(0);
+    expect((await getETicketPreview(id))?.html).toContain(EDIT.body);
+  });
+
+  /** The way back: restore the generated opening in the editor and send it. */
+  it("stops being the message once the generated opening is sent", async () => {
+    const id = await makeBooking({
+      status: BookingStatus.TICKETED,
+      ticketStatus: TicketStatus.ISSUED,
+      airlineConfirmation: "ABC123",
+      ticketNumber: "0062345678901",
+    });
+
+    await sendBookingEmail({
+      bookingId: id,
+      event: BOOKING_TICKETED,
+      force: true,
+      override: EDIT,
+    });
+    sink.reset();
+
+    // "Use the generated message" in the editor, then send.
+    const generated = (await previewBookingEmail(id, BOOKING_TICKETED))
+      .generatedBody;
+
+    await sendBookingEmail({
+      bookingId: id,
+      event: BOOKING_TICKETED,
+      force: true,
+      override: { subject: "Your e-ticket", body: generated },
+    });
+
+    const preview = await getETicketPreview(id);
+    expect(preview?.html).toContain("Greetings for the day");
+    expect(preview?.html).not.toContain(EDIT.body);
   });
 });
 

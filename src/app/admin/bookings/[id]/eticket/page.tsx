@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 
+import { EmailPreviewHeader } from "@/features/bookings/email-preview-header";
 import { SendETicketButton } from "@/features/bookings/send-eticket-button";
 import { currentUserCan, requirePermission } from "@/lib/auth/dal";
 import { PERMISSIONS } from "@/lib/permissions";
@@ -73,13 +74,10 @@ export default async function ETicketPage({
             </span>
           )}
 
-          <span className="text-xs text-ink-subtle">
-            {preview.recipient
-              ? `Would be sent to ${preview.recipient}`
-              : "No contact address on this booking"}
-          </span>
         </div>
 
+        {/* Above the document rather than between it and its subject: this is
+            a note about the page, not part of the email. */}
         {!canViewSensitive ? (
           <p className="mb-4 rounded-md bg-status-info-bg px-3 py-2 text-xs text-navy-700">
             Dates of birth are masked for your role. The customer&rsquo;s own
@@ -87,13 +85,21 @@ export default async function ETicketPage({
           </p>
         ) : null}
 
+        {/* The subject, attached to the body it belongs to. It is editable and
+            it is the first thing the customer reads, so a page that shows the
+            body without it is showing half the email. */}
+        <EmailPreviewHeader
+          subject={preview.subject}
+          recipient={preview.recipient}
+        />
+
         {/* The email body, rendered as it will arrive. `srcDoc` isolates it in
             its own document so the application's stylesheet cannot leak in and
             make it look better here than it will in a mail client. */}
         <iframe
           title="E-ticket preview"
           srcDoc={preview.html}
-          className="h-[1400px] w-full rounded-lg border border-line bg-white shadow-sm"
+          className="h-[1400px] w-full rounded-b-lg border border-line bg-white shadow-sm"
           // Nothing in this document needs to run, and the booking it renders
           // carries traveller detail.
           sandbox=""

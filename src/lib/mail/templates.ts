@@ -209,8 +209,12 @@ function withOverrides(
   rendered: RenderedEmail,
   data: BookingEmailData,
   generatedHeading: string,
+  wording: EmailWording = {},
 ): RenderedEmail {
-  const subject = data.customEmailSubject?.trim();
+  // What the operator typed for *this* send beats the booking's standing
+  // subject, which is the default for every message rather than a decision
+  // about this one.
+  const subject = wording.subject?.trim() || data.customEmailSubject?.trim();
   const heading = data.emailTopHeading?.trim();
 
   return {
@@ -227,7 +231,42 @@ function withOverrides(
   };
 }
 
-export function renderBookingConfirmed(data: BookingEmailData): RenderedEmail {
+/**
+ * An operator's subject and opening message, in place of the generated ones.
+ *
+ * Deliberately the same shape, and the same limits, as the authorization
+ * email's override: the subject and the block above "Booking Status" are
+ * editable, and the document below it is not. It is what the customer is being
+ * sent, and hand-typed figures in it would be exactly the discrepancy a
+ * dispute turns on.
+ */
+export interface EmailWording {
+  subject?: string | undefined;
+  /** Plain text. See `defaultETicketIntro` for what it replaces. */
+  body?: string | undefined;
+}
+
+/**
+ * The opening lines of the plain-text part.
+ *
+ * The text part is composed separately from the HTML — it is a different
+ * document, not a stripped copy — so the override has to be applied to both.
+ */
+function openingLines(
+  data: BookingEmailData,
+  lede: string,
+  wording: EmailWording,
+): string[] {
+  const body = wording.body?.trim();
+  if (body) return [body];
+
+  return [`Hello ${data.customerName},`, "", lede];
+}
+
+export function renderBookingConfirmed(
+  data: BookingEmailData,
+  wording: EmailWording = {},
+): RenderedEmail {
   const total = formatMoney(data.totalMinor, data.currency);
   const itinerary = itineraryLines(data);
 
@@ -241,9 +280,7 @@ export function renderBookingConfirmed(data: BookingEmailData): RenderedEmail {
   ];
 
   const text = [
-    `Hello ${data.customerName},`,
-    "",
-    "Your booking is confirmed. The details are below.",
+    ...openingLines(data, "Your booking is confirmed. The details are below.", wording),
     "",
     ...facts,
     "",
@@ -262,14 +299,20 @@ export function renderBookingConfirmed(data: BookingEmailData): RenderedEmail {
     {
       subject: `Booking confirmed — ${data.bookingNumber}`,
       text,
-      html: renderETicket(data, generatedHeading, "Thank you for booking with us."),
+      html: renderETicket(data, generatedHeading, "Thank you for booking with us.", {
+        ...(wording.body ? { intro: wording.body } : {}),
+      }),
     },
     data,
     generatedHeading,
+    wording,
   );
 }
 
-export function renderBookingTicketed(data: BookingEmailData): RenderedEmail {
+export function renderBookingTicketed(
+  data: BookingEmailData,
+  wording: EmailWording = {},
+): RenderedEmail {
   const issued = data.passengers.filter(
     (passenger) => (passenger.ticketNumber ?? "").trim() !== "",
   );
@@ -287,11 +330,13 @@ export function renderBookingTicketed(data: BookingEmailData): RenderedEmail {
   ];
 
   const text = [
-    `Hello ${data.customerName},`,
-    "",
-    data.product === "CRUISE"
-      ? "Your cruise documents have been issued."
-      : "Your tickets have been issued.",
+    ...openingLines(
+      data,
+      data.product === "CRUISE"
+        ? "Your cruise documents have been issued."
+        : "Your tickets have been issued.",
+      wording,
+    ),
     "",
     ...facts,
     "",
@@ -317,56 +362,12 @@ export function renderBookingTicketed(data: BookingEmailData): RenderedEmail {
         data,
         generatedHeading,
         "Carry photo identification matching the name on the ticket.",
+        { ...(wording.body ? { intro: wording.body } : {}) },
       ),
     },
     data,
     generatedHeading,
+    wording,
   );
 }
 
-/**
- * Wraps an operator-edited message in the standard email shell.
- *
- * The operator edits plain text, never HTML, and this is what turns it back
- * into a styled email. That is a deliberate limitation rather than a missing
- * feature: anything typed into a textarea and sent verbatim as HTML is an
- * injection path into a customer's inbox, and a half-closed tag pasted from a
- * word processor would wreck the layout for everyone who received it. Escaping
- * the text and supplying the markup ourselves means an edited email cannot be
- * malformed and cannot carry anything the operator did not intend.
- *
- * Blank lines separate paragraphs; single newlines are kept as line breaks, so
- * what the operator sees in the textarea is what the customer receives.
- */
-export function renderEditedEmail(
-  subject: string,
-  body: string,
-): RenderedEmail {
-  const text = body.trim();
-
-  const paragraphs = text
-    .split(/\n{2,}/)
-    .map((paragraph) => paragraph.trim())
-    .filter(Boolean)
-    .map(
-      (paragraph) =>
-        `<p style="margin:0 0 16px;font-size:14px;color:#374151;line-height:1.5;">${escapeHtml(
-          paragraph,
-        ).replace(/\n/g, "<br>")}</p>`,
-    )
-    .join("");
-
-  return {
-    subject: subject.trim(),
-    text,
-    // Same shell as the generated templates, so an edited email still looks
-    // like it came from the same agency.
-    html: `<!doctype html>
-<html><body style="margin:0;padding:24px;background:#f3f4f6;font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;">
-  <table role="presentation" cellpadding="0" cellspacing="0" style="max-width:560px;margin:0 auto;background:#ffffff;border-radius:8px;overflow:hidden;">
-    <tr><td style="background:#1e3a8a;padding:16px 24px;color:#ffffff;font-size:18px;font-weight:bold;">${escapeHtml(subject.trim())}</td></tr>
-    <tr><td style="padding:24px;">${paragraphs}</td></tr>
-  </table>
-</body></html>`,
-  };
-}

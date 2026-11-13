@@ -103,6 +103,28 @@ export function securityRows(evidence: SignatureEvidence): EvidenceRow[] {
   ];
 }
 
+/**
+ * The wording printed under the signature, on the signing page and in both
+ * renderings of the record.
+ *
+ * One constant rather than three literals: the caption is what identifies the
+ * mark above it as an electronic signature rather than a name in a nice font,
+ * and the three places it appears have to say the same thing.
+ */
+export const SIGNATURE_CAPTION = "Electronic Signature";
+
+/**
+ * The name to draw as the signature.
+ *
+ * Falls back to the customer's name for rows written before the typed name was
+ * captured: the signing page renders the booking's contact name and submits it
+ * unchanged, so the two agree wherever both exist, and an empty signature block
+ * would read as though nothing was signed.
+ */
+export function signatureDisplayName(evidence: SignatureEvidence): string {
+  return evidence.signatureName.trim() || evidence.customerName.trim();
+}
+
 /** What was signed, as opposed to how it was signed. */
 export function bookingRows(evidence: SignatureEvidence): EvidenceRow[] {
   return [

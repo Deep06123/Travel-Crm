@@ -55,6 +55,13 @@ export interface BookingEmailState {
     recipient: string;
     subject: string;
     body: string;
+    /**
+     * The generated wording, for the editor's way back to it.
+     *
+     * `body` is the message as it would be sent, which after an edited send is
+     * the edited one — so the template has to travel separately or it is gone.
+     */
+    generatedBody: string;
   };
 }
 
@@ -131,6 +138,11 @@ export async function bookingEmailAction(
 
   const override = subject && body ? { subject, body } : undefined;
 
+  // Not `override`: a send with the editor closed repeats the wording the
+  // customer already has, where there is one, so "edited" has to come back
+  // from the send rather than be inferred from this form's fields.
+
+
   try {
     const outcome = await sendBookingEmail({
       bookingId,
@@ -145,7 +157,7 @@ export async function bookingEmailAction(
     switch (outcome.result) {
       case "sent":
         return {
-          success: override
+          success: outcome.edited
             ? "Your edited email was sent to the customer."
             : "Email sent to the customer.",
         };

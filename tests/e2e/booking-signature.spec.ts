@@ -127,6 +127,95 @@ test("the e-ticket cannot be sent before the customer has signed", async ({
   await expect(panel.getByText("so the e-ticket cannot be sent")).toBeVisible();
 });
 
+/**
+ * A second authorization on a booking that was already signed.
+ *
+ * The panel re-fetches itself while it is waiting on a customer, and that is
+ * the only thing that makes it current: the customer signs in their own
+ * browser, so nothing in the operator's tab hears about it. The waiting
+ * condition used to be "nothing has been signed yet", which is wrong the moment
+ * an operator corrects a card and sends a fresh link — the panel then sat on
+ * the previous signature until somebody reloaded the page by hand.
+ *
+ * Deliberately a browser test: the behaviour is an interval, a visibility
+ * check and a router refresh, none of which exist outside a running page.
+ */
+test("a newer authorization reaches the panel without a reload", async ({
+  page,
+  browser,
+}) => {
+  // Two polls' worth of headroom, twice over: the panel re-fetches on a 15s
+  // interval and this waits for it twice.
+  test.setTimeout(150_000);
+
+  const booking = await createTestBooking(customer.id, operations.id);
+  const first = await seedSignatureRequest(
+    booking.id,
+    `first-${booking.bookingNumber}@example.invalid`,
+    operations.id,
+  );
+
+  // The customer's own browser, kept open: the operator's tab must learn about
+  // what happens here without being touched.
+  const customerContext = await browser.newContext();
+  const customerPage = await customerContext.newPage();
+
+  const sign = async (token: string) => {
+    await customerPage.goto(`/sign/${token}`);
+    await customerPage
+      .getByRole("button", { name: "Sign & Confirm Booking" })
+      .click();
+    await expect(
+      customerPage.getByText(
+        "Your booking has been successfully signed and confirmed.",
+      ),
+    ).toBeVisible();
+  };
+
+  try {
+    await sign(first.token);
+
+    // What "Send a new authorization email" leaves behind, minus the SMTP
+    // transport the browser suite deliberately does without. The operator opens
+    // the booking after sending it, which is the state this is about: signed
+    // once, and waiting on a second answer.
+    const second = await seedSignatureRequest(
+      booking.id,
+      `second-${booking.bookingNumber}@example.invalid`,
+      operations.id,
+    );
+
+    await signIn(page, operations);
+    await page.goto(`/admin/bookings/${booking.id}`);
+
+    const panel = page.locator("section", {
+      has: page.getByRole("heading", {
+        name: "Customer authorization",
+        exact: true,
+      }),
+    });
+    await expect(panel.getByText("Signed", { exact: true })).toBeVisible();
+    await expect(
+      panel.getByText(`first-${booking.bookingNumber}@example.invalid`),
+    ).toBeVisible();
+
+    // The panel says it is waiting rather than showing last time's signature as
+    // if it were the whole story.
+    await expect(
+      panel.getByText("a newer link is awaiting the customer"),
+    ).toBeVisible();
+
+    await sign(second.token);
+
+    // And the answer lands in the same tab, still without a reload.
+    await expect(
+      panel.getByText(`second-${booking.bookingNumber}@example.invalid`),
+    ).toBeVisible({ timeout: 60_000 });
+  } finally {
+    await customerContext.close();
+  }
+});
+
 test("an unknown link shows nothing about any booking", async ({
   page,
   context,

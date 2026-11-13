@@ -51,6 +51,13 @@ export interface AuthorizationState {
     recipient: string;
     subject: string;
     body: string;
+    /**
+     * The generated wording, for the editor's way back to it.
+     *
+     * `body` is the message as it would be sent, which after an edited send is
+     * the edited one — so the template has to travel separately or it is gone.
+     */
+    generatedBody: string;
   };
 }
 
@@ -117,9 +124,20 @@ export async function sendAuthorizationEmailAction(
 
       if (!preview) return { error: "That booking no longer exists." };
 
-      const { recipient, subject: previewSubject, body: previewBody } = preview;
+      const {
+        recipient,
+        subject: previewSubject,
+        body: previewBody,
+        generatedBody,
+      } = preview;
+
       return {
-        preview: { recipient, subject: previewSubject, body: previewBody },
+        preview: {
+          recipient,
+          subject: previewSubject,
+          body: previewBody,
+          generatedBody,
+        },
       };
     } catch (error) {
       log.error({ err: error, bookingId }, "Authorization preview failed");

@@ -5,9 +5,12 @@ import {
 } from "./booking-authorization";
 import { escapeHtml } from "./html";
 
+import { formatDateTime } from "@/lib/format";
 import {
   bookingRows,
   securityRows,
+  SIGNATURE_CAPTION,
+  signatureDisplayName,
   type EvidenceRow,
   type SignatureEvidence,
 } from "@/lib/signature/evidence";
@@ -59,6 +62,47 @@ function htmlSection(title: string, rows: readonly EvidenceRow[]): string {
 }
 
 /**
+ * The signature as the customer saw it drawn.
+ *
+ * Reproduces the signing page's block — the typed name in a script face, a
+ * rule, and the caption under it — rather than reporting the name as another
+ * label-and-value row. A signature is read as a mark, and an email that only
+ * lists it as text does not show what the customer was shown.
+ *
+ * The font stack degrades to whatever cursive the reader has, and to the
+ * client's default where there is none: the name stays legible either way,
+ * which is the part that matters. Rendered as text rather than an image so it
+ * survives a client that blocks remote content and so it can be searched and
+ * copied out of the message.
+ */
+const SCRIPT_FONT = `'Brush Script MT','Segoe Script','Bradley Hand',cursive`;
+
+function signatureTable(evidence: SignatureEvidence): string {
+  return `
+      <tr>
+        <td colspan="2" style="padding:18px 20px 4px;color:#5b6472;font-size:11px;text-transform:uppercase;letter-spacing:0.5px;border-top:1px solid #eceef1;">Customer signature</td>
+      </tr>
+      <tr>
+        <td colspan="2" style="padding:4px 20px 0;">
+          <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="border:2px dashed #b9c5d5;background:#ffffff;border-collapse:separate;">
+            <tr>
+              <td align="center" style="padding:18px 16px 6px;color:#173b70;font-size:30px;line-height:1.3;font-family:${SCRIPT_FONT};">${escapeHtml(signatureDisplayName(evidence))}</td>
+            </tr>
+            <tr>
+              <td style="padding:0 24px;"><div style="border-top:1px solid #e5e8ef;font-size:0;line-height:0;">&nbsp;</div></td>
+            </tr>
+            <tr>
+              <td align="center" style="padding:8px 16px 16px;color:#777777;font-size:12px;">${escapeHtml(SIGNATURE_CAPTION)}</td>
+            </tr>
+          </table>
+        </td>
+      </tr>
+      <tr>
+        <td colspan="2" style="padding:8px 20px 0;color:#5b6472;font-size:12px;">Signed by ${escapeHtml(evidence.customerName)} on ${escapeHtml(formatDateTime(evidence.signedAt))}.</td>
+      </tr>`;
+}
+
+/**
  * The booking as the authorization email stated it, where it could be loaded.
  *
  * Optional because the covering note must still go out if the booking has since
@@ -100,6 +144,15 @@ export function renderSignatureConfirmation(
     "The signed confirmation is attached as a PDF.",
     ...textSection("Booking", bookingRows(evidence)),
     "",
+    "CUSTOMER SIGNATURE",
+    // Boxed, because plain text has no other way to say "this is the mark
+    // itself rather than another field".
+    `  ${signatureDisplayName(evidence)}`,
+    "  " + "-".repeat(Math.max(signatureDisplayName(evidence).length, 12)),
+    `  ${SIGNATURE_CAPTION}`,
+    "",
+    `  Signed by ${evidence.customerName} on ${formatDateTime(evidence.signedAt)}.`,
+    "",
     "CUSTOMER CONSENT",
     // Quoted and indented, the only way to set a block apart in plain text.
     ...evidence.consentText
@@ -131,6 +184,7 @@ export function renderSignatureConfirmation(
         <td colspan="2" style="padding:0 20px 10px;color:#5b6472;font-size:13px;">The signed confirmation is attached as a PDF.</td>
       </tr>
       ${htmlSection("Booking", bookingRows(evidence))}
+      ${signatureTable(evidence)}
       <tr>
         <td colspan="2" style="padding:18px 20px 4px;color:#5b6472;font-size:11px;text-transform:uppercase;letter-spacing:0.5px;border-top:1px solid #eceef1;">Customer consent</td>
       </tr>

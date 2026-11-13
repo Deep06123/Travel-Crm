@@ -41,6 +41,54 @@ import { resolveMailer } from "./mail-account-service";
 import { createSignatureRequest } from "./booking-signature-service";
 
 /**
+ * The wording the last invitation for this booking went out with.
+ *
+ * What makes the preview, the editor and the Send button agree. The email is
+ * rendered from the booking, so without this an operator who edited a message
+ * and sent it saw the generated wording everywhere afterwards while the
+ * customer held something else — and a resend would quietly go back to the
+ * generated version.
+ *
+ * Newest first regardless of status: a revoked or expired row is still the
+ * last thing an operator wrote, and the next send should start from it rather
+ * than from the template. Rows that went out generated store nothing, so they
+ * are skipped here and the template is what comes back.
+ */
+async function lastSentWording(
+  bookingId: string,
+): Promise<AuthorizationOverride> {
+  const row = await prisma.bookingSignature.findFirst({
+    where: { bookingId, emailBody: { not: null } },
+    orderBy: { sentAt: "desc" },
+    select: { emailSubject: true, emailBody: true },
+  });
+
+  if (!row) return {};
+
+  return {
+    ...(row.emailSubject ? { subject: row.emailSubject } : {}),
+    ...(row.emailBody ? { body: row.emailBody } : {}),
+  };
+}
+
+/**
+ * What this send or preview should actually use.
+ *
+ * An edit in hand wins outright rather than being merged with the stored one:
+ * the editor always posts the subject and the body together — the action
+ * insists on both or neither before a send — so a half-and-half message would
+ * only ever come from mixing two different operators' wording.
+ */
+async function resolveWording(
+  bookingId: string,
+  override: AuthorizationOverride,
+): Promise<AuthorizationOverride> {
+  if (override.subject?.trim() || override.body?.trim()) return override;
+
+  return lastSentWording(bookingId);
+}
+
+/**
  * Sending a customer the authorization email, and recording that it went.
  *
  * Kept out of `customer-email-service` on purpose. That module is built around
@@ -106,6 +154,15 @@ export interface AuthorizationPreview {
    * page and the editor on the booking.
    */
   body: string;
+  /**
+   * The generated wording, whether or not it is what `body` holds.
+   *
+   * Now that an edit is remembered and reused, the editor opens on the last
+   * message an operator wrote rather than on the template — so without this
+   * there would be no way back to the standard wording short of retyping it
+   * from another booking.
+   */
+  generatedBody: string;
   html: string;
 }
 
@@ -139,6 +196,12 @@ export async function previewAuthorizationEmail(
 
   if (!booking) return null;
 
+  // The message as it would be sent *now*, which after an edited send is the
+  // edited one — the page this feeds is opened to check what the customer is
+  // looking at, and re-rendering the template would answer a question nobody
+  // asked.
+  const wording = await resolveWording(bookingId, override);
+
   // Data URIs, not `cid:`: there is no message here to attach to, and the
   // preview renders in a sandboxed iframe where the stored path resolves to
   // nothing.
@@ -157,13 +220,14 @@ export async function previewAuthorizationEmail(
         Date.now() + PREVIEW_EXPIRY_DAYS * 24 * 60 * 60 * 1_000,
       ),
     },
-    override,
+    wording,
   );
 
   return {
     recipient: bookingRecipientLine(booking),
     subject: rendered.subject,
-    body: override.body?.trim() || defaultAuthorizationBody(data),
+    body: wording.body?.trim() || defaultAuthorizationBody(data),
+    generatedBody: defaultAuthorizationBody(data),
     html: rendered.html,
   };
 }
@@ -214,6 +278,11 @@ export async function sendAuthorizationEmail({
 
   const recipients = bookingRecipients(booking);
   const recipient = recipients.length > 0 ? recipients.join(", ") : null;
+
+  // Resolved once and used for the render, the row and the log, so what is
+  // sent, what is stored and what the preview will show afterwards cannot
+  // come apart.
+  const wording = await resolveWording(bookingId, override);
 
   // Resolved before the first row is written so every Notification — sent,
   // failed or suppressed — can say which identity it was going to use. A
@@ -283,6 +352,9 @@ export async function sendAuthorizationEmail({
     // minted and logged, and a row with no sender is the honest record of an
     // invitation that was never actually sent from anywhere.
     { email: mailer?.fromEmail ?? null, accountId: mailer?.accountId ?? null },
+    // Snapshotted onto the row, so the preview can show this message rather
+    // than re-deriving one from a booking that has moved on since.
+    wording,
   );
 
   const signUrl = `${origin.replace(/\/+$/, "")}/sign/${encodeURIComponent(token)}`;
@@ -321,7 +393,7 @@ export async function sendAuthorizationEmail({
       itineraryHtml: itinerary.html,
     },
     { signUrl, expiresAt },
-    override,
+    wording,
   );
 
   try {
@@ -338,7 +410,15 @@ export async function sendAuthorizationEmail({
       ...(providerReference ? { providerReference } : {}),
     });
 
-    log.info({ bookingId, signatureId, actorId }, "Authorization email sent");
+    // `edited` is here for the report that brings somebody to this log: "I
+    // changed the message and the old wording arrived". It says whether the
+    // send carried an operator's edit at all, which separates a message that
+    // lost the edit on its way here from one that was never edited — the
+    // generated wording going out because the plain Send button was used.
+    log.info(
+      { bookingId, signatureId, actorId, edited: Boolean(wording.body) },
+      "Authorization email sent",
+    );
 
     // Dispatched, not awaited: the customer's email has left and the agent is
     // waiting on this call. Whether the office got its copy is recorded on its
@@ -359,7 +439,10 @@ export async function sendAuthorizationEmail({
           value: formatMoney(booking.totalMinor, booking.currency),
         },
         { label: "Link expires", value: formatDate(expiresAt) },
-        { label: "Edited before sending", value: override.body ? "Yes" : null },
+        {
+          label: "Edited before sending",
+          value: wording.body ? "Yes" : null,
+        },
       ],
       footnote:
         "The customer has not signed yet. A second notice follows when they do.",

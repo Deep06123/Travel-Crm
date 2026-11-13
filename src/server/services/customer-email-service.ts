@@ -19,10 +19,10 @@ import {
   prepareItineraryForEmail,
   prepareItineraryForPreview,
 } from "@/lib/mail/inline-itinerary";
+import { defaultETicketIntro } from "@/lib/mail/eticket";
 import {
   renderBookingConfirmed,
   renderBookingTicketed,
-  renderEditedEmail,
   type BookingEmailData,
 } from "@/lib/mail/templates";
 import { formatMoney } from "@/lib/financial/money";
@@ -70,7 +70,16 @@ export type BookingEmailEvent =
 
 export type EmailOutcome =
   /** Accepted by the provider. */
-  | { result: "sent"; notificationId: string }
+  | {
+      result: "sent";
+      notificationId: string;
+      /**
+       * Whether what went out was an operator's wording rather than the
+       * template — including a repeat of an earlier edit, which the caller
+       * cannot tell from its own form fields.
+       */
+      edited: boolean;
+    }
   /** Already handled for this booking and event; nothing was sent again. */
   | { result: "duplicate"; notificationId: string }
   /** Nothing was attempted — no transport, or nowhere to send it. */
@@ -86,6 +95,35 @@ const TEMPLATES = {
 /** Stable identity for one event on one booking, backing the unique index. */
 function dedupeKeyFor(bookingId: string, event: BookingEmailEvent): string {
   return `booking:${bookingId}:${event}`;
+}
+
+/**
+ * The wording this event last went out with, where an operator wrote it.
+ *
+ * One row per booking per event, so this is simply "the message in the
+ * customer's inbox". Only a row the provider accepted counts: a suppressed or
+ * failed attempt delivered nothing, and showing its wording in a preview would
+ * describe an email nobody received.
+ */
+async function lastSentWording(
+  bookingId: string,
+  event: BookingEmailEvent,
+): Promise<EmailOverride | undefined> {
+  const row = await prisma.notification.findUnique({
+    where: { dedupeKey: dedupeKeyFor(bookingId, event) },
+    select: { status: true, emailSubject: true, emailBody: true },
+  });
+
+  if (!row || row.status !== NotificationStatus.SENT) return undefined;
+  if (!row.emailSubject || !row.emailBody) return undefined;
+
+  return { subject: row.emailSubject, body: row.emailBody };
+}
+
+/** An operator's wording, in place of the generated message. */
+export interface EmailOverride {
+  subject: string;
+  body: string;
 }
 
 export interface SendBookingEmailInput {
@@ -104,9 +142,11 @@ export interface SendBookingEmailInput {
    * never carry this — they must stay reproducible, so a confirmation reads
    * the same whoever happened to trigger it.
    *
-   * `body` is plain text. See `renderEditedEmail` for why it is not HTML.
+   * `body` is plain text and replaces only the opening message — see
+   * `defaultETicketIntro`. The document below it is generated from the booking
+   * and is not editable.
    */
-  override?: { subject: string; body: string } | undefined;
+  override?: EmailOverride | undefined;
   /**
    * The sending identity the operator picked, where they picked one.
    *
@@ -123,6 +163,14 @@ export interface EmailPreview {
   recipient: string;
   subject: string;
   body: string;
+  /**
+   * The generated wording, whether or not `body` holds it.
+   *
+   * An edited send is remembered and reused, so the editor opens on the last
+   * message an operator wrote. Without the template travelling beside it there
+   * would be no way back to the standard wording.
+   */
+  generatedBody: string;
 }
 
 /**
@@ -158,10 +206,21 @@ export async function previewBookingEmail(
       ? renderBookingConfirmed(data)
       : renderBookingTicketed(data);
 
+  // The message as it would be sent *now*: after an edited send that is the
+  // edited one, which is what the next send repeats and what the customer is
+  // holding.
+  const sent = await lastSentWording(bookingId, event);
+
+  // The opening block, not the whole message. Only that and the subject are
+  // editable — the traveller table, the ticket numbers and the charges below
+  // it are the document, and they are generated from the booking.
+  const generated = defaultETicketIntro(data);
+
   return {
     recipient: bookingRecipientLine(booking),
-    subject: rendered.subject,
-    body: rendered.text,
+    subject: sent?.subject ?? rendered.subject,
+    body: sent?.body ?? generated,
+    generatedBody: generated,
   };
 }
 
@@ -208,9 +267,19 @@ export async function getETicketPreview(
     booking.status === BookingStatus.TICKETED ||
     booking.status === BookingStatus.COMPLETED;
 
+  // The opening message an operator sent, where they wrote one. Always the
+  // ticketed event, deliberately not `issued`'s choice below: the Send button
+  // on this page posts `BOOKING_TICKETED` whatever the booking's status is, so
+  // that is the message this page is about. Keying it off the status instead
+  // meant an edit sent from a booking still PENDING was stored under one event
+  // and looked for under another, and the page went on showing the generated
+  // opening while the customer held the edit.
+  const sent = await lastSentWording(bookingId, BOOKING_TICKETED);
+  const wording = sent ?? {};
+
   const rendered = issued
-    ? renderBookingTicketed(data)
-    : renderBookingConfirmed(data);
+    ? renderBookingTicketed(data, wording)
+    : renderBookingConfirmed(data, wording);
 
   // Re-rendered with the redaction flag. The template's own HTML always shows
   // the date of birth, which is right for the customer and wrong for a role
@@ -225,7 +294,10 @@ export async function getETicketPreview(
     issued
       ? "Carry photo identification matching the name on the ticket."
       : "Thank you for booking with us.",
-    { redactDateOfBirth: options.redactDateOfBirth ?? false },
+    {
+      redactDateOfBirth: options.redactDateOfBirth ?? false,
+      ...(sent ? { intro: sent.body } : {}),
+    },
   );
 
   return {
@@ -269,6 +341,25 @@ export async function sendBookingEmail({
   const recipients = bookingRecipients(booking);
   const recipient = recipients.length > 0 ? recipients.join(", ") : null;
 
+  /**
+   * What this send will actually say.
+   *
+   * An edit in hand wins; otherwise an operator-initiated send repeats the
+   * wording the customer already has, so the Send button agrees with the
+   * preview beside it rather than quietly reverting to the template.
+   *
+   * `force` is what distinguishes the two callers. An automatic send follows a
+   * status change with nobody at a keyboard and must stay reproducible, so it
+   * always renders the generated message.
+   *
+   * Belt and braces, as it happens: stored wording only exists on a row that
+   * was already SENT, and an unforced send of an event already SENT is turned
+   * away as a duplicate well before this. The condition is here so that
+   * stays true by construction rather than by two rules happening to agree.
+   */
+  const wording =
+    override ?? (force ? await lastSentWording(bookingId, event) : undefined);
+
   const upsert = async (
     data: {
       status: NotificationStatus;
@@ -300,7 +391,7 @@ export async function sendBookingEmail({
           // the customer was actually told.
           payload: {
             bookingNumber: booking.bookingNumber,
-            ...(override ? { edited: true } : {}),
+            ...(wording ? { edited: true } : {}),
           },
           ...data,
         },
@@ -345,27 +436,20 @@ export async function sendBookingEmail({
     return { result: "suppressed", notificationId: row.id, reason };
   }
 
-  // An operator-edited version replaces the generated one wholesale. The
-  // booking data is still read above, because the recipient and the
-  // suppression checks come from it either way.
-  //
-  // An edited message carries no itinerary and so needs no attachments: the
-  // operator wrote the whole body, and attaching images nothing in it refers
-  // to would put unexplained files in the customer's inbox.
-  const itinerary = override
-    ? { html: null, attachments: [] }
-    : await prepareItineraryForEmail(storedItinerary(booking));
+  // Prepared whether or not an operator edited anything. An edit replaces the
+  // opening message and the subject, never the document — so the itinerary and
+  // its images belong in the message exactly as they would otherwise.
+  const itinerary = await prepareItineraryForEmail(storedItinerary(booking));
 
   const data: BookingEmailData = {
     ...toAuthorizationData(booking, await loadPolicyOverrides()),
     itineraryHtml: itinerary.html,
   };
 
-  const rendered = override
-    ? renderEditedEmail(override.subject, override.body)
-    : event === BOOKING_CONFIRMED
-      ? renderBookingConfirmed(data)
-      : renderBookingTicketed(data);
+  const rendered =
+    event === BOOKING_CONFIRMED
+      ? renderBookingConfirmed(data, wording ?? {})
+      : renderBookingTicketed(data, wording ?? {});
 
   // The row is written *before* the send, with attemptCount incremented. A
   // process that dies mid-send then leaves PENDING with attemptCount > 0 —
@@ -390,6 +474,13 @@ export async function sendBookingEmail({
         mailAccountId: mailer.accountId,
         providerReference: providerReference ?? null,
         lastError: null,
+        // Written here rather than with the PENDING row, so the column pair
+        // only ever describes a message the provider accepted. Written on
+        // every success including the generated ones, which is what clears an
+        // earlier edit: a booking sent the standard document must not keep
+        // showing last month's custom wording in its preview.
+        emailSubject: wording?.subject ?? null,
+        emailBody: wording?.body ?? null,
       },
     });
 
@@ -419,11 +510,11 @@ export async function sendBookingEmail({
           label: "Amount",
           value: formatMoney(booking.totalMinor, booking.currency),
         },
-        { label: "Edited before sending", value: override ? "Yes" : null },
+        { label: "Edited before sending", value: wording ? "Yes" : null },
       ],
     });
 
-    return { result: "sent", notificationId: row.id };
+    return { result: "sent", notificationId: row.id, edited: Boolean(wording) };
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error);
 

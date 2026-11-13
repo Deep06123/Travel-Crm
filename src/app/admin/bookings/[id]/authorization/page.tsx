@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 
+import { EmailPreviewHeader } from "@/features/bookings/email-preview-header";
 import { requirePermission } from "@/lib/auth/dal";
 import { isProduction } from "@/lib/env";
 import { PERMISSIONS } from "@/lib/permissions";
@@ -59,18 +60,6 @@ export default async function AuthorizationEmailPage({
       {/* A little wider than the email's own 720px cap, so the body is never
           the thing being clipped. */}
       <div className="mx-auto w-full max-w-[768px] px-4">
-        <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-          <span className="text-sm font-semibold text-ink">
-            {preview.subject}
-          </span>
-
-          <span className="text-xs text-ink-subtle">
-            {preview.recipient
-              ? `Would be sent to ${preview.recipient}`
-              : "No contact address on this booking"}
-          </span>
-        </div>
-
         {signUrl === "" ? (
           <p className="mb-4 rounded-md bg-status-info-bg px-3 py-2 text-xs text-navy-700">
             This is a preview. <strong>Confirm</strong> below is inert — a
@@ -87,13 +76,20 @@ export default async function AuthorizationEmailPage({
           </p>
         )}
 
+        {/* The subject, attached to the body it belongs to — the notes above
+            are about the page, not part of the email. */}
+        <EmailPreviewHeader
+          subject={preview.subject}
+          recipient={preview.recipient}
+        />
+
         {/* The email body, rendered as it will arrive. `srcDoc` isolates it in
             its own document so the application's stylesheet cannot leak in and
             make it look better here than it will in a mail client. */}
         <iframe
           title="Authorization email preview"
           srcDoc={preview.html}
-          className="h-[1800px] w-full rounded-lg border border-line bg-white shadow-sm"
+          className="h-[1800px] w-full rounded-b-lg border border-line bg-white shadow-sm"
           // Nothing in this document needs to run, and it carries the booking's
           // billing detail — so nothing is allowed, with one exception.
           //

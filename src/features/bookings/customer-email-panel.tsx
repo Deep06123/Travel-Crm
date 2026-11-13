@@ -188,6 +188,8 @@ export function CustomerEmailPanel({
           recipient={editing.recipient}
           subject={editing.subject}
           body={editing.body}
+          generatedBody={editing.generatedBody}
+          bodyHint="Plain text. Leave a blank line between paragraphs. It is remembered for this booking: the preview and the next send both use it."
           hidden={{ bookingId, event: editing.event, intent: "send" }}
           onClose={() => setDismissed(state.preview)}
           formAction={formAction}

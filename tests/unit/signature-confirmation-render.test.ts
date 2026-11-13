@@ -179,6 +179,35 @@ describe("the confirmation email", () => {
     }
   });
 
+  it("shows the signature the customer gave, as its own section", () => {
+    const { text, html } = renderSignatureConfirmation(EVIDENCE);
+
+    for (const part of [text, html]) {
+      expect(part.toLowerCase()).toContain("customer signature");
+      expect(part).toContain("Grace Hopper");
+      expect(part).toContain("Electronic Signature");
+      // Dated, so the mark is attributable to a moment and not only to a name.
+      expect(part).toContain("Signed by Grace Hopper on");
+    }
+
+    // Set in a script face, as the signing page drew it — the point of the
+    // section is to reproduce the mark, not to repeat the name in body text.
+    expect(html).toContain("Brush Script MT");
+  });
+
+  it("falls back to the customer name when no typed name was captured", () => {
+    const { text, html } = renderSignatureConfirmation({
+      ...EVIDENCE,
+      signatureName: "",
+    });
+
+    // An empty signature block would read as though nothing was signed.
+    for (const part of [text, html]) {
+      expect(part.toLowerCase()).toContain("customer signature");
+      expect(part).toContain("Grace Hopper");
+    }
+  });
+
   it("escapes a value that would otherwise be markup", () => {
     const { html } = renderSignatureConfirmation({
       ...EVIDENCE,
@@ -251,6 +280,29 @@ describe("the confirmation PDF", () => {
     // The consent sentence, word for word. Line breaks are the renderer's, so
     // it is compared with whitespace collapsed.
     expect(drawn.replace(/\s+/g, " ")).toContain(EVIDENCE.consentText);
+  });
+
+  it("draws the signature as its own section", async () => {
+    const drawn = pdfText(await renderConfirmationPdf(EVIDENCE));
+
+    expect(drawn.toUpperCase()).toContain("CUSTOMER SIGNATURE");
+    expect(drawn).toContain("Grace Hopper");
+    expect(drawn).toContain("Electronic Signature");
+    expect(drawn.replace(/\s+/g, " ")).toContain("Signed by Grace Hopper on");
+  });
+
+  it("keeps the signature block whole rather than splitting it at a page break", async () => {
+    // A name long enough to wrap inside the block, with the consent wording
+    // pushed long enough to put the block near a page boundary.
+    const bytes = await renderConfirmationPdf({
+      ...EVIDENCE,
+      signatureName: "Grace Brewster Murray Hopper-Vandenberg",
+    });
+
+    expect(pdfPageCount(bytes)).toBeGreaterThan(0);
+    expect(pdfText(bytes).replace(/\s+/g, " ")).toContain(
+      "Grace Brewster Murray Hopper-Vandenberg",
+    );
   });
 
   it("carries the same tables as the email when the booking is given", async () => {

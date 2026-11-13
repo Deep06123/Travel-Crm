@@ -17,7 +17,10 @@ import { prisma } from "@/lib/db/prisma";
 import { resetEnvCache } from "@/lib/env";
 import { resetMailerCache } from "@/lib/mail";
 import { flushPendingAdminNotices } from "@/server/services/admin-notification-service";
-import { sendAuthorizationEmail } from "@/server/services/booking-authorization-service";
+import {
+  previewAuthorizationEmail,
+  sendAuthorizationEmail,
+} from "@/server/services/booking-authorization-service";
 import {
   createSignatureRequest,
   findSignatureByToken,
@@ -260,6 +263,122 @@ describe("sending the authorization email", () => {
     expect(row?.status).toBe(BookingSignatureStatus.SENT);
     expect(row?.sentById).toBe(actorId);
     expect(row?.recipientEmail).toBe(notification?.recipient);
+  });
+
+  /**
+   * What the editor posts has to survive the whole way to the socket.
+   *
+   * The renderer's own tests cover the substitution, but they call it
+   * directly: nothing checked that the override an operator typed is still
+   * attached to the message the SMTP server receives.
+   */
+  it("sends the operator's edited wording rather than the generated one", async () => {
+    const bookingId = await makeBooking();
+
+    const outcome = await sendAuthorizationEmail({
+      bookingId,
+      actorId,
+      origin: "https://crm.example.invalid",
+      override: {
+        subject: "This is testing email again testing",
+        body: "ffffffff",
+      },
+    });
+
+    expect(outcome.result).toBe("sent");
+
+    const message = decodeQuotedPrintable(sink.only().data);
+    expect(message).toContain("This is testing email again testing");
+    expect(message).toContain("ffffffff");
+    // The generated opening is replaced, not merely added to.
+    expect(message).not.toContain("Greetings for the day");
+    // And the document around it is untouched.
+    expect(message).toContain("CLICK TO CONFIRM");
+  });
+
+  /**
+   * The preview has to describe the message the customer is holding.
+   *
+   * It renders from the booking, so before the wording was stored it showed
+   * the generated text however many edited sends had gone out — an operator
+   * checking what they had sent was shown something else entirely.
+   */
+  it("shows the edited wording in the preview after sending it", async () => {
+    const bookingId = await makeBooking();
+
+    await sendAuthorizationEmail({
+      bookingId,
+      actorId,
+      origin: "https://crm.example.invalid",
+      override: { subject: "Edited subject", body: "Edited message." },
+    });
+
+    const preview = await previewAuthorizationEmail(bookingId);
+
+    expect(preview?.subject).toBe("Edited subject");
+    expect(preview?.body).toBe("Edited message.");
+    expect(preview?.html).toContain("Edited message.");
+    expect(preview?.html).not.toContain("Greetings for the day");
+    // And the template still travels, so the editor can offer it back.
+    expect(preview?.generatedBody).toContain("Greetings for the day");
+  });
+
+  /**
+   * And a later send must agree with that preview.
+   *
+   * The alternative is the defect this whole area had in another form: the
+   * page says one thing and the button does another.
+   */
+  it("reuses the stored wording when a send carries no edit", async () => {
+    const bookingId = await makeBooking();
+
+    await sendAuthorizationEmail({
+      bookingId,
+      actorId,
+      origin: "https://crm.example.invalid",
+      override: { subject: "Edited subject", body: "Edited message." },
+    });
+
+    sink.reset();
+
+    // The plain Send button: no override at all.
+    const outcome = await sendAuthorizationEmail({
+      bookingId,
+      actorId,
+      origin: "https://crm.example.invalid",
+    });
+
+    expect(outcome.result).toBe("sent");
+
+    const message = decodeQuotedPrintable(sink.only().data);
+    expect(message).toContain("Edited message.");
+    expect(message).not.toContain("Greetings for the day");
+  });
+
+  /** A booking nobody has edited is still sent the generated message. */
+  it("generates the wording when nothing has been edited", async () => {
+    const bookingId = await makeBooking();
+
+    const preview = await previewAuthorizationEmail(bookingId);
+    expect(preview?.body).toContain("Greetings for the day");
+
+    await sendAuthorizationEmail({
+      bookingId,
+      actorId,
+      origin: "https://crm.example.invalid",
+    });
+
+    expect(decodeQuotedPrintable(sink.only().data)).toContain(
+      "Greetings for the day",
+    );
+
+    // Nothing stored, so nothing to go stale: the next preview generates again.
+    const row = await prisma.bookingSignature.findFirst({
+      where: { bookingId },
+      select: { emailSubject: true, emailBody: true },
+    });
+    expect(row?.emailBody).toBeNull();
+    expect(row?.emailSubject).toBeNull();
   });
 
   it("suppresses rather than fails when there is nowhere to send", async () => {

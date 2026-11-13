@@ -5,10 +5,13 @@ import {
   type AuthorizationTableSection,
   type BookingAuthorizationData,
 } from "@/lib/mail/booking-authorization";
+import { formatDateTime } from "@/lib/format";
 import { htmlToPlainText } from "@/lib/mail/html";
 import {
   bookingRows,
   securityRows,
+  SIGNATURE_CAPTION,
+  signatureDisplayName,
   type EvidenceRow,
   type SignatureEvidence,
 } from "@/lib/signature/evidence";
@@ -46,6 +49,16 @@ interface Cursor {
 export interface ConfirmationPdfFonts {
   body: PDFFont;
   bold: PDFFont;
+  /**
+   * The face the signature itself is drawn in.
+   *
+   * Times italic, because the standard fourteen hold no script face and
+   * embedding one would mean shipping a font file into a bundle this module
+   * deliberately keeps free of filesystem reads. Slanted serif is enough to
+   * read as a signature rather than as another line of the report, which is
+   * the distinction the block exists to make.
+   */
+  script: PDFFont;
 }
 
 /**
@@ -131,6 +144,7 @@ export async function renderConfirmationPdf(
   const fonts: ConfirmationPdfFonts = {
     body: await doc.embedFont(StandardFonts.Helvetica),
     bold: await doc.embedFont(StandardFonts.HelveticaBold),
+    script: await doc.embedFont(StandardFonts.TimesRomanItalic),
   };
 
   const cursor: Cursor = {
@@ -210,6 +224,74 @@ export async function renderConfirmationPdf(
     });
 
     cursor.y -= lines.length * (size + 4) + 6;
+  };
+
+  /**
+   * The signature, drawn as a mark rather than reported as a field.
+   *
+   * The signing page shows the customer a boxed, script-set rendering of their
+   * name above a rule, and a document that only lists that name among the
+   * booking fields does not show what they were shown. Kept to one block that
+   * cannot be split across a page: half a signature at a page break is exactly
+   * the sort of thing a chargeback argument is built on.
+   */
+  const signatureBlock = (name: string): void => {
+    const width = PAGE.width - MARGIN * 2;
+    const size = 26;
+    const inset = 24;
+    const lines = wrap(name, fonts.script, size, width - inset * 2);
+
+    const first = 30;
+    const gap = size + 6;
+    const height = first + (lines.length - 1) * gap + 14 + 16 + 16;
+
+    ensure(height + 8);
+
+    const top = cursor.y + 4;
+    const bottom = top - height;
+
+    cursor.page.drawRectangle({
+      x: MARGIN,
+      y: bottom,
+      width,
+      height,
+      borderColor: RULE,
+      borderWidth: 1,
+      // Dashed, as on the signing page, where it marks the area out as the
+      // place the signature sits rather than as a table.
+      borderDashArray: [4, 3],
+    });
+
+    lines.forEach((line, index) => {
+      cursor.page.drawText(line, {
+        x: MARGIN + (width - fonts.script.widthOfTextAtSize(line, size)) / 2,
+        y: top - first - index * gap,
+        size,
+        font: fonts.script,
+        color: INK,
+      });
+    });
+
+    const ruleY = top - first - (lines.length - 1) * gap - 14;
+
+    cursor.page.drawLine({
+      start: { x: MARGIN + inset, y: ruleY },
+      end: { x: PAGE.width - MARGIN - inset, y: ruleY },
+      thickness: 0.75,
+      color: RULE,
+    });
+
+    const caption = SIGNATURE_CAPTION;
+
+    cursor.page.drawText(caption, {
+      x: MARGIN + (width - fonts.body.widthOfTextAtSize(caption, 9)) / 2,
+      y: ruleY - 16,
+      size: 9,
+      font: fonts.body,
+      color: MUTED,
+    });
+
+    cursor.y = bottom - 12;
   };
 
   /**
@@ -311,6 +393,13 @@ export async function renderConfirmationPdf(
 
   heading("Booking");
   bookingRows(evidence).forEach(field);
+
+  heading("Customer signature");
+  signatureBlock(signatureDisplayName(evidence));
+  paragraph(
+    `Signed by ${evidence.customerName} on ${formatDateTime(evidence.signedAt)}.`,
+    9,
+  );
 
   // What was signed, before how it was signed. The tables are the customer's
   // own copy of the authorization reproduced in the record, so the document

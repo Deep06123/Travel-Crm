@@ -85,6 +85,20 @@ export interface SignatureSender {
 }
 
 /**
+ * The covering message an invitation went out with, where it was not the
+ * generated one.
+ *
+ * Snapshotted beside the sender for the same reason: the email is rendered
+ * from the booking, and the booking moves. Null means the generated wording
+ * was used, so a preview of this send renders it again rather than printing a
+ * copy that has been sitting in a column going stale.
+ */
+export interface SentWording {
+  subject?: string | undefined;
+  body?: string | undefined;
+}
+
+/**
  * Mints an authorization link for a booking.
  *
  * Revoking the previous unsigned rows is what makes "resend" mean resend
@@ -99,6 +113,7 @@ export async function createSignatureRequest(
   recipientEmail: string,
   actorId: string,
   sender: SignatureSender = { email: null, accountId: null },
+  wording: SentWording = {},
 ): Promise<IssuedSignatureRequest> {
   const token = randomBytes(TOKEN_BYTES).toString("base64url");
   const expiresAt = new Date(Date.now() + EXPIRY_DAYS * 24 * 60 * 60 * 1_000);
@@ -118,6 +133,8 @@ export async function createSignatureRequest(
         sentById: actorId,
         senderEmail: sender.email,
         senderMailAccountId: sender.accountId,
+        emailSubject: wording.subject ?? null,
+        emailBody: wording.body ?? null,
       },
       select: { id: true },
     });

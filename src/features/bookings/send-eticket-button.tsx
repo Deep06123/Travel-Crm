@@ -26,14 +26,28 @@ import { bookingEmailAction, type BookingEmailState } from "./email-actions";
  * input: only the submitter's name and value are posted, which is exactly the
  * "which one did they click" signal this needs.
  */
-function SubmitButton({ blockedReason }: { blockedReason?: string | undefined }) {
-  const { pending } = useFormStatus();
-
+function SubmitButton({
+  blockedReason,
+  pending,
+  formId,
+}: {
+  blockedReason?: string | undefined;
+  pending: boolean;
+  /**
+   * The open editor's form, which this button submits instead of its own.
+   *
+   * Without it, clicking Send with the editor open sent the generated message
+   * and threw away what the operator had typed — the same defect the
+   * authorization panel had, and the same fix. `intent` comes off the button
+   * in that case because the editor posts its own, and a submitter outside the
+   * form would otherwise contribute a second one.
+   */
+  formId?: string | undefined;
+}) {
   return (
     <Button
       type="submit"
-      name="intent"
-      value="send"
+      {...(formId ? { form: formId } : { name: "intent", value: "send" })}
       variant="destructive"
       // Clickable even while blocked — see `AuthorizationPanel`. The signature
       // rule and the missing-recipient rule are both enforced in
@@ -42,7 +56,13 @@ function SubmitButton({ blockedReason }: { blockedReason?: string | undefined })
       title={blockedReason}
     >
       {pending ? <Loader2 className="animate-spin" /> : <Send />}
-      {pending ? "Sending…" : "Click here Send E-Ticket Email"}
+      {pending
+        ? "Sending…"
+        : formId
+          ? // Not the editor's own "Send this version": one name per button,
+            // see `AuthorizationPanel`.
+            "Send the edited version"
+          : "Click here Send E-Ticket Email"}
     </Button>
   );
 }
@@ -105,10 +125,10 @@ export function SendETicketButton({
   /** Whether this user could act on "no accounts configured". */
   canManageSettings?: boolean;
 }) {
-  const [state, formAction] = useActionState<BookingEmailState, FormData>(
-    bookingEmailAction,
-    {},
-  );
+  const [state, formAction, isPending] = useActionState<
+    BookingEmailState,
+    FormData
+  >(bookingEmailAction, {});
 
   /** Dismissed preview, compared by identity — see `CustomerEmailPanel`. */
   const [dismissed, setDismissed] = useState<BookingEmailState["preview"]>();
@@ -119,6 +139,9 @@ export function SendETicketButton({
 
   const editing =
     state.preview && state.preview !== dismissed ? state.preview : undefined;
+
+  /** The open editor's form — see `SubmitButton`. */
+  const editorFormId = editing ? `eticket-editor-${bookingId}` : undefined;
 
   const blocked =
     recipient === ""
@@ -143,7 +166,11 @@ export function SendETicketButton({
         />
 
         <div className="flex flex-wrap gap-2">
-          <SubmitButton blockedReason={blocked} />
+          <SubmitButton
+            blockedReason={blocked}
+            pending={isPending}
+            {...(editorFormId ? { formId: editorFormId } : {})}
+          />
           <EditButton />
 
           {/* Deliberately available even while the send is blocked: staff still
@@ -172,9 +199,12 @@ export function SendETicketButton({
           <EmailEditor
             title="E-ticket email"
             fieldKey={`eticket-${bookingId}`}
+            {...(editorFormId ? { formId: editorFormId } : {})}
             recipient={editing.recipient}
             subject={editing.subject}
             body={editing.body}
+            generatedBody={editing.generatedBody}
+            bodyHint="Plain text. Leave a blank line between paragraphs. It is remembered for this booking: the preview and the next send both use it."
             hidden={{
               bookingId,
               event: editing.event,

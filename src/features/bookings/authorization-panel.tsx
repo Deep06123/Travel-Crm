@@ -124,12 +124,32 @@ function location(row: SignatureRow): string | null {
  * action answers in the operator's own words — and the server applies the rule
  * either way, so nothing can leave that should not. `pending` still disables
  * it, which is the one case where a second click would do harm.
+ *
+ * `formId` redirects the click at the editor's form when one is open, so this
+ * button sends what is on screen instead of the generated wording. It is the
+ * reason `pending` arrives as a prop rather than from `useFormStatus`: that
+ * hook reports the form this button sits *in*, which is not the form it
+ * submits once it has been pointed elsewhere, so the button would stay idle
+ * through a send it had itself started.
  */
-function SubmitButton({ label, blocked }: { label: string; blocked?: string }) {
-  const { pending } = useFormStatus();
-
+function SubmitButton({
+  label,
+  blocked,
+  pending,
+  formId,
+}: {
+  label: string;
+  blocked?: string;
+  pending: boolean;
+  formId?: string | undefined;
+}) {
   return (
-    <Button type="submit" disabled={pending} title={blocked}>
+    <Button
+      type="submit"
+      disabled={pending}
+      title={blocked}
+      {...(formId ? { form: formId } : {})}
+    >
       {pending ? <Loader2 className="animate-spin" /> : <Send />}
       {pending ? "Sending…" : label}
     </Button>
@@ -274,10 +294,10 @@ export function AuthorizationPanel({
 }) {
   const router = useRouter();
 
-  const [state, formAction] = useActionState<AuthorizationState, FormData>(
-    sendAuthorizationEmailAction,
-    {},
-  );
+  const [state, formAction, isPending] = useActionState<
+    AuthorizationState,
+    FormData
+  >(sendAuthorizationEmailAction, {});
 
   /**
    * The preview the operator has dismissed, if any.
@@ -302,13 +322,37 @@ export function AuthorizationPanel({
   const editing =
     state.preview && state.preview !== dismissed ? state.preview : undefined;
 
+  /**
+   * The open editor's form, for the Send button above it to submit.
+   *
+   * Undefined while nothing is being edited, which leaves that button
+   * submitting its own form and sending the generated message — the behaviour
+   * when no edit exists to respect.
+   */
+  const editorFormId = editing
+    ? `authorization-editor-${bookingId}`
+    : undefined;
+
   // The signature is the evidence, wherever it sits in the history — a later
-  // send does not undo it. The outstanding link is only interesting while
-  // nothing has been signed.
-  const signed = rows.find((row) => row.status === "SIGNED");
-  const outstanding = rows.find(
+  // send does not undo it.
+  //
+  // Positions are kept, not just the rows: `rows` is newest first, so a lower
+  // index is a later attempt, and that is how the panel tells "signed, and
+  // nothing has happened since" from "signed, then asked again and waiting on
+  // the second answer".
+  const signedIndex = rows.findIndex((row) => row.status === "SIGNED");
+  const outstandingIndex = rows.findIndex(
     (row) => row.status === "SENT" || row.status === "VIEWED",
   );
+
+  const signed = signedIndex === -1 ? undefined : rows[signedIndex];
+  const outstanding =
+    outstandingIndex === -1 ? undefined : rows[outstandingIndex];
+
+  /** A link is out that is newer than anything signed, so an answer may land. */
+  const awaitingSignature =
+    outstanding !== undefined &&
+    (signed === undefined || outstandingIndex < signedIndex);
 
   const blocked =
     recipient === ""
@@ -324,15 +368,22 @@ export function AuthorizationPanel({
    * `router.refresh()` re-runs the server component and the panel re-renders
    * with whatever came back, including the e-ticket button this gates.
    *
-   * Only while there is something to wait for: once signed, or with no link
-   * outstanding, nothing can change here on its own and the polling stops. It
-   * also pauses while the tab is hidden, so a booking left open in a
-   * background tab overnight is not re-fetched hundreds of times, and refreshes
-   * once on becoming visible again — which is the moment the operator is
-   * actually looking.
+   * Only while there is something to wait for: with no link outstanding and
+   * nothing still being emailed, nothing can change here on its own and the
+   * polling stops. It also pauses while the tab is hidden, so a booking left
+   * open in a background tab overnight is not re-fetched hundreds of times, and
+   * refreshes once on becoming visible again — which is the moment the operator
+   * is actually looking.
+   *
+   * Deliberately not "stop once anything is signed". Sending a fresh
+   * authorization on a booking that was already signed — a corrected card, an
+   * added traveller — issues a new link, and the page that issued it is the one
+   * an operator is sitting in front of waiting for the answer. Keying this on
+   * the existence of any signature left that page frozen on the previous
+   * signature until it was reloaded by hand.
    */
   const waiting =
-    (!signed && Boolean(outstanding)) ||
+    awaitingSignature ||
     // Signed moments ago: the confirmation email is still going out, and its
     // badge settles a beat after the signature itself lands.
     signed?.confirmation?.status === "PENDING";
@@ -353,15 +404,48 @@ export function AuthorizationPanel({
     };
   }, [waiting, router]);
 
+  /**
+   * Picks the newly issued link up the moment the send reports success.
+   *
+   * The polling above only starts once the panel can see an outstanding
+   * request, and the row for the link that was just sent arrives with the next
+   * render of the server component. Without this the panel would sit on the
+   * state it was rendered with — which, on a booking that was already signed,
+   * is the previous signature and no sign that anything was sent at all.
+   *
+   * Keyed on the message rather than a boolean: two sends in a row each produce
+   * their own success string, and an identical one is a re-render rather than a
+   * second send.
+   */
+  useEffect(() => {
+    if (!state.success) return;
+    router.refresh();
+  }, [state.success, router]);
+
   return (
     <div className="space-y-4">
       {signed ? (
         <div>
-          <div className="mb-2 flex items-center gap-2">
+          <div className="mb-2 flex flex-wrap items-center gap-2">
             <Badge tone="success">Signed</Badge>
             <span className="text-xs text-ink-muted">
               {signed.signedAtLabel}
             </span>
+
+            {/* A newer link is out: the signature below is last time's answer,
+                and this page is watching for the next one. Said plainly,
+                because a panel that reads "Signed" while an operator waits for
+                a second signature looks like nothing is happening. */}
+            {awaitingSignature && outstanding ? (
+              <>
+                <Badge tone={PRESENTATION[outstanding.status].tone}>
+                  {PRESENTATION[outstanding.status].label}
+                </Badge>
+                <span className="text-xs text-ink-muted">
+                  a newer link is awaiting the customer; this updates on its own
+                </span>
+              </>
+            ) : null}
           </div>
 
           <dl className="divide-y divide-line">
@@ -440,14 +524,23 @@ export function AuthorizationPanel({
           />
 
           <div className="flex flex-wrap gap-2">
+            {/* With the editor open this submits the editor, and says so.
+                Deliberately not the editor's own "Send this version": two
+                buttons with one name in one panel is what a screen reader
+                reads out twice and what an operator has to guess between,
+                even when both do the same thing. */}
             <SubmitButton
               label={
-                signed
-                  ? "Send a new authorization email"
-                  : outstanding
-                    ? "Resend authorization email"
-                    : "Send authorization email"
+                editing
+                  ? "Send the edited version"
+                  : signed
+                    ? "Send a new authorization email"
+                    : outstanding
+                      ? "Resend authorization email"
+                      : "Send authorization email"
               }
+              pending={isPending}
+              {...(editorFormId ? { formId: editorFormId } : {})}
               {...(blocked ? { blocked } : {})}
             />
 
@@ -474,7 +567,7 @@ export function AuthorizationPanel({
           ) : null}
           {/* A fresh send invalidates the outstanding link, so say so before
               the agent clicks rather than after the customer complains. */}
-          {outstanding && !signed ? (
+          {awaitingSignature ? (
             <p className="mt-2 text-xs text-ink-subtle">
               Resending replaces the link already sent; only the newest one
               works.
@@ -493,6 +586,7 @@ export function AuthorizationPanel({
         <EmailEditor
           title="Authorization email"
           fieldKey={`authorization-${bookingId}`}
+          {...(editorFormId ? { formId: editorFormId } : {})}
           recipient={editing.recipient}
           subject={editing.subject}
           body={editing.body}
@@ -503,7 +597,8 @@ export function AuthorizationPanel({
             // form and would otherwise post no sender at all.
             ...(senderId ? { mailAccountId: senderId } : {}),
           }}
-          bodyHint="Plain text, shown at the top of the email. Leave a blank line between paragraphs."
+          generatedBody={editing.generatedBody}
+          bodyHint="Plain text, shown at the top of the email. Leave a blank line between paragraphs. It is remembered for this booking: the preview and the next send both use it."
           note={
             <p className="rounded-md bg-surface-sunken px-3 py-2 text-xs text-ink-muted">
               Only this opening message and the subject can be changed. The

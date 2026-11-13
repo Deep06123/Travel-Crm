@@ -40,6 +40,18 @@ export interface ETicketOptions {
   redactDateOfBirth?: boolean;
   /** Support number shown in the header, from the booking's TFN. */
   supportPhone?: string | null;
+  /**
+   * The operator's opening message, in place of the generated one.
+   *
+   * Only the block above "Booking Status" — the document itself is what the
+   * customer is being sent and is not editable, exactly as on the
+   * authorization email. An edited send used to replace the whole document
+   * with a plain shell, which deleted the ticket from the customer's email.
+   *
+   * Plain text. Blank lines separate paragraphs; the markup is supplied here
+   * so an edited message cannot arrive malformed.
+   */
+  intro?: string | null;
 }
 
 /**
@@ -188,6 +200,65 @@ function bookingDetailRows(
 }
 
 /**
+ * The opening message above "Booking Status", as plain text.
+ *
+ * Split out so an operator can be shown the generated wording, edit it, and
+ * send what they read — the counterpart of `defaultAuthorizationBody`. The
+ * document below it is generated from the booking and stays generated.
+ */
+export function defaultETicketIntro(data: BookingEmailData): string {
+  const carrier = carrierName(data);
+  const isCruise = data.product === "CRUISE";
+
+  return [
+    `Dear ${data.customerName},`,
+    "Greetings for the day!",
+    carrier
+      ? `You are all set to ${isCruise ? "sail" : "fly"} with ${carrier.toUpperCase()}.`
+      : `Your ${isCruise ? "cruise" : "flight"} booking is below.`,
+  ].join("\n\n");
+}
+
+/** Plain-text paragraphs, blank lines dropped. */
+function introParagraphs(intro: string): string[] {
+  return intro
+    .split(/\r?\n\s*\r?\n/)
+    .map((part) => part.trim())
+    .filter(Boolean);
+}
+
+/**
+ * The opening block, as the markup the generated wording has always produced.
+ *
+ * The first paragraph carries the salutation's weight — it reads as one in an
+ * edited message too — and the last loses its bottom margin. With the
+ * generated intro this renders exactly the markup it replaced, so a booking
+ * nobody has edited sends a byte-identical document.
+ */
+function introHtml(intro: string): string {
+  const parts = introParagraphs(intro);
+
+  return parts
+    .map((part, index) => {
+      const body = escapeHtml(part).replace(/\r?\n/g, "<br />");
+      const last = index === parts.length - 1;
+
+      // `margin:0` on the last one, written exactly as the generated block
+      // always wrote it: the shorthand is equivalent to `0 0 0`, but this
+      // document is diffed against mailbox screenshots and a booking nobody
+      // has edited should render byte-for-byte what it rendered before.
+      const margin = last ? "0" : index === 0 ? "0 0 8px" : "0 0 6px";
+
+      if (index === 0) {
+        return `<p style="margin:${margin};font-size:14px;font-weight:bold;color:#333333;">${body}</p>`;
+      }
+
+      return `<p style="margin:${margin};font-size:14px;">${body}</p>`;
+    })
+    .join("\n    ");
+}
+
+/**
  * Renders the complete e-ticket document.
  *
  * `statusLine` and `statusNote` are passed in rather than derived here, so the
@@ -202,10 +273,6 @@ export function renderETicket(
 ): string {
   const carrier = carrierName(data);
   const isCruise = data.product === "CRUISE";
-
-  const greeting = carrier
-    ? `You are all set to ${isCruise ? "sail" : "fly"} with ${escapeHtml(carrier.toUpperCase())}.`
-    : `Your ${isCruise ? "cruise" : "flight"} booking is below.`;
 
   // The confirmation the carrier issued. Shown as the large badge in the
   // reference; where there is none, the booking's own reference stands in
@@ -227,9 +294,7 @@ export function renderETicket(
   </td></tr>
 
   <tr><td style="padding:18px 20px;">
-    <p style="margin:0 0 8px;font-size:14px;font-weight:bold;color:#333333;">Dear ${escapeHtml(data.customerName)},</p>
-    <p style="margin:0 0 6px;font-size:14px;">Greetings for the day!</p>
-    <p style="margin:0;font-size:14px;">${greeting}</p>
+    ${introHtml(options.intro?.trim() || defaultETicketIntro(data))}
   </td></tr>
 
   ${sectionHeading("Booking Status")}

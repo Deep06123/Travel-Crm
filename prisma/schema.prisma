@@ -766,6 +766,21 @@ model BookingSignature {
   /// rather than as this schema chose to flatten it.
   geoRaw      Json?
 
+  /// The covering message this invitation actually went out with.
+  ///
+  /// Snapshotted for the same reason as `recipientEmail` and `senderEmail`:
+  /// the message is generated from the booking, and the booking moves. Without
+  /// this, the preview an operator opens from the panel re-renders today's
+  /// booking with the generated wording and so cannot show the edit a customer
+  /// is holding in their inbox — the complaint that put these columns here.
+  ///
+  /// It is also what a later send reuses, so "View email", the editor and the
+  /// Send button all describe one message rather than three. Null on every row
+  /// written before this existed, and on any send that went out with the
+  /// generated wording — which is the signal to generate it again.
+  emailSubject String? @db.Text
+  emailBody    String? @db.Text
+
   /// Storage key of the signed confirmation PDF, written once after signing.
   ///
   /// The key rather than the bytes: the document is evidence and belongs in
@@ -1501,6 +1516,20 @@ model Notification {
   recipient String  @db.Text
   template  String?
   payload   Json?
+
+  /// The wording this message actually went out with, where an operator wrote
+  /// it instead of the template.
+  ///
+  /// The counterpart of `BookingSignature.emailSubject`, for the lifecycle
+  /// emails. Set only on a send the provider accepted, and cleared by any
+  /// later accepted send that used the generated wording — so a non-null value
+  /// means "this is the message in the customer's inbox", which is what the
+  /// preview shows and what the next operator-initiated send repeats.
+  ///
+  /// Automatic sends never read it. A confirmation triggered by a status
+  /// change has to read the same whoever happened to trigger it.
+  emailSubject String? @db.Text
+  emailBody    String? @db.Text
 
   provider          String?
   providerReference String?
