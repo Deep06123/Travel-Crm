@@ -14,9 +14,15 @@ import {
   confirmationFilename,
   renderSignatureConfirmation,
 } from "@/lib/mail/signature-confirmation";
+import type { BookingAuthorizationData } from "@/lib/mail/booking-authorization";
 import { renderConfirmationPdf } from "@/lib/pdf/signature-confirmation";
 import type { SignatureEvidence } from "@/lib/signature/evidence";
 import { generateStorageKey, getStorage, ObjectNotFoundError } from "@/lib/storage";
+
+import {
+  loadAuthorizationDocument,
+  type AuthorizationDocument,
+} from "./authorization-data";
 
 import { resolveMailer } from "./mail-account-service";
 
@@ -154,6 +160,7 @@ function toEvidence(row: SignatureRow): SignatureEvidence | null {
 async function ensureConfirmationPdf(
   row: SignatureRow,
   evidence: SignatureEvidence,
+  booking: BookingAuthorizationData | null,
 ): Promise<Buffer> {
   const storage = getStorage();
 
@@ -170,7 +177,7 @@ async function ensureConfirmationPdf(
     }
   }
 
-  const bytes = await renderConfirmationPdf(evidence);
+  const bytes = await renderConfirmationPdf(evidence, booking);
   const key = generateStorageKey("pdf", "documents");
 
   await storage.put({ key, body: bytes, contentType: "application/pdf" });
@@ -214,10 +221,38 @@ export async function signedAuthorizationPdf(
   const evidence = toEvidence(row);
   if (!evidence) return null;
 
+  // Only consulted when nothing is stored. A booking edited since the customer
+  // signed must not change the document they signed, and the stored bytes are
+  // what stops it from doing so.
+  const booking = await loadDocument(row.bookingId);
+
   return {
-    bytes: await ensureConfirmationPdf(row, evidence),
+    bytes: await ensureConfirmationPdf(row, evidence, booking?.data ?? null),
     filename: confirmationFilename(evidence.bookingNumber),
   };
+}
+
+/**
+ * The authorization document for the booking, or nothing.
+ *
+ * Deliberately swallows its errors. This is quoted material — the tables the
+ * customer was shown, reproduced for context — and the thing that actually has
+ * to arrive is the signed PDF. Failing the whole delivery because an itinerary
+ * image is missing from storage would trade a complete record for no record.
+ */
+async function loadDocument(
+  bookingId: string,
+): Promise<AuthorizationDocument | null> {
+  try {
+    return await loadAuthorizationDocument(bookingId);
+  } catch (error) {
+    log.warn(
+      { err: error, bookingId },
+      "Could not load the booking for the confirmation; sending the covering note without its tables",
+    );
+
+    return null;
+  }
 }
 
 /**
@@ -395,8 +430,15 @@ export async function deliverSignatureConfirmation(
   }
 
   try {
-    const pdf = await ensureConfirmationPdf(row, evidence);
-    const rendered = renderSignatureConfirmation(evidence);
+    // The booking as the authorization email stated it, so both the PDF and
+    // the covering note carry the same traveller, sailing, card, charge and
+    // itinerary tables the customer saw. Best effort: a booking that has since
+    // been deleted, or an itinerary image that will not come out of storage,
+    // must not stop the signed document from reaching the office.
+    const document = await loadDocument(row.bookingId);
+
+    const pdf = await ensureConfirmationPdf(row, evidence, document?.data ?? null);
+    const rendered = renderSignatureConfirmation(evidence, document?.data);
 
     // Addressed to the office, but written to read as the customer's reply:
     // the display name is theirs and a reply goes to them rather than to the
@@ -425,6 +467,9 @@ export async function deliverSignatureConfirmation(
           content: pdf,
           contentType: "application/pdf",
         },
+        // The itinerary's images, referenced by the quoted tables as `cid:`.
+        // Without these the itinerary in the body renders as broken images.
+        ...(document?.attachments ?? []),
       ],
     });
 

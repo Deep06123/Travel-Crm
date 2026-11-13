@@ -1,6 +1,12 @@
 import { PDFDocument, StandardFonts, rgb, type PDFFont, type PDFPage } from "pdf-lib";
 
 import {
+  authorizationSections,
+  type AuthorizationTableSection,
+  type BookingAuthorizationData,
+} from "@/lib/mail/booking-authorization";
+import { htmlToPlainText } from "@/lib/mail/html";
+import {
   bookingRows,
   securityRows,
   type EvidenceRow,
@@ -89,8 +95,30 @@ function wrap(text: string, font: PDFFont, size: number, maxWidth: number): stri
   return lines;
 }
 
+/**
+ * The itinerary as lines the document can draw.
+ *
+ * `[image attached]` is dropped: `htmlToPlainText` emits it for an email, where
+ * the bytes really are attached to the message. Nothing is attached to a PDF,
+ * so printing it here would point at a file that does not exist.
+ */
+function itineraryLines(html: string | null | undefined): string[] {
+  const composed = html?.trim();
+  if (!composed) return [];
+
+  return htmlToPlainText(composed).filter((line) => line !== "[image attached]");
+}
+
 export async function renderConfirmationPdf(
   evidence: SignatureEvidence,
+  /**
+   * The booking as the authorization email stated it.
+   *
+   * Optional: a signature whose booking can no longer be read still produces a
+   * document, because the signature and the consent wording are the part that
+   * has to survive. The sections it adds are what the customer was shown.
+   */
+  booking?: BookingAuthorizationData | null,
 ): Promise<Buffer> {
   const doc = await PDFDocument.create();
 
@@ -118,7 +146,10 @@ export async function renderConfirmationPdf(
   };
 
   const heading = (text: string): void => {
-    ensure(40);
+    // Enough for the heading, its rule and the first two lines under it: a
+    // heading alone at the foot of a page reads as a section with nothing in
+    // it, which in an evidence document invites exactly the wrong question.
+    ensure(76);
     cursor.y -= 18;
     cursor.page.drawText(text.toUpperCase(), {
       x: MARGIN,
@@ -181,6 +212,89 @@ export async function renderConfirmationPdf(
     cursor.y -= lines.length * (size + 4) + 6;
   };
 
+  /**
+   * A columned table, sized to its own contents.
+   *
+   * Column widths come from the widest cell in each column rather than a fixed
+   * split: a traveller table is one narrow number, two long names and two
+   * dates, and an even split would wrap the names while leaving the index
+   * column mostly empty. The natural widths are then scaled to the text block,
+   * up or down, so the table always spans the page exactly once.
+   */
+  const table = (section: AuthorizationTableSection): void => {
+    const available = PAGE.width - MARGIN * 2;
+    const size = 9;
+    const gutter = 10;
+
+    if (section.rows.length === 0) {
+      paragraph(section.empty, size);
+      return;
+    }
+
+    const natural = section.columns.map((column, index) =>
+      Math.max(
+        fonts.bold.widthOfTextAtSize(column, size),
+        ...section.rows.map((row) =>
+          fonts.body.widthOfTextAtSize(row[index] ?? "", size),
+        ),
+      ),
+    );
+
+    const spread = natural.reduce((sum, width) => sum + width, 0);
+    const room = available - gutter * (section.columns.length - 1);
+
+    // Leftover room is shared equally rather than proportionally: scaling up
+    // would hand almost all of it to the widest column — the names — and leave
+    // a gulf before the next heading. Only an over-wide table is scaled down,
+    // where proportion is what keeps every column readable.
+    const widths =
+      spread <= room
+        ? natural.map((width) => width + (room - spread) / section.columns.length)
+        : natural.map((width) => (width / spread) * room);
+
+    const offsets = widths.map((_, index) =>
+      widths
+        .slice(0, index)
+        .reduce((sum, width) => sum + width + gutter, MARGIN),
+    );
+
+    const drawRow = (cells: readonly string[], font: PDFFont, color = INK) => {
+      const wrapped = cells.map((cell, index) =>
+        wrap(cell, font, size, widths[index] ?? available),
+      );
+      const height = Math.max(...wrapped.map((lines) => lines.length));
+
+      ensure(height * 12 + 6);
+
+      wrapped.forEach((lines, index) => {
+        lines.forEach((line, row) => {
+          cursor.page.drawText(line, {
+            x: offsets[index] ?? MARGIN,
+            y: cursor.y - row * 12,
+            size,
+            font,
+            color,
+          });
+        });
+      });
+
+      cursor.y -= height * 12 + 4;
+    };
+
+    drawRow(section.columns, fonts.bold, MUTED);
+
+    cursor.y += 2;
+    cursor.page.drawLine({
+      start: { x: MARGIN, y: cursor.y },
+      end: { x: PAGE.width - MARGIN, y: cursor.y },
+      thickness: 0.5,
+      color: RULE,
+    });
+    cursor.y -= 12;
+
+    section.rows.forEach((row) => drawRow(row, fonts.body));
+  };
+
   cursor.page.drawText("Booking Authorization Confirmation", {
     x: MARGIN,
     y: cursor.y,
@@ -191,12 +305,45 @@ export async function renderConfirmationPdf(
   cursor.y -= 20;
 
   paragraph(
-    `Electronically signed for booking ${evidence.bookingNumber}. This document records the authorization the customer gave, the exact wording they agreed to, and the technical details observed at the moment they confirmed it.`,
+    `Electronically signed for booking ${evidence.bookingNumber}. This document records the authorization the customer gave, ${booking ? "the booking it was given against, " : ""}the exact wording they agreed to, and the technical details observed at the moment they confirmed it.`,
     9,
   );
 
   heading("Booking");
   bookingRows(evidence).forEach(field);
+
+  // What was signed, before how it was signed. The tables are the customer's
+  // own copy of the authorization reproduced in the record, so the document
+  // stands on its own in a chargeback rather than referring back to an email.
+  if (booking) {
+    for (const section of authorizationSections(booking)) {
+      heading(section.title);
+
+      if (section.kind === "table") {
+        table(section);
+        continue;
+      }
+
+      section.rows.forEach(([label, value]) => field({ label, value }));
+
+      if (section.note) {
+        cursor.y -= 4;
+        paragraph(section.note, 9);
+      }
+
+      if (section.statement) {
+        cursor.y -= 4;
+        paragraph(section.statement, 9);
+      }
+    }
+
+    const itinerary = itineraryLines(booking.itineraryHtml);
+
+    if (itinerary.length > 0) {
+      heading("Itinerary");
+      itinerary.forEach((line) => paragraph(line, 9));
+    }
+  }
 
   heading("Customer consent");
   // Verbatim and unwrapped in meaning — only the lines are broken. This

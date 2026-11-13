@@ -1,5 +1,7 @@
 import { beforeAll, describe, expect, it } from "vitest";
 
+import { CardType } from "@/generated/prisma/enums";
+import type { BookingAuthorizationData } from "@/lib/mail/booking-authorization";
 import {
   confirmationFilename,
   renderSignatureConfirmation,
@@ -60,6 +62,43 @@ const BARE: SignatureEvidence = {
   geoCity: null,
   geoRegion: null,
   geoCountry: null,
+};
+
+/** The booking as the authorization email stated it, quoted by the covering note. */
+const BOOKING: BookingAuthorizationData = {
+  bookingNumber: "GX-2048",
+  customerName: "Grace Hopper",
+  product: "FLIGHT",
+  currency: "USD",
+  totalMinor: 102_997,
+  travelStartDate: new Date("2026-06-01T00:00:00Z"),
+  airlineConfirmation: "ABC123",
+  policyOverrides: {},
+  supportPhone: "+1-888-480-7222",
+  segments: [],
+  cruise: null,
+  passengers: [
+    {
+      firstName: "Ada",
+      lastName: "Lovelace",
+      gender: "Female",
+      dateOfBirth: new Date("1990-12-10T00:00:00Z"),
+      ticketNumber: "1234567890",
+    },
+  ],
+  itineraryHtml: "<p><strong>Depart 10:00</strong> JFK to LHR</p>",
+  bookedAt: new Date("2026-04-28T12:00:00Z"),
+  contactEmail: "grace@example.invalid",
+  contactPhone: "+1 555 0100",
+  cardHolderName: "Grace Hopper",
+  cardType: CardType.VISA,
+  cardLast4: "1111",
+  billingAddress: "12 Example Street, Leeds, LS1 1AA, United Kingdom",
+  chargeSplits: [
+    { title: "Deposit", amountMinor: 50_000 },
+    { title: "Balance", amountMinor: 52_997 },
+  ],
+  sailing: null,
 };
 
 beforeAll(() => {
@@ -150,6 +189,38 @@ describe("the confirmation email", () => {
     expect(html).toContain("&lt;img src=x");
   });
 
+  it("reproduces the tables the customer was sent, when the booking is given", () => {
+    const { text, html } = renderSignatureConfirmation(EVIDENCE, BOOKING);
+
+    for (const part of [text, html]) {
+      // The traveller table.
+      expect(part).toContain("Ada Lovelace");
+      expect(part).toContain("1234567890");
+      // The card authorization detail.
+      expect(part).toContain("Grace Hopper");
+      expect(part).toContain("12 Example Street");
+      // The charges, split exactly as they were quoted.
+      expect(part).toContain("Deposit");
+      expect(part).toContain("Balance");
+      // And the wording the customer agreed to with them.
+      expect(part).toContain("I acknowledge receipt of this email");
+    }
+
+    // The itinerary travels as markup in the HTML part and flattened in the
+    // text one, so it is asserted on its content rather than its tags.
+    expect(html).toContain("<strong>Depart 10:00</strong>");
+    expect(text).toContain("Depart 10:00");
+  });
+
+  it("still renders when the booking could not be loaded", () => {
+    const { text, html } = renderSignatureConfirmation(EVIDENCE, null);
+
+    // The evidence is the part that must never be lost.
+    expect(text).toContain(EVIDENCE.consentText);
+    expect(html).toContain("203.0.113.9");
+    expect(html).not.toContain("What the customer signed");
+  });
+
   it("names the attachment after the booking", () => {
     expect(confirmationFilename("GX-2048")).toBe("authorization-GX-2048.pdf");
     // Anything that could escape a directory or confuse a mail client is gone.
@@ -180,6 +251,39 @@ describe("the confirmation PDF", () => {
     // The consent sentence, word for word. Line breaks are the renderer's, so
     // it is compared with whitespace collapsed.
     expect(drawn.replace(/\s+/g, " ")).toContain(EVIDENCE.consentText);
+  });
+
+  it("carries the same tables as the email when the booking is given", async () => {
+    const drawn = pdfText(await renderConfirmationPdf(EVIDENCE, BOOKING));
+
+    for (const expected of [
+      // The traveller table, header and row.
+      "PASSENGER'S NAME",
+      "E-TICKET NO.",
+      "ADA LOVELACE",
+      "1234567890",
+      // The card authorization detail.
+      "CREDIT CARD AUTHORIZATION DETAILS",
+      "12 EXAMPLE STREET",
+      // The charges, split as they were quoted.
+      "TOTAL CHARGES & AUTHORIZATION",
+      "DEPOSIT",
+      "BALANCE",
+      "$500.00",
+      // The itinerary and the wording agreed to with it.
+      "ITINERARY",
+      "I ACKNOWLEDGE RECEIPT",
+    ]) {
+      expect(drawn.toUpperCase()).toContain(expected);
+    }
+  });
+
+  it("renders without the booking, which may no longer exist", async () => {
+    const bytes = await renderConfirmationPdf(EVIDENCE, null);
+
+    // The evidence is what the document exists for and must survive alone.
+    expect(pdfText(bytes)).toContain("203.0.113.9");
+    expect(pdfText(bytes).toUpperCase()).not.toContain("E-TICKET NO.");
   });
 
   it("renders without any browser-reported detail", async () => {

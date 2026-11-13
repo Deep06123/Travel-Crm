@@ -88,27 +88,54 @@ function labelledRow(label: string, value: string): string {
 </tr>`;
 }
 
-function travellerRows(data: BookingAuthorizationData): string {
+/** The traveller table's columns — one fewer on a cruise, which has no ticket. */
+function travellerColumns(data: BookingAuthorizationData): string[] {
+  const columns = ["SL No.", "Passenger's Name", "Gender", "Date of Birth"];
+
+  return data.product === "CRUISE" ? columns : [...columns, "E-Ticket No."];
+}
+
+function travellerCells(data: BookingAuthorizationData): string[][] {
   const isCruise = data.product === "CRUISE";
 
-  const rows = data.passengers
-    .map((passenger, index) => {
+  return data.passengers.map((passenger, index) => {
+    const cells = [
+      String(index + 1),
+      `${passenger.firstName} ${passenger.lastName}`.trim(),
+      passenger.gender ?? "—",
+      formatTicketDate(passenger.dateOfBirth ?? null),
+    ];
+
+    return isCruise ? cells : [...cells, passenger.ticketNumber ?? "—"];
+  });
+}
+
+/**
+ * The traveller list for the plain-text part.
+ *
+ * A text-only client gets the same names, in the same order, as the table —
+ * the passenger names are the detail the customer is most often asked to check.
+ */
+function travellerText(data: BookingAuthorizationData): string[] {
+  if (data.passengers.length === 0) return [];
+
+  const isCruise = data.product === "CRUISE";
+
+  return [
+    "",
+    "Travellers:",
+    ...data.passengers.map((passenger, index) => {
       const name = `${passenger.firstName} ${passenger.lastName}`.trim();
+      const parts = [
+        passenger.gender ?? null,
+        passenger.dateOfBirth ? formatTicketDate(passenger.dateOfBirth) : null,
+        isCruise ? null : (passenger.ticketNumber ?? null),
+      ].filter((part): part is string => Boolean(part));
 
-      return `<tr>
-  <td style="${CELL}">${index + 1}</td>
-  <td style="${CELL}">${escapeHtml(name)}</td>
-  <td style="${CELL}">${escapeHtml(passenger.gender ?? "—")}</td>
-  <td style="${CELL}">${formatTicketDate(passenger.dateOfBirth ?? null)}</td>
-  ${isCruise ? "" : `<td style="${CELL}">${escapeHtml(passenger.ticketNumber ?? "—")}</td>`}
-</tr>`;
-    })
-    .join("");
-
-  return (
-    rows ||
-    `<tr><td colspan="${isCruise ? 4 : 5}" style="${CELL}color:#777777;">No travellers recorded.</td></tr>`
-  );
+      return `${index + 1}. ${name}${parts.length > 0 ? ` (${parts.join(", ")})` : ""}`;
+    }),
+    "",
+  ];
 }
 
 /**
@@ -175,21 +202,7 @@ function sailingPairs(sailing: AuthorizationSailing): Array<[string, string]> {
   });
 }
 
-/** The sailing table, or nothing at all on a booking that has no sailing. */
-function sailingSection(data: BookingAuthorizationData): string {
-  const pairs = data.sailing ? sailingPairs(data.sailing) : [];
-  if (pairs.length === 0) return "";
-
-  return `${sectionHeading("Sailing Details")}
-
-  <tr><td style="padding:16px 20px;">
-    <table role="presentation" cellpadding="0" cellspacing="0" style="width:100%;border-collapse:collapse;">
-      ${pairs.map(([label, value]) => labelledRow(label, value)).join("")}
-    </table>
-  </td></tr>`;
-}
-
-/** The same sailing detail for the plain-text part. */
+/** The sailing detail for the plain-text part. */
 function sailingText(data: BookingAuthorizationData): string[] {
   const pairs = data.sailing ? sailingPairs(data.sailing) : [];
   if (pairs.length === 0) return [];
@@ -208,38 +221,213 @@ function sailingText(data: BookingAuthorizationData): string[] {
  * the figure the cardholder agreed to and the figures that will appear on their
  * statement are read side by side rather than out of a paragraph.
  */
-function chargeRows(data: BookingAuthorizationData): string {
+function chargePairs(data: BookingAuthorizationData): Array<[string, string]> {
   const isCruise = data.product === "CRUISE";
-  const total = formatMoney(data.totalMinor, data.currency);
-
-  const splits = data.chargeSplits
-    .map((split, index) =>
-      labelledRow(
-        split.title?.trim() || `Charge ${index + 1}`,
-        formatMoney(split.amountMinor, data.currency),
-      ),
-    )
-    .join("");
 
   return [
-    labelledRow(
+    [
       `Total ${isCruise ? "cruise" : "flight"} booking amount`,
-      total,
-    ),
-    labelledRow(
+      formatMoney(data.totalMinor, data.currency),
+    ],
+    [
       "How it will be charged",
       data.chargeSplits.length === 0
         ? "As a single transaction"
         : `In ${data.chargeSplits.length} transactions, as below`,
+    ],
+    ...data.chargeSplits.map(
+      (split, index): [string, string] => [
+        split.title?.trim() || `Charge ${index + 1}`,
+        formatMoney(split.amountMinor, data.currency),
+      ],
     ),
-    splits,
-  ].join("");
+  ];
 }
 
-const ACKNOWLEDGEMENT =
+/** What the cardholder is being asked to authorize a charge against. */
+function cardPairs(data: BookingAuthorizationData): Array<[string, string]> {
+  const card = maskedCard(data.cardType, data.cardLast4);
+
+  const rows: Array<[string, string | null]> = [
+    ["Booking ID", data.bookingNumber],
+    ["Booked on", formatTicketDate(data.bookedAt)],
+    ["Phone", data.contactPhone],
+    ["Email", data.contactEmail],
+    ["Payment method", card],
+    ["Card holder name", data.cardHolderName],
+    ["Billing address", data.billingAddress],
+  ];
+
+  return rows.flatMap(([label, value]) => {
+    const text = value?.trim();
+    return text ? [[label, text] as [string, string]] : [];
+  });
+}
+
+export const ACKNOWLEDGEMENT =
   "I acknowledge receipt of this email for the charges described herein, and " +
   "fully understand and agree to the itinerary and ticket restrictions. I have " +
   "checked and verified all details, including passenger names, dates and timings.";
+
+/** A label-and-value block: the sailing, the card detail, the charges. */
+export interface AuthorizationPairsSection {
+  kind: "pairs";
+  title: string;
+  rows: ReadonlyArray<readonly [string, string]>;
+  /** Small print under the table. */
+  note?: string;
+  /** The wording the customer is agreeing to, set apart from the note. */
+  statement?: string;
+}
+
+/** A columned block: the travellers. */
+export interface AuthorizationTableSection {
+  kind: "table";
+  title: string;
+  columns: readonly string[];
+  rows: ReadonlyArray<readonly string[]>;
+  /** Printed in place of the rows when there are none. */
+  empty: string;
+}
+
+export type AuthorizationSection =
+  | AuthorizationPairsSection
+  | AuthorizationTableSection;
+
+/**
+ * The document the cardholder is asked to agree to, as data.
+ *
+ * Everything between the opening message and the signing button, minus the
+ * itinerary — which is markup in one rendering and flattened text in the
+ * others, so each renderer places it itself.
+ *
+ * Structured rather than pre-rendered because this document now has three
+ * renderings: the customer's authorization email, the confirmation that goes
+ * back to the office once they sign (`signature-confirmation.ts`), and the
+ * signed PDF filed against the booking (`lib/pdf/signature-confirmation.ts`).
+ * One definition is what stops a dispute turning on three documents that each
+ * state the booking slightly differently.
+ */
+export function authorizationSections(
+  data: BookingAuthorizationData,
+): AuthorizationSection[] {
+  const sailing = data.sailing ? sailingPairs(data.sailing) : [];
+
+  return [
+    {
+      kind: "table",
+      title: "Traveller's Detail",
+      columns: travellerColumns(data),
+      rows: travellerCells(data),
+      empty: "No travellers recorded.",
+    },
+    ...(sailing.length > 0
+      ? [{ kind: "pairs", title: "Sailing Details", rows: sailing } as const]
+      : []),
+    {
+      kind: "pairs",
+      title: "Credit Card Authorization Details",
+      rows: cardPairs(data),
+      note: "Please review the above details carefully and confirm that all information is accurate. If any corrections are required, kindly inform us at the earliest.",
+    },
+    {
+      kind: "pairs",
+      title: "Total Charges & Authorization",
+      rows: chargePairs(data),
+      ...(data.chargeSplits.length > 0
+        ? { note: "The sum charged will be the same as the total quoted above." }
+        : {}),
+      statement: ACKNOWLEDGEMENT,
+    },
+  ];
+}
+
+function pairsSectionHtml(section: AuthorizationPairsSection): string {
+  return `${sectionHeading(section.title)}
+
+  <tr><td style="padding:16px 20px;">
+    <table role="presentation" cellpadding="0" cellspacing="0" style="width:100%;border-collapse:collapse;">
+      ${section.rows.map(([label, value]) => labelledRow(label, value)).join("")}
+    </table>
+    ${section.note ? `<p style="margin:12px 0 0;font-size:13px;color:#555555;">${escapeHtml(section.note)}</p>` : ""}
+    ${section.statement ? `<p style="margin:16px 0 0;font-size:13px;line-height:1.6;color:#333333;">${escapeHtml(section.statement)}</p>` : ""}
+  </td></tr>`;
+}
+
+function tableSectionHtml(section: AuthorizationTableSection): string {
+  const header = section.columns
+    .map((column) => `<th align="left" style="${CELL}">${escapeHtml(column)}</th>`)
+    .join("");
+
+  const body =
+    section.rows
+      .map(
+        (row) =>
+          `<tr>${row.map((cell) => `<td style="${CELL}">${escapeHtml(cell)}</td>`).join("")}</tr>`,
+      )
+      .join("") ||
+    `<tr><td colspan="${section.columns.length}" style="${CELL}color:#777777;">${escapeHtml(section.empty)}</td></tr>`;
+
+  return `${sectionHeading(section.title)}
+
+  <tr><td style="padding:16px 20px;">
+    <table role="presentation" cellpadding="0" cellspacing="0" style="width:100%;border-collapse:collapse;">
+      <tr style="background:#f7f8fa;">${header}</tr>
+      ${body}
+    </table>
+  </td></tr>`;
+}
+
+/**
+ * The same document as `<tr>` rows, so the caller supplies the table they sit
+ * in. The itinerary is appended last, as markup rather than escaped text.
+ */
+export function authorizationDocumentHtml(
+  data: BookingAuthorizationData,
+): string {
+  const sections = authorizationSections(data)
+    .map((section) =>
+      section.kind === "table"
+        ? tableSectionHtml(section)
+        : pairsSectionHtml(section),
+    )
+    .join("\n\n  ");
+
+  return `
+  ${sections}
+
+  ${itinerarySection(data.itineraryHtml)}`;
+}
+
+/** The same document for the plain-text part. */
+export function authorizationDocumentText(
+  data: BookingAuthorizationData,
+): string[] {
+  const isCruise = data.product === "CRUISE";
+  const card = maskedCard(data.cardType, data.cardLast4);
+  const confirmation = data.airlineConfirmation?.trim() || data.bookingNumber;
+
+  return [
+    `Booking ID: ${data.bookingNumber}`,
+    `Confirmation: ${confirmation}`,
+    ...travellerText(data),
+    ...sailingText(data),
+    ...(data.sailing ? [""] : []),
+    `Booked on: ${formatTicketDate(data.bookedAt)}`,
+    ...(card ? [`Payment method: ${card}`] : []),
+    ...(data.cardHolderName ? [`Card holder: ${data.cardHolderName}`] : []),
+    ...(data.billingAddress ? [`Billing address: ${data.billingAddress}`] : []),
+    "",
+    `Total ${isCruise ? "cruise" : "flight"} booking amount: ${formatMoney(data.totalMinor, data.currency)}`,
+    ...chargeLines(data),
+    // Mirrors the HTML part, where the itinerary sits between the charges and
+    // the call to action: the cardholder reads what they are agreeing to
+    // before they are asked to agree to it, in either part of the message.
+    ...itineraryText(data.itineraryHtml),
+    "",
+    ACKNOWLEDGEMENT,
+  ];
+}
 
 /**
  * The message block at the top of the email, as plain text.
@@ -343,10 +531,7 @@ export function renderBookingAuthorization(
   { signUrl, expiresAt }: AuthorizationLink,
   override: AuthorizationOverride = {},
 ): RenderedEmail {
-  const total = formatMoney(data.totalMinor, data.currency);
-  const card = maskedCard(data.cardType, data.cardLast4);
   const confirmation = data.airlineConfirmation?.trim() || data.bookingNumber;
-  const charges = chargeLines(data);
   const isCruise = data.product === "CRUISE";
 
   const message = paragraphs(
@@ -355,23 +540,7 @@ export function renderBookingAuthorization(
 
   const text = [
     ...message.flatMap((part) => [part, ""]),
-    `Booking ID: ${data.bookingNumber}`,
-    `Confirmation: ${confirmation}`,
-    ...sailingText(data),
-    ...(data.sailing ? [""] : []),
-    `Booked on: ${formatTicketDate(data.bookedAt)}`,
-    ...(card ? [`Payment method: ${card}`] : []),
-    ...(data.cardHolderName ? [`Card holder: ${data.cardHolderName}`] : []),
-    ...(data.billingAddress ? [`Billing address: ${data.billingAddress}`] : []),
-    "",
-    `Total ${isCruise ? "cruise" : "flight"} booking amount: ${total}`,
-    ...charges,
-    // Mirrors the HTML part, where the itinerary sits between the charges and
-    // the call to action: the cardholder reads what they are agreeing to
-    // before they are asked to agree to it, in either part of the message.
-    ...itineraryText(data.itineraryHtml),
-    "",
-    ACKNOWLEDGEMENT,
+    ...authorizationDocumentText(data),
     "",
     "Confirm and sign your booking here:",
     signUrl,
@@ -411,56 +580,10 @@ export function renderBookingAuthorization(
     <div style="display:inline-block;margin-top:10px;padding:6px 18px;background:#f3f4f8;font-size:28px;font-weight:bold;color:#0000cc;">${escapeHtml(confirmation)}</div>
   </td></tr>
 
-  ${sectionHeading("Traveller's Detail")}
-
-  <tr><td style="padding:16px 20px;">
-    <table role="presentation" cellpadding="0" cellspacing="0" style="width:100%;border-collapse:collapse;">
-      <tr style="background:#f7f8fa;">
-        <th align="left" style="${CELL}">SL No.</th>
-        <th align="left" style="${CELL}">Passenger's Name</th>
-        <th align="left" style="${CELL}">Gender</th>
-        <th align="left" style="${CELL}">Date of Birth</th>
-        ${isCruise ? "" : `<th align="left" style="${CELL}">E-Ticket No.</th>`}
-      </tr>
-      ${travellerRows(data)}
-    </table>
-  </td></tr>
-
-  ${sailingSection(data)}
-
-  ${sectionHeading("Credit Card Authorization Details")}
-
-  <tr><td style="padding:16px 20px;">
-    <table role="presentation" cellpadding="0" cellspacing="0" style="width:100%;border-collapse:collapse;">
-      ${labelledRow("Booking ID", data.bookingNumber)}
-      ${labelledRow("Booked on", formatTicketDate(data.bookedAt))}
-      ${data.contactPhone ? labelledRow("Phone", data.contactPhone) : ""}
-      ${data.contactEmail ? labelledRow("Email", data.contactEmail) : ""}
-      ${card ? labelledRow("Payment method", card) : ""}
-      ${data.cardHolderName ? labelledRow("Card holder name", data.cardHolderName) : ""}
-      ${data.billingAddress ? labelledRow("Billing address", data.billingAddress) : ""}
-    </table>
-    <p style="margin:12px 0 0;font-size:13px;color:#555555;">Please review the above details carefully and confirm that all information is accurate. If any corrections are required, kindly inform us at the earliest.</p>
-  </td></tr>
-
-  ${sectionHeading("Total Charges & Authorization")}
-
-  <tr><td style="padding:16px 20px;">
-    <table role="presentation" cellpadding="0" cellspacing="0" style="width:100%;border-collapse:collapse;">
-      ${chargeRows(data)}
-    </table>
-    ${
-      data.chargeSplits.length > 0
-        ? `<p style="margin:12px 0 0;font-size:13px;color:#555555;">The sum charged will be the same as the total quoted above.</p>`
-        : ""
-    }
-    <p style="margin:16px 0 0;font-size:13px;line-height:1.6;color:#333333;">${escapeHtml(ACKNOWLEDGEMENT)}</p>
-  </td></tr>
-
-  <!-- Above the call to action deliberately: the itinerary is what the
-       cardholder is being asked to agree to, so it has to be readable before
-       the button, not after it. -->
-  ${itinerarySection(data.itineraryHtml)}
+  <!-- The itinerary sits inside this block, above the call to action
+       deliberately: it is what the cardholder is being asked to agree to, so it
+       has to be readable before the button, not after it. -->
+  ${authorizationDocumentHtml(data)}
 
   <tr><td style="padding:10px 20px 28px;text-align:center;">
     ${callToAction(signUrl)}

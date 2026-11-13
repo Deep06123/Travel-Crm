@@ -1,3 +1,8 @@
+import {
+  authorizationDocumentHtml,
+  authorizationDocumentText,
+  type BookingAuthorizationData,
+} from "./booking-authorization";
 import { escapeHtml } from "./html";
 
 import {
@@ -53,8 +58,37 @@ function htmlSection(title: string, rows: readonly EvidenceRow[]): string {
       ${cells}`;
 }
 
+/**
+ * The booking as the authorization email stated it, where it could be loaded.
+ *
+ * Optional because the covering note must still go out if the booking has since
+ * been deleted or the load fails — a confirmation that arrives without the
+ * tables is worth more than one that never arrives. `itineraryHtml` must be the
+ * prepared form (`prepareItineraryForEmail`), and its attachments carried on
+ * the same message, or the images in it resolve to nothing.
+ */
+/**
+ * The signed document, below the evidence, as its own table.
+ *
+ * A separate table rather than more rows in the one above it: those rows are a
+ * two-column label/value grid, and the authorization sections are full-width
+ * single-cell rows. Nesting one inside the other leaves Outlook to guess at the
+ * column widths, and it guesses badly.
+ */
+function documentTable(booking: BookingAuthorizationData | null | undefined): string {
+  if (!booking) return "";
+
+  return `
+    <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="max-width:620px;margin:16px auto 0;background:#ffffff;border:1px solid #dfe3e8;border-collapse:collapse;">
+      <tr><td style="background:#0b1f44;padding:12px 20px;color:#ffffff;font-size:17px;">What the customer signed</td></tr>
+      <tr><td style="padding:12px 20px 0;color:#5b6472;font-size:13px;">Reproduced from the authorization email, exactly as it was sent.</td></tr>
+      ${authorizationDocumentHtml(booking)}
+    </table>`;
+}
+
 export function renderSignatureConfirmation(
   evidence: SignatureEvidence,
+  booking?: BookingAuthorizationData | null,
 ): RenderedSignatureConfirmation {
   // The booking number leads: these arrive in a stream alongside the other
   // internal notices and the number is what an operator scans for.
@@ -73,6 +107,12 @@ export function renderSignatureConfirmation(
       .split("\n")
       .map((line) => `  "${line.trim()}"`),
     ...textSection("Customer security information", securityRows(evidence)),
+    // The document itself, reproduced exactly as the authorization email
+    // stated it. The signature above is only meaningful against what was
+    // signed, so the covering note carries both or neither.
+    ...(booking
+      ? ["", "WHAT THE CUSTOMER SIGNED", "", ...authorizationDocumentText(booking)]
+      : []),
     "",
     "The device, operating system, browser, screen size and browser time zone were reported by the customer's browser and are corroboration rather than proof. The IP address and the confirmation time were observed by the server.",
     "",
@@ -106,6 +146,7 @@ export function renderSignatureConfirmation(
         </td>
       </tr>
     </table>
+    ${documentTable(booking)}
   </body>
 </html>`;
 
