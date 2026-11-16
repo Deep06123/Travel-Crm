@@ -889,7 +889,6 @@ export default async function BookingDetailPage({
               }))}
               currency={booking.currency}
               totalMinor={booking.totalMinor}
-              formatTotal={formatMoney(booking.totalMinor, booking.currency)}
             >
               <dl className="grid gap-x-6 sm:grid-cols-2 lg:grid-cols-3">
                 <DetailRow

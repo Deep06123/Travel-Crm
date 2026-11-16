@@ -3,7 +3,10 @@
 import { revalidatePath } from "next/cache";
 
 import { currentUserCan, requirePermission } from "@/lib/auth/dal";
-import { isDatabaseUnavailable, DATABASE_UNAVAILABLE_MESSAGE } from "@/lib/db/errors";
+import {
+  isDatabaseUnavailable,
+  DATABASE_UNAVAILABLE_MESSAGE,
+} from "@/lib/db/errors";
 import { loggerFor } from "@/lib/logging/logger";
 import { PERMISSIONS } from "@/lib/permissions";
 import {
@@ -30,6 +33,7 @@ import {
   travellersEditSchema,
   type TravellerEditInput,
 } from "./edit-schemas";
+import { moneyFieldToMinor } from "./schemas";
 
 const log = loggerFor("booking-edit");
 
@@ -61,7 +65,11 @@ function collectFieldErrors(
  * went away, the database did, or something unforeseen — and an operator
  * reading the message should not be able to tell which panel produced it.
  */
-function failure(error: unknown, bookingId: string, what: string): BookingEditState {
+function failure(
+  error: unknown,
+  bookingId: string,
+  what: string,
+): BookingEditState {
   if (error instanceof BookingNotFoundError) {
     return { error: "That booking no longer exists." };
   }
@@ -196,7 +204,9 @@ export async function updateBookingTravellersAction(
   const fieldErrors: Record<string, string> = {};
   const travellers: TravellerEditInput[] = [];
 
-  for (const [index, data] of [...grouped.entries()].sort(([a], [b]) => a - b)) {
+  for (const [index, data] of [...grouped.entries()].sort(
+    ([a], [b]) => a - b,
+  )) {
     // A row the operator added and left empty is not a traveller. The id
     // alone does not count as content, or an existing row could never be
     // emptied out of the list.
@@ -219,7 +229,8 @@ export async function updateBookingTravellersAction(
   }
 
   if (travellers.length === 0 && Object.keys(fieldErrors).length === 0) {
-    fieldErrors["travellers.0.firstName"] = "A booking needs at least one traveller.";
+    fieldErrors["travellers.0.firstName"] =
+      "A booking needs at least one traveller.";
   }
 
   if (Object.keys(fieldErrors).length > 0) return { fieldErrors };
@@ -242,14 +253,17 @@ export async function updateBookingTravellersAction(
  *
  * The division is checked by `parseChargeSplits` — the same function the
  * create form uses, so "a valid split" means one thing in this application
- * rather than two. The difference is where the total comes from: on the
- * create form it is a sibling field being typed, here it is already stored
- * and is read off the booking, so the splits are divided into a figure the
- * operator cannot move from this panel.
+ * rather than two.
  *
- * `booking.update`, as every other editor here takes. This writes no money —
- * the amounts that make up the total stay with `updateBookingFinancials` —
- * only how an unchanged total is described.
+ * The total travels with it. It used to be read off the booking and treated as
+ * fixed, which left an operator looking at a booking whose stored total was
+ * wrong — zero, most often — matching splits against a figure they had no way
+ * to correct from here. The field is only on screen while the splits are, so
+ * when it is absent the stored figure stands.
+ *
+ * `booking.update`, as every other editor here takes, and as
+ * `updateBookingFinancialsAction` takes to write the same field. The rest of
+ * the money — base fare, taxes, supplier cost — stays with that editor.
  */
 export async function updateChargeSplitsAction(
   _previous: BookingEditState,
@@ -271,16 +285,30 @@ export async function updateChargeSplitsAction(
 
   const fieldErrors: Record<string, string> = {};
 
+  // Absent when the splits are switched off, which is the one case the panel
+  // does not put the field on screen. The stored figure then stands rather
+  // than being read as a cleared total.
+  const submittedTotal = formData.get("total");
+  const totalGiven = typeof submittedTotal === "string";
+
+  let totalMinor = basis.totalMinor;
+
+  if (totalGiven) {
+    const result = moneyFieldToMinor(submittedTotal, basis.currency, "total");
+    if (result.ok) {
+      totalMinor = result.minor;
+    } else {
+      fieldErrors[result.field] = result.message;
+    }
+  }
+
   const splits = parseChargeSplits(
     formData,
     {
       currency: basis.currency,
       splitCharges: parsed.data.splitCharges,
-      totalMinor: basis.totalMinor,
-      // The total is stored rather than submitted, so the only way it is
-      // missing is that the booking genuinely carries none — which is a
-      // booking there is nothing to divide.
-      hasTotal: basis.totalMinor > 0,
+      totalMinor,
+      hasTotal: totalMinor > 0,
     },
     fieldErrors,
   );
@@ -294,6 +322,9 @@ export async function updateChargeSplitsAction(
           bookingId: parsed.data.bookingId,
           splitCharges: parsed.data.splitCharges,
           splits,
+          // Only when it was on screen: passing the figure read back off the
+          // booking would make every save a write of the total to itself.
+          ...(totalGiven ? { totalMinor } : {}),
         },
         user.id,
       ),

@@ -71,7 +71,7 @@ export function ChargeSplits({
       restored.push({ key: index, title, amount });
     }
 
-    return restored.length > 0 ? restored : [emptyRow(0), emptyRow(1)];
+    return restored.length > 0 ? restored : [emptyRow(0)];
   });
 
   const [nextKey, setNextKey] = useState(() => rows.length);
@@ -129,9 +129,12 @@ export function ChargeSplits({
     setNextKey((key) => key + 1);
   };
 
+  // One is the floor. "Split charges: Yes" with a single named charge is a
+  // legitimate record — the whole total paid to one supplier, named — and the
+  // way to say there is no division at all is to set split charges to No.
   const removeRow = (key: number) =>
     setRows((current) =>
-      current.length <= 2 ? current : current.filter((row) => row.key !== key),
+      current.length <= 1 ? current : current.filter((row) => row.key !== key),
     );
 
   // Summed in minor units: adding decimal strings as floats is how a cent of
@@ -159,7 +162,11 @@ export function ChargeSplits({
   return (
     <div ref={root} className="sm:col-span-2 lg:col-span-3">
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-        <Field id="splitCharges" label="Split charges" error={error("splitCharges")}>
+        <Field
+          id="splitCharges"
+          label="Split charges"
+          error={error("splitCharges")}
+        >
           {(props) => (
             <StickySelect
               {...props}
@@ -196,7 +203,7 @@ export function ChargeSplits({
                   <span className="text-xs font-semibold tracking-wider text-ink-muted uppercase">
                     Split {index + 1}
                   </span>
-                  {rows.length > 2 ? (
+                  {rows.length > 1 ? (
                     <button
                       type="button"
                       onClick={() => removeRow(row.key)}
@@ -253,7 +260,12 @@ export function ChargeSplits({
           </div>
 
           <div className="mt-3 flex flex-wrap items-center gap-3">
-            <Button type="button" variant="secondary" size="sm" onClick={addRow}>
+            <Button
+              type="button"
+              variant="secondary"
+              size="sm"
+              onClick={addRow}
+            >
               <Plus />
               Add split
             </Button>

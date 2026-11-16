@@ -15,7 +15,11 @@ import {
   PassengerType,
 } from "@/generated/prisma/enums";
 
-import { formatMoney, parseAmountToMinor } from "@/lib/financial/money";
+import {
+  formatMoney,
+  minorToDecimalString,
+  parseAmountToMinor,
+} from "@/lib/financial/money";
 
 import {
   updateBookingBillingAction,
@@ -1310,11 +1314,16 @@ function emptySplit(): SplitValues {
  * correction is made, because the figures are the reference for getting it
  * right.
  *
- * Only the division. The amounts that make up the total are money and belong
- * to the financials editor; this describes an unchanged total rather than
- * restating one. The running sum below the rows is checked against the stored
- * total so a division that does not add up is caught while it is being typed,
- * not from a refusal after saving.
+ * The total fare sits under the rows because the division is checked against
+ * it, and a booking whose stored total is wrong — zero, most often — left the
+ * operator with a figure they had to match and nowhere here to correct it. The
+ * remaining amounts that make up the total, base fare and taxes and supplier
+ * cost, are still the financials editor's; this panel writes the one figure
+ * the splits are divided into.
+ *
+ * The running sum below the rows is checked against that figure as it is
+ * typed, so a division that does not add up is caught while it is being
+ * entered, not from a refusal after saving.
  */
 export function AccountingPanel({
   bookingId,
@@ -1323,7 +1332,6 @@ export function AccountingPanel({
   splits,
   currency,
   totalMinor,
-  formatTotal,
   children,
 }: {
   bookingId: string;
@@ -1331,35 +1339,36 @@ export function AccountingPanel({
   splitCharges: boolean;
   splits: SplitValues[];
   currency: string;
-  /** The stored total the splits must add up to. */
+  /** The stored total, which this panel can correct. */
   totalMinor: number;
-  /** The same figure, pre-formatted on the server for the hint text. */
-  formatTotal: string;
   children: ReactNode;
 }) {
   const [enabled, setEnabled] = useState(splitCharges);
   const [rows, setRows] = useState<{ key: number; values: SplitValues }[]>(
     () =>
-      splits.length >= 2
+      splits.length >= 1
         ? splits.map((values, index) => ({ key: index, values }))
-        : [
-            { key: 0, values: splits[0] ?? emptySplit() },
-            { key: 1, values: emptySplit() },
-          ],
+        : [{ key: 0, values: emptySplit() }],
   );
-  const [nextKey, setNextKey] = useState(() => Math.max(rows.length, 2));
+  const [nextKey, setNextKey] = useState(() => Math.max(rows.length, 1));
+
+  // The stored figure as something typeable. Held here rather than read off
+  // the DOM — unlike the create form, this panel owns the field.
+  const [totalFare, setTotalFare] = useState(() =>
+    minorToDecimalString(totalMinor, currency),
+  );
 
   const addRow = () => {
     setRows((current) => [...current, { key: nextKey, values: emptySplit() }]);
     setNextKey((key) => key + 1);
   };
 
-  // Two is the floor, as on the create form: one charge is not a division of
-  // anything, and the answer for a booking with a single charge is to set
-  // split charges to No.
+  // One is the floor, as on the create form: a single named charge is a
+  // legitimate record, and the answer for a booking with no division at all is
+  // to set split charges to No.
   const removeRow = (key: number) =>
     setRows((current) =>
-      current.length <= 2 ? current : current.filter((row) => row.key !== key),
+      current.length <= 1 ? current : current.filter((row) => row.key !== key),
     );
 
   const update = (key: number, patch: Partial<SplitValues>) =>
@@ -1390,7 +1399,12 @@ export function AccountingPanel({
     summedMinor += minor;
   }
 
-  const matches = everyAmountParsed && summedMinor === totalMinor;
+  // Against the typed figure, not the stored one: the operator may be
+  // correcting both in the same save, and a tick against the old total would
+  // be reassuring about the wrong thing.
+  const fareMinor = parseAmountToMinor(totalFare, currency);
+  const matches =
+    everyAmountParsed && fareMinor !== null && summedMinor === fareMinor;
 
   return (
     <EditablePanel
@@ -1451,7 +1465,7 @@ export function AccountingPanel({
                         <span className="text-xs font-semibold tracking-wider text-ink-muted uppercase">
                           Split {index + 1}
                         </span>
-                        {rows.length > 2 ? (
+                        {rows.length > 1 ? (
                           <button
                             type="button"
                             onClick={() => removeRow(row.key)}
@@ -1532,9 +1546,37 @@ export function AccountingPanel({
                   }
                 >
                   Splits total {formatMoney(summedMinor, currency)} of{" "}
-                  {formatTotal}
+                  {fareMinor === null
+                    ? "the total fare"
+                    : formatMoney(fareMinor, currency)}
                   {matches ? " ✓" : null}
                 </p>
+              </div>
+
+              {/* Under the rows, because it is the figure they have to add up
+                  to. The same field the create form puts here, and the only
+                  money this panel writes. */}
+              <div className="mt-4 border-t border-line pt-4 sm:max-w-sm">
+                <Field
+                  // Prefixed like the rest of the editors on this page: the
+                  // financials form renders its own total on the same
+                  // document, and two elements cannot share an id.
+                  id="edit-split-total"
+                  label="Total fare"
+                  hint="The figure the splits must add up to."
+                  error={error("total")}
+                >
+                  {(props) => (
+                    <Input
+                      {...props}
+                      name="total"
+                      inputMode="decimal"
+                      placeholder="1800.00"
+                      value={totalFare}
+                      onChange={(event) => setTotalFare(event.target.value)}
+                    />
+                  )}
+                </Field>
               </div>
             </fieldset>
           ) : (

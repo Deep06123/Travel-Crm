@@ -347,11 +347,14 @@ export interface ChargeSplitEdit {
 /**
  * Corrects how a booking's total is divided.
  *
- * Only `splitCharges` and the split rows. The amounts that make up the total —
- * base fare, taxes, supplier cost — are money, and money is
- * `updateBookingFinancials`'s to write. A division is a description of a total
- * rather than a total, so correcting one must not be a way to quietly restate
- * the other.
+ * `splitCharges`, the split rows, and the total they are divided into. The
+ * remaining amounts — base fare, taxes, supplier cost — stay with
+ * `updateBookingFinancials`: a division is not a way to restate what a booking
+ * cost, only what the one figure it adds up to is.
+ *
+ * The total is optional, and omitting it leaves the stored figure alone. It is
+ * audited like any other amount, because raising or lowering what a customer
+ * is being charged is exactly the kind of change that has to be attributable.
  *
  * The rows are replaced wholesale rather than diffed one by one: they have no
  * identity worth preserving — "the 900.00 deposit" is the whole of what one is
@@ -367,10 +370,12 @@ export async function updateChargeSplits(
     bookingId: string;
     splitCharges: boolean;
     splits: ChargeSplitEdit[];
+    /** Omit to leave the stored total untouched. */
+    totalMinor?: number;
   },
   actorId: string,
 ): Promise<BookingEditResult> {
-  const { bookingId, splitCharges, splits } = input;
+  const { bookingId, splitCharges, splits, totalMinor } = input;
 
   return prisma.$transaction(async (tx) => {
     const booking = await tx.booking.findUnique({
@@ -379,6 +384,7 @@ export async function updateChargeSplits(
         id: true,
         bookingNumber: true,
         currency: true,
+        totalMinor: true,
         splitCharges: true,
         chargeSplits: {
           select: { title: true, amountMinor: true },
@@ -401,6 +407,16 @@ export async function updateChargeSplits(
             .join("; ");
 
     const changes: Changes = {};
+
+    const totalChanged =
+      totalMinor !== undefined && totalMinor !== booking.totalMinor;
+
+    if (totalChanged) {
+      changes["total"] = {
+        before: `${booking.totalMinor} ${booking.currency}`,
+        after: `${totalMinor} ${booking.currency}`,
+      };
+    }
 
     if (booking.splitCharges !== splitCharges) {
       changes["splitCharges"] = {
@@ -429,6 +445,7 @@ export async function updateChargeSplits(
       where: { id: booking.id },
       data: {
         splitCharges,
+        ...(totalChanged ? { totalMinor } : {}),
         ...(before !== after
           ? {
               chargeSplits: {
@@ -450,7 +467,13 @@ export async function updateChargeSplits(
         entityType: "Booking",
         entityId: booking.id,
         adminUserId: actorId,
-        summary: `Updated the charge splits on booking ${booking.bookingNumber}`,
+        // Named for what actually moved: a total corrected on its own must not
+        // be filed as a change to the splits.
+        summary: totalChanged
+          ? Object.keys(changes).length === 1
+            ? `Updated the total fare on booking ${booking.bookingNumber}`
+            : `Updated the total fare and charge splits on booking ${booking.bookingNumber}`
+          : `Updated the charge splits on booking ${booking.bookingNumber}`,
         changes,
       },
       tx,

@@ -167,6 +167,7 @@ test("split charges can be corrected after the booking was created", async ({
 
   await splits.getByLabel("Supplier").first().fill("Deposit");
   await splits.getByLabel("Amount").first().fill("500.00");
+  await splits.getByRole("button", { name: "Add split" }).click();
   await splits.getByLabel("Supplier").nth(1).fill("Balance");
   await splits.getByLabel("Amount").nth(1).fill("529.97");
 
@@ -204,8 +205,10 @@ test("a division that does not add up to the total is refused", async ({
 
   await splits.getByLabel("Supplier").first().fill("Deposit");
   await splits.getByLabel("Amount").first().fill("500.00");
+  await splits.getByRole("button", { name: "Add split" }).click();
   await splits.getByLabel("Supplier").nth(1).fill("Balance");
-  // A hundred short of the booking's total.
+  // A hundred short of the booking's total, which the panel prefills from the
+  // booking and this test leaves alone.
   await splits.getByLabel("Amount").nth(1).fill("429.97");
 
   await accounting.getByRole("button", { name: "Save splits" }).click();
@@ -216,6 +219,51 @@ test("a division that does not add up to the total is refused", async ({
   await expect(
     accounting.locator("dt", { hasText: "Split charges" }).locator("+ dd"),
   ).toHaveText("No");
+});
+
+/**
+ * Correcting the total from the same panel.
+ *
+ * The figure the splits are divided into used to be read off the booking and
+ * shown as fixed, so an operator looking at a booking whose stored total was
+ * wrong — zero, most often — had a number to match and nowhere here to change
+ * it. The field is now in the panel, and a save carries both.
+ */
+test("the total fare can be corrected alongside the division", async ({
+  page,
+}) => {
+  const booking = await openBooking(page);
+  const accounting = await openAccounting(page);
+
+  await accounting.locator('select[name="splitCharges"]').selectOption("true");
+
+  const splits = accounting.getByRole("group", {
+    name: "How the total is split",
+  });
+
+  // Prefilled from the booking rather than left empty.
+  await expect(splits.getByLabel("Total fare")).toHaveValue("1029.97");
+
+  // A total neither the booking nor the old panel would have accepted, with a
+  // division that adds up to it rather than to the stored figure.
+  await splits.getByLabel("Total fare").fill("1200.00");
+  await splits.getByLabel("Supplier").first().fill("Deposit");
+  await splits.getByLabel("Amount").first().fill("700.00");
+  await splits.getByRole("button", { name: "Add split" }).click();
+  await splits.getByLabel("Supplier").nth(1).fill("Balance");
+  await splits.getByLabel("Amount").nth(1).fill("500.00");
+
+  // Checked against what was typed, not against what is stored.
+  await expect(accounting).toContainText("Splits total $1,200.00 of $1,200.00");
+
+  await accounting.getByRole("button", { name: "Save splits" }).click();
+  await expect(accounting.getByText("updated.")).toBeVisible();
+
+  // The change is attributable, and named for the money it moved.
+  const entries = await auditFor(booking.id);
+  const entry = entries.find((text) => text.includes("total fare"));
+  expect(entry).toBeDefined();
+  expect(entry).toContain("120000 USD");
 });
 
 /**
@@ -297,7 +345,10 @@ test("the airline confirmation can be recorded, unblocking the ticket", async ({
     "Record the airline or supplier confirmation reference",
   );
 
-  await ticketing.locator('input[name^="ticketNumber"]').first().fill("176-9001");
+  await ticketing
+    .locator('input[name^="ticketNumber"]')
+    .first()
+    .fill("176-9001");
   await ticketing.getByRole("button", { name: "Issue ticket" }).click();
 
   // The control hides itself once issued, taking its banner with it, so
@@ -316,7 +367,9 @@ test("a read-only role is offered neither form", async ({ page }) => {
   await signIn(page, viewer);
   await page.goto(`/admin/bookings/${booking.id}`);
 
-  await expect(page.getByRole("button", { name: "Save amounts" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Save amounts" })).toHaveCount(
+    0,
+  );
   await expect(
     page.getByRole("button", { name: "Save references" }),
   ).toHaveCount(0);

@@ -135,9 +135,12 @@ export function parseChargeSplits(
     return splits;
   }
 
-  if (splits.length < 2) {
+  // One is enough: a single named charge for the whole total is a record of
+  // who it was paid to, which is the point of the rows. Saying there is no
+  // division to record is what "Split charges: No" is for.
+  if (splits.length < 1) {
     fieldErrors["splits"] =
-      "A split total needs at least two charges. Set split charges to No if there is only one.";
+      "Enter at least one charge, or set split charges to No.";
     return splits;
   }
 

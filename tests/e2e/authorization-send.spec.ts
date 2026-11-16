@@ -202,12 +202,12 @@ test("View email shows the message that was actually sent", async ({
   await panel.getByRole("button", { name: "Edit email" }).first().click();
   await expect(panel.getByLabel("Message")).toHaveValue(EDITED_BODY);
 
-  await panel.getByRole("button", { name: "Use the generated message" }).click();
+  await panel
+    .getByRole("button", { name: "Use the generated message" })
+    .click();
   // `toHaveValue`, not `toContainText`: restoring sets the field's value, and
   // a textarea's text content is still whatever it was rendered with.
-  await expect(panel.getByLabel("Message")).toHaveValue(
-    new RegExp(GENERATED),
-  );
+  await expect(panel.getByLabel("Message")).toHaveValue(new RegExp(GENERATED));
 });
 
 /**
@@ -245,9 +245,7 @@ test("the e-ticket remembers an edit and shows it on its own page", async ({
       .getByRole("button", { name: "Sign & Confirm Booking" })
       .click();
     await expect(
-      customerPage.getByText(
-        "Your booking has been successfully signed and confirmed.",
-      ),
+      customerPage.getByText("not a confirmation for the booking"),
     ).toBeVisible();
   } finally {
     await customerContext.close();
@@ -265,7 +263,9 @@ test("the e-ticket remembers an edit and shows it on its own page", async ({
 
   // The second Edit in this panel belongs to the e-ticket block.
   await panel.getByRole("button", { name: "Edit email" }).nth(1).click();
-  await expect(panel.getByText("E-ticket email", { exact: true })).toBeVisible();
+  await expect(
+    panel.getByText("E-ticket email", { exact: true }),
+  ).toBeVisible();
 
   // The authorization editor is closed, so these are the e-ticket's own.
   await panel.getByLabel("Subject").fill(EDITED_SUBJECT);
@@ -307,7 +307,9 @@ test("the e-ticket remembers an edit and shows it on its own page", async ({
   await panel.getByRole("button", { name: "Edit email" }).nth(1).click();
   await expect(panel.getByLabel("Message")).toHaveValue(EDITED_BODY);
 
-  await panel.getByRole("button", { name: "Use the generated message" }).click();
+  await panel
+    .getByRole("button", { name: "Use the generated message" })
+    .click();
   await expect(panel.getByLabel("Message")).toHaveValue(
     /Greetings for the day/,
   );

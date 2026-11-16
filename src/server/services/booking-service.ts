@@ -385,7 +385,12 @@ export interface BookingListRow {
   bookedAt: Date;
   followUpAt: Date | null;
   airlineConfirmation: string | null;
-  customer: { id: string; firstName: string; lastName: string; email: string | null };
+  customer: {
+    id: string;
+    firstName: string;
+    lastName: string;
+    email: string | null;
+  };
   bookingType: { label: string } | null;
   assignedAgent: { id: string; name: string } | null;
   /** Who raised the booking. Reassignment changes the agent, not the author. */
@@ -843,7 +848,12 @@ export async function createCruiseBooking(
 
   return prisma.$transaction(async (tx) => {
     const bookingNumber = await nextBookingNumber(tx);
-    const customerId = await resolveCruiseCustomerId(tx, booking, guests, actorId);
+    const customerId = await resolveCruiseCustomerId(
+      tx,
+      booking,
+      guests,
+      actorId,
+    );
 
     const created = await tx.booking.create({
       data: {
@@ -1202,8 +1212,9 @@ export async function getBookingCurrency(
  * one go also means the check cannot be made against a total and a currency
  * that came from different reads of the row.
  *
- * Unlike the create form, the total is not the operator's to retype here: it
- * is already stored, and the splits are divided into it.
+ * The stored total is the starting point rather than the last word: the panel
+ * puts it on screen under the rows, and a save that carries a corrected figure
+ * is divided into that one instead.
  */
 export async function getBookingSplitBasis(
   bookingId: string,
@@ -1308,7 +1319,9 @@ export async function updateBookingFinancials(input: {
       rows.length === 0
         ? "none"
         : rows
-            .map((row) => `${row.title}: ${row.amountMinor} ${booking.currency}`)
+            .map(
+              (row) => `${row.title}: ${row.amountMinor} ${booking.currency}`,
+            )
             .join("; ");
 
     const splitsBefore = describe(booking.chargeSplits);
@@ -1417,7 +1430,10 @@ export async function updateTicketingDetails(input: {
 
     if (!booking) throw new BookingNotFoundError(bookingId);
 
-    const changes: Record<string, { before: string | null; after: string | null }> = {};
+    const changes: Record<
+      string,
+      { before: string | null; after: string | null }
+    > = {};
     if (booking.airlineConfirmation !== airlineConfirmation) {
       changes["airlineConfirmation"] = {
         before: booking.airlineConfirmation,

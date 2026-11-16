@@ -57,12 +57,13 @@ test("the split rows appear only once the total is marked as split", async ({
 
   await page.locator('select[name="splitCharges"]').selectOption("true");
 
-  // Two rows to begin with, because one charge is not a split.
+  // One row to begin with: a single named charge for the whole total is a
+  // record worth keeping, and further parts are added as they are needed.
   await expect(page.locator('input[name="splits.0.amount"]')).toBeVisible();
-  await expect(page.locator('input[name="splits.1.amount"]')).toBeVisible();
+  await expect(page.locator('input[name="splits.1.amount"]')).toHaveCount(0);
 
   await page.getByRole("button", { name: "Add split" }).click();
-  await expect(page.locator('input[name="splits.2.amount"]')).toBeVisible();
+  await expect(page.locator('input[name="splits.1.amount"]')).toBeVisible();
 });
 
 test("splits that do not add up to the total fare are refused", async ({
@@ -80,11 +81,14 @@ test("splits that do not add up to the total fare are refused", async ({
   // 900 + 800 is 1,700, not the 1,800 being charged.
   await page.locator('input[name="splits.0.title"]').fill("Deposit");
   await page.locator('input[name="splits.0.amount"]').fill("900.00");
+  await page.getByRole("button", { name: "Add split" }).click();
   await page.locator('input[name="splits.1.title"]').fill("Balance");
   await page.locator('input[name="splits.1.amount"]').fill("800.00");
 
   // The running total says so before anything is submitted.
-  await expect(page.getByText("Splits total $1,700.00 of $1,800.00")).toBeVisible();
+  await expect(
+    page.getByText("Splits total $1,700.00 of $1,800.00"),
+  ).toBeVisible();
 
   await page.getByRole("button", { name: "Create booking" }).click();
 
@@ -109,10 +113,13 @@ test("a split booking stores the division and shows it back", async ({
 
   await page.locator('input[name="splits.0.title"]').fill("Deposit");
   await page.locator('input[name="splits.0.amount"]').fill("900.00");
+  await page.getByRole("button", { name: "Add split" }).click();
   await page.locator('input[name="splits.1.title"]').fill("Balance");
   await page.locator('input[name="splits.1.amount"]').fill("900.00");
 
-  await expect(page.getByText("Splits total $1,800.00 of $1,800.00 ✓")).toBeVisible();
+  await expect(
+    page.getByText("Splits total $1,800.00 of $1,800.00 ✓"),
+  ).toBeVisible();
 
   await page.getByRole("button", { name: "Create booking" }).click();
   await page.waitForURL(/\/admin\/bookings\/[a-z0-9]+$/);

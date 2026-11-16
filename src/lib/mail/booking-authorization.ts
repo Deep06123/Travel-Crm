@@ -144,12 +144,26 @@ function travellerText(data: BookingAuthorizationData): string[] {
  * The reference email spells this out because a customer who agreed to one
  * figure and then sees two charges on their statement raises a dispute. Where
  * there are no splits the single charge is stated just as plainly.
+ *
+ * A single named split is its own case: the total is taken in one transaction,
+ * but the customer is told who it is paid to, so the line cannot promise more
+ * than one charge and cannot leave the name out either.
  */
 function chargeLines(data: BookingAuthorizationData): string[] {
   const total = formatMoney(data.totalMinor, data.currency);
 
   if (data.chargeSplits.length === 0) {
     return [`The total of ${total} will be charged as a single transaction.`];
+  }
+
+  if (data.chargeSplits.length === 1) {
+    return [
+      `The total of ${total} will be charged as a single transaction, as:`,
+      ...data.chargeSplits.map(
+        (split) =>
+          `${split.title}: ${formatMoney(split.amountMinor, data.currency)}`,
+      ),
+    ];
   }
 
   return [
@@ -234,14 +248,14 @@ function chargePairs(data: BookingEmailData): Array<[string, string]> {
       "How it will be charged",
       splits.length === 0
         ? "As a single transaction"
-        : `In ${splits.length} transactions, as below`,
+        : splits.length === 1
+          ? "As a single transaction, as below"
+          : `In ${splits.length} transactions, as below`,
     ],
-    ...splits.map(
-      (split, index): [string, string] => [
-        split.title?.trim() || `Charge ${index + 1}`,
-        formatMoney(split.amountMinor, data.currency),
-      ],
-    ),
+    ...splits.map((split, index): [string, string] => [
+      split.title?.trim() || `Charge ${index + 1}`,
+      formatMoney(split.amountMinor, data.currency),
+    ]),
   ];
 }
 
@@ -292,8 +306,7 @@ export interface AuthorizationTableSection {
 }
 
 export type AuthorizationSection =
-  | AuthorizationPairsSection
-  | AuthorizationTableSection;
+  AuthorizationPairsSection | AuthorizationTableSection;
 
 /**
  * The document the cardholder is asked to agree to, as data.
@@ -336,7 +349,9 @@ export function authorizationSections(
       title: "Total Charges & Authorization",
       rows: chargePairs(data),
       ...((data.chargeSplits?.length ?? 0) > 0
-        ? { note: "The sum charged will be the same as the total quoted above." }
+        ? {
+            note: "The sum charged will be the same as the total quoted above.",
+          }
         : {}),
       statement: ACKNOWLEDGEMENT,
     },
@@ -362,7 +377,9 @@ function pairsSectionHtml(section: AuthorizationPairsSection): string {
  * authorization email states, without taking the traveller table — it has its
  * own, which redacts dates of birth for staff who may not see them.
  */
-export function authorizationSectionHtml(section: AuthorizationSection): string {
+export function authorizationSectionHtml(
+  section: AuthorizationSection,
+): string {
   return section.kind === "table"
     ? tableSectionHtml(section)
     : pairsSectionHtml(section);
@@ -370,7 +387,9 @@ export function authorizationSectionHtml(section: AuthorizationSection): string 
 
 function tableSectionHtml(section: AuthorizationTableSection): string {
   const header = section.columns
-    .map((column) => `<th align="left" style="${CELL}">${escapeHtml(column)}</th>`)
+    .map(
+      (column) => `<th align="left" style="${CELL}">${escapeHtml(column)}</th>`,
+    )
     .join("");
 
   const body =
@@ -396,9 +415,7 @@ function tableSectionHtml(section: AuthorizationTableSection): string {
  * The same document as `<tr>` rows, so the caller supplies the table they sit
  * in. The itinerary is appended last, as markup rather than escaped text.
  */
-export function authorizationDocumentHtml(
-  data: BookingEmailData,
-): string {
+export function authorizationDocumentHtml(data: BookingEmailData): string {
   const sections = authorizationSections(data)
     .map(authorizationSectionHtml)
     .join("\n\n  ");
