@@ -12,6 +12,27 @@
 /** Route that serves a stored itinerary image. */
 export const INLINE_IMAGE_ROUTE = "/api/admin/bookings/images";
 
+/**
+ * Route that re-hosts an image the operator pasted a link to.
+ *
+ * A static segment under the serving route, which Next resolves ahead of the
+ * catch-all beside it. It cannot collide with a stored image either way:
+ * `isInlineImageSrc` only matches a dated key ending in an image extension, so
+ * `.../images/import` is not a shape the serving route would ever accept.
+ */
+export const INLINE_IMAGE_IMPORT_ROUTE = `${INLINE_IMAGE_ROUTE}/import`;
+
+/** Images re-hosted in one paste. Beyond this the rest are left out. */
+export const MAX_IMPORTED_IMAGES = 20;
+
+/**
+ * Total bytes re-hosted for one paste.
+ *
+ * A page of screenshots is a normal itinerary; a page built to make this
+ * server download 100MB is not, and only this limit tells them apart.
+ */
+export const MAX_IMPORT_TOTAL_BYTES = 20 * 1024 * 1024;
+
 /** Storage folder, kept away from `documents/`. */
 export const INLINE_IMAGE_PREFIX = "itinerary-images";
 

@@ -26,10 +26,13 @@ import { isInlineImageSrc } from "./inline-image";
  *     exfiltration.
  *   * every `on*` attribute, which is where most injected script actually
  *     lives; `sanitize-html` drops any attribute not named below.
- *   * `img`, despite the reference toolbar offering it. A remote image is a
- *     silent callback to whoever supplied the URL, telling them when the
- *     booking was opened and from where. Re-enable it alongside an upload
- *     path that stores the bytes locally.
+ *   * any `img` whose `src` this application did not issue. A remote image is
+ *     a silent callback to whoever supplied the URL, telling them when the
+ *     booking was opened and from where. Images are kept only once their bytes
+ *     are stored here — pasted screenshots go through the upload route, and a
+ *     page copied from a carrier's site has its images re-hosted as it is
+ *     pasted (`src/lib/html/remote-image.ts`). Anything that reaches this
+ *     point still pointing elsewhere was not one of those, and goes.
  */
 const OPTIONS: sanitizeHtml.IOptions = {
   allowedTags: [

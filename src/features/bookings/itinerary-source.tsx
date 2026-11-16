@@ -107,7 +107,7 @@ export function ItinerarySource({
       <Field
         id={htmlName}
         label="Itinerary"
-        hint="Compose the itinerary by hand when there is no record to paste. Screenshots can be pasted, dropped or added with the image button. Formatting is kept; scripts, embedded frames and images from other sites are removed when saved."
+        hint="Compose the itinerary by hand when there is no record to paste. Screenshots can be pasted, dropped or added with the image button, and a page copied from the carrier's site keeps its images — they are copied here as it is pasted. Formatting is kept; scripts and embedded frames are removed when saved."
       >
         {() => (
           <RichTextEditor

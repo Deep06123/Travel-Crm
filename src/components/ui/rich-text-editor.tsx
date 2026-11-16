@@ -32,9 +32,16 @@ import { useRef, useState, type ReactNode } from "react";
 
 import {
   ALLOWED_IMAGE_TYPES,
+  INLINE_IMAGE_IMPORT_ROUTE,
   INLINE_IMAGE_ROUTE,
   MAX_IMAGE_BYTES,
 } from "@/lib/html/inline-image";
+import {
+  applyResolvedSources,
+  collectImageSources,
+  dataUrlToFile,
+  parsePastedHtml,
+} from "@/lib/html/paste-images";
 
 import { cn } from "@/lib/utils";
 
@@ -122,6 +129,64 @@ async function uploadImage(file: File): Promise<string> {
 
   const { url } = (await response.json()) as { url: string };
   return url;
+}
+
+/** One image's fate at the import route. */
+interface ImportedImage {
+  source: string;
+  url: string | null;
+  error?: string;
+}
+
+/**
+ * Asks the server to re-host images the operator pasted a reference to.
+ *
+ * The bytes cannot be fetched from here: the carrier's host does not permit a
+ * cross-origin read, and even where it did the browser would be downloading on
+ * behalf of a page that only needs the result stored. The server does it, under
+ * the guards in `src/lib/html/remote-image.ts`.
+ *
+ * All of them in one request. A pasted page routinely carries a dozen images,
+ * and a round trip apiece would leave the editor empty for long enough to look
+ * broken.
+ */
+async function importRemoteImages(
+  urls: readonly string[],
+): Promise<ImportedImage[]> {
+  const response = await fetch(INLINE_IMAGE_IMPORT_ROUTE, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ urls }),
+  });
+
+  if (!response.ok) {
+    const detail = (await response.json().catch(() => null)) as
+      | { error?: string }
+      | null;
+    throw new Error(detail?.error ?? "The images could not be imported.");
+  }
+
+  const { results } = (await response.json()) as { results: ImportedImage[] };
+  return results;
+}
+
+/** What an operator is told when part of a paste did not survive it. */
+function describeDropped(count: number, reasons: readonly string[]): string {
+  const subject =
+    count === 1 ? "One image could not be added" : `${count} images could not be added`;
+
+  // The distinct reasons, not one line per failed image: a page whose pictures
+  // all sit behind the same login would otherwise print the same sentence ten
+  // times.
+  const distinct = [...new Set(reasons)];
+
+  return distinct.length > 0
+    ? `${subject}: ${distinct.join(" ")}`
+    : `${subject} and were left out.`;
+}
+
+function messageFor(error: unknown): string {
+  return error instanceof Error ? error.message : "The image could not be added.";
 }
 
 function Toolbar({
@@ -342,23 +407,47 @@ export function RichTextEditor({
         const files = Array.from(event.clipboardData?.files ?? []);
         const images = files.filter((file) => file.type.startsWith("image/"));
 
-        if (images.length === 0) return false;
+        if (images.length > 0) {
+          event.preventDefault();
+          void insertImages(images);
+          return true;
+        }
+
+        // Copying a region of the carrier's booking page puts no files on the
+        // clipboard at all — it puts that page's markup there, with the
+        // carrier's own image URLs in it. Left alone, those render here (the
+        // browser simply fetches them) and then vanish on save, because the
+        // sanitiser refuses any `src` this application did not issue. So the
+        // images are re-hosted before the markup is inserted, and what the
+        // operator sees in the editor is what the booking will actually keep.
+        const html = event.clipboardData?.getData("text/html") ?? "";
+
+        if (!html.includes("<img")) return false;
 
         event.preventDefault();
-        void insertImages(images);
+        void insertPastedHtml(html);
         return true;
       },
 
       handleDrop: (_view, event) => {
-        const files = Array.from(
-          (event as DragEvent).dataTransfer?.files ?? [],
-        );
+        const transfer = (event as DragEvent).dataTransfer;
+        const files = Array.from(transfer?.files ?? []);
         const images = files.filter((file) => file.type.startsWith("image/"));
 
-        if (images.length === 0) return false;
+        if (images.length > 0) {
+          event.preventDefault();
+          void insertImages(images);
+          return true;
+        }
+
+        // Dragging an image out of another tab carries markup, not a file —
+        // the same shape as the paste above, and re-hosted the same way.
+        const html = transfer?.getData("text/html") ?? "";
+
+        if (!html.includes("<img")) return false;
 
         event.preventDefault();
-        void insertImages(images);
+        void insertPastedHtml(html);
         return true;
       },
     },
@@ -389,9 +478,74 @@ export function RichTextEditor({
       // submit markup without the image just added.
       setHtml(editor.getHTML());
     } catch (error) {
-      setImageError(
-        error instanceof Error ? error.message : "The image could not be added.",
-      );
+      setImageError(messageFor(error));
+    } finally {
+      setUploading(false);
+    }
+  }
+
+  /**
+   * Inserts pasted markup with every image re-hosted first.
+   *
+   * The rewriting happens on a detached document rather than on what is
+   * already in the editor, so a failed import never half-edits the itinerary:
+   * either the inserted markup is complete and self-hosted, or the images that
+   * could not be brought across are absent and the operator is told which.
+   */
+  async function insertPastedHtml(html: string): Promise<void> {
+    if (!editor) return;
+
+    setImageError(null);
+    setUploading(true);
+
+    try {
+      const doc = parsePastedHtml(html);
+      const { remote, data } = collectImageSources(doc, window.location.origin);
+
+      const resolved = new Map<string, string | null>();
+      const reasons: string[] = [];
+
+      // `data:` first, because it needs no network: the bytes came in on the
+      // clipboard and only have to be stored.
+      for (const [index, uri] of data.entries()) {
+        const file = dataUrlToFile(uri, index);
+
+        if (!file) {
+          resolved.set(uri, null);
+          reasons.push("Only PNG, JPEG, WebP and GIF images can be added.");
+          continue;
+        }
+
+        try {
+          resolved.set(uri, await uploadImage(file));
+        } catch (error) {
+          resolved.set(uri, null);
+          reasons.push(messageFor(error));
+        }
+      }
+
+      if (remote.length > 0) {
+        try {
+          for (const result of await importRemoteImages(remote)) {
+            resolved.set(result.source, result.url);
+            if (!result.url && result.error) reasons.push(result.error);
+          }
+        } catch (error) {
+          // The request itself failed, so nothing in it resolved. Recorded one
+          // by one rather than thrown, so the text of the paste still lands.
+          for (const source of remote) resolved.set(source, null);
+          reasons.push(messageFor(error));
+        }
+      }
+
+      const dropped = applyResolvedSources(doc, resolved);
+
+      editor.chain().focus().insertContent(doc.body.innerHTML).run();
+      setHtml(editor.getHTML());
+
+      if (dropped > 0) setImageError(describeDropped(dropped, reasons));
+    } catch (error) {
+      setImageError(messageFor(error));
     } finally {
       setUploading(false);
     }
