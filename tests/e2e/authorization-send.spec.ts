@@ -245,7 +245,7 @@ test("the e-ticket remembers an edit and shows it on its own page", async ({
       .getByRole("button", { name: "Sign & Confirm Booking" })
       .click();
     await expect(
-      customerPage.getByText("not a confirmation for the booking"),
+      customerPage.getByText("Your payment has been authorised."),
     ).toBeVisible();
   } finally {
     await customerContext.close();

@@ -189,9 +189,7 @@ export function SignatureForm({ token, customerName, contactPhone }: Props) {
 
       {signed ? (
         <p role="status" className="mt-4 font-semibold text-[#15803d]">
-          Be careful what you want to write here. It’s an authorization for the
-          booking/payment - not a confirmation for the booking. Please check
-          this and see if needs changing.
+          Your payment has been authorised.
         </p>
       ) : null}
     </div>

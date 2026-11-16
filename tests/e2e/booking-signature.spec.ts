@@ -67,7 +67,7 @@ test("a customer signs the authorization and the evidence reaches the booking", 
   await page.getByRole("button", { name: "Sign & Confirm Booking" }).click();
 
   await expect(
-    page.getByText("not a confirmation for the booking"),
+    page.getByText("Your payment has been authorised."),
   ).toBeVisible();
 
   const signature = await readSignature(booking.id);
@@ -166,7 +166,7 @@ test("a newer authorization reaches the panel without a reload", async ({
       .getByRole("button", { name: "Sign & Confirm Booking" })
       .click();
     await expect(
-      customerPage.getByText("not a confirmation for the booking"),
+      customerPage.getByText("Your payment has been authorised."),
     ).toBeVisible();
   };
 
