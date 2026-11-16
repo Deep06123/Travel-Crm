@@ -18,6 +18,20 @@ Documentation=file:///srv/travel-crm/docs/DEPLOYMENT.md
 After=network-online.target mysql.service
 Wants=network-online.target mysql.service
 
+# Five failures inside a minute is a configuration fault, not a blip. Give up
+# so `systemctl status` shows it plainly instead of hiding it in a restart
+# loop.
+#
+# These belong in [Unit]. systemd moved them out of [Service] in v229 and now
+# ignores `StartLimitIntervalSec` there outright — `systemd-analyze verify`
+# says so — which left the burst counted against the 10s default instead of
+# the minute written here. Restarts are 5s apart, so five of them could never
+# land inside 10s and the limit never fired: a service that could not boot
+# restarted every five seconds indefinitely, and `systemctl status` showed
+# `activating (auto-restart)` rather than the failure.
+StartLimitBurst=5
+StartLimitIntervalSec=60
+
 [Service]
 Type=simple
 User=deploy
@@ -44,10 +58,7 @@ Environment=HOSTNAME=127.0.0.1
 
 Restart=always
 RestartSec=5
-# Five failures inside a minute is a configuration fault, not a blip. Give up
-# so `systemctl status` shows it plainly instead of hiding it in a restart loop.
-StartLimitBurst=5
-StartLimitIntervalSec=60
+# The start limit that governs this lives in [Unit] above.
 
 # Graceful shutdown: Next finishes in-flight requests on SIGTERM.
 KillSignal=SIGTERM
