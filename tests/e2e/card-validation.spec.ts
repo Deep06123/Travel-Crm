@@ -2,11 +2,9 @@ import { expect, test, type Page } from "@playwright/test";
 
 import {
   cleanupFixtures,
-  createTestCustomer,
   createTestUser,
   fillCardDetails,
   signIn,
-  type TestCustomer,
   type TestUser,
 } from "./fixtures";
 
@@ -24,11 +22,9 @@ import {
  */
 
 let operations: TestUser;
-let customer: TestCustomer;
 
 test.beforeAll(async () => {
   operations = await createTestUser("OPERATIONS", "cardcheck-ops");
-  customer = await createTestCustomer();
 });
 
 test.afterAll(async () => {
@@ -40,7 +36,8 @@ async function openFlightForm(page: Page) {
   await signIn(page, operations);
   await page.goto("/admin/bookings/new/flight");
 
-  await page.locator('select[name="customerId"]').selectOption(customer.id);
+  // No customer is chosen: the flight form has no picker any more, and the
+  // customer is settled from the first passenger when the booking is saved.
   await page.locator('input[name="passengers.0.firstName"]').fill("Aster");
   await page.locator('input[name="passengers.0.lastName"]').fill("E2ECard");
 }

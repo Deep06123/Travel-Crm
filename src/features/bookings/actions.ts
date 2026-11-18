@@ -171,6 +171,18 @@ export async function createFlightBookingAction(
     amounts[field] = result.minor;
   }
 
+  // Needs the amounts, so it runs after them and before the error gate below.
+  const splits = parseChargeSplits(
+    formData,
+    {
+      currency: booking.currency,
+      splitCharges: booking.splitCharges,
+      totalMinor: amounts["total"] ?? 0,
+      hasTotal: (booking.total ?? "").trim() !== "",
+    },
+    fieldErrors,
+  );
+
   // Checked before the booking is written: once it exists there is no form to
   // send the operator back to, so a rejectable file has to be caught here.
   const documents = selectedDocuments(formData);
@@ -190,6 +202,7 @@ export async function createFlightBookingAction(
     created = await createFlightBooking(
       {
         booking,
+        splits,
         amounts: {
           baseFareMinor: amounts["baseFare"] ?? 0,
           taxesFeesMinor: amounts["taxesFees"] ?? 0,

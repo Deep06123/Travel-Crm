@@ -44,6 +44,11 @@ let customerId: string;
 const bookingIds: string[] = [];
 /** Reference rows this file creates, cleaned up with the rest. */
 const mcoSupplierIds: string[] = [];
+/**
+ * Customers the service invented from a lead passenger, rather than ones this
+ * file created. They hang off no fixture, so they are collected as they appear.
+ */
+const derivedCustomerIds: string[] = [];
 /** Keeps each fixture signature's token hash unique within the run. */
 let signatureCount = 0;
 
@@ -217,7 +222,9 @@ afterAll(async () => {
   // they survive as orphans that no later cleanup can find.
   await prisma.notification.deleteMany({ where: { bookingId: { in: bookingIds } } });
   await prisma.booking.deleteMany({ where: { id: { in: bookingIds } } });
-  await prisma.customer.deleteMany({ where: { id: customerId } });
+  await prisma.customer.deleteMany({
+    where: { id: { in: [customerId, ...derivedCustomerIds] } },
+  });
   await prisma.mcoSupplier.deleteMany({ where: { id: { in: mcoSupplierIds } } });
   await prisma.adminUser.deleteMany({ where: { id: actorId } });
   await prisma.$disconnect();
@@ -942,5 +949,169 @@ describe("updateMco", () => {
 
     expect(result.supplierChanged).toBe(true);
     expect(result.statusChanged).toBe(true);
+  });
+});
+
+/**
+ * The two things the flight create form stopped asking for.
+ *
+ * It no longer carries a customer picker, and its accounting panel is the
+ * cruise one: a split total rather than loose figures. Both are settled in the
+ * service, so neither is visible to the form tests — and before these, a
+ * flight booking's splits were accepted by the form and quietly dropped.
+ */
+describe("createFlightBooking without a customer", () => {
+  /** A flight booking built straight from the service, as the action does. */
+  async function createWith(
+    booking: Record<string, unknown>,
+    passengers: Record<string, unknown>[],
+    splits?: { title: string; amountMinor: number }[],
+  ): Promise<string> {
+    const { id } = await createFlightBooking(
+      {
+        booking: {
+          chargeOutcome: ChargeOutcome.PENDING,
+          ticketStatus: TicketStatus.PENDING,
+          mcoStatus: "NOT_APPLICABLE",
+          currency: "USD",
+          splitCharges: false,
+          ...booking,
+        } as never,
+        amounts: {
+          baseFareMinor: 0,
+          taxesFeesMinor: 0,
+          totalMinor: 281_250,
+          supplierCostMinor: 0,
+          grossMcoMinor: 0,
+          netMcoMinor: 0,
+        },
+        passengers: passengers as never,
+        segments: [],
+        ...(splits ? { splits } : {}),
+      },
+      actorId,
+    );
+
+    bookingIds.push(id);
+    return id;
+  }
+
+  it("makes the first passenger the customer", async () => {
+    const email = `lead-passenger-${SUFFIX}@example.invalid`;
+    const id = await createWith({ contactEmail: email }, [
+      { firstName: "Lead", lastName: "Passenger", type: PassengerType.ADULT },
+      { firstName: "Second", lastName: "Passenger", type: PassengerType.ADULT },
+    ]);
+
+    const booking = await prisma.booking.findUniqueOrThrow({
+      where: { id },
+      select: { customer: true },
+    });
+
+    derivedCustomerIds.push(booking.customer.id);
+
+    // The lead, not the fixture customer and not the second passenger.
+    expect(booking.customer.id).not.toBe(customerId);
+    expect(booking.customer.firstName).toBe("Lead");
+    expect(booking.customer.lastName).toBe("Passenger");
+    expect(booking.customer.email).toBe(email);
+  });
+
+  it("reuses the customer the contact email already identifies", async () => {
+    const email = `repeat-passenger-${SUFFIX}@example.invalid`;
+    const passengers = [
+      { firstName: "Repeat", lastName: "Flyer", type: PassengerType.ADULT },
+    ];
+
+    const first = await createWith({ contactEmail: email }, passengers);
+    const second = await createWith({ contactEmail: email }, passengers);
+
+    const [one, two] = await Promise.all([
+      prisma.booking.findUniqueOrThrow({
+        where: { id: first },
+        select: { customerId: true },
+      }),
+      prisma.booking.findUniqueOrThrow({
+        where: { id: second },
+        select: { customerId: true },
+      }),
+    ]);
+
+    derivedCustomerIds.push(one.customerId);
+
+    // One customer, two bookings — the second did not invent a duplicate.
+    expect(two.customerId).toBe(one.customerId);
+  });
+
+  it("still uses the customer the booking names, when it names one", async () => {
+    const id = await createWith({ customerId }, [
+      { firstName: "Named", lastName: "Customer", type: PassengerType.ADULT },
+    ]);
+
+    const booking = await prisma.booking.findUniqueOrThrow({
+      where: { id },
+      select: { customerId: true },
+    });
+
+    expect(booking.customerId).toBe(customerId);
+  });
+});
+
+describe("flight charge splits", () => {
+  it("writes the splits given at creation", async () => {
+    const { id } = await createFlightBooking(
+      {
+        booking: {
+          customerId,
+          chargeOutcome: ChargeOutcome.PENDING,
+          ticketStatus: TicketStatus.PENDING,
+          mcoStatus: "NOT_APPLICABLE",
+          currency: "USD",
+          splitCharges: true,
+        } as never,
+        amounts: {
+          baseFareMinor: 0,
+          taxesFeesMinor: 0,
+          totalMinor: 281_250,
+          supplierCostMinor: 0,
+          grossMcoMinor: 0,
+          netMcoMinor: 0,
+        },
+        passengers: [
+          { firstName: "Split", lastName: "Flyer", type: PassengerType.ADULT },
+        ] as never,
+        segments: [],
+        splits: [
+          { title: "Deposit", amountMinor: 181_250 },
+          { title: "Balance", amountMinor: 100_000 },
+        ],
+      },
+      actorId,
+    );
+    bookingIds.push(id);
+
+    const splits = await prisma.bookingChargeSplit.findMany({
+      where: { bookingId: id },
+      orderBy: { sequence: "asc" },
+    });
+
+    expect(splits).toHaveLength(2);
+    expect(splits[0]?.title).toBe("Deposit");
+    expect(splits[0]?.amountMinor).toBe(181_250);
+    expect(splits[1]?.title).toBe("Balance");
+    // They account for the whole booking value.
+    expect(splits.reduce((sum, split) => sum + split.amountMinor, 0)).toBe(
+      281_250,
+    );
+  });
+
+  it("writes none when the booking says it is not split", async () => {
+    const id = await makeBooking();
+
+    const splits = await prisma.bookingChargeSplit.findMany({
+      where: { bookingId: id },
+    });
+
+    expect(splits).toHaveLength(0);
   });
 });

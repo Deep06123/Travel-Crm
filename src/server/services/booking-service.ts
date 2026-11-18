@@ -109,6 +109,105 @@ function openingMcoStatus(
   return grossMcoMinor > 0 ? McoStatus.PENDING : McoStatus.NOT_APPLICABLE;
 }
 
+// --- Shared between both products -------------------------------------------
+
+/** One line of a split total, already converted against the currency. */
+export interface ChargeSplitDraft {
+  title: string;
+  amountMinor: number;
+}
+
+/** What `resolveBookingCustomerId` needs of a booking, whichever product it is. */
+interface CustomerSourceBooking {
+  customerId?: string | undefined;
+  contactEmail?: string | undefined;
+  contactPhone?: string | undefined;
+  billingAddressLine1?: string | undefined;
+  billingCity?: string | undefined;
+  billingState?: string | undefined;
+  billingPostalCode?: string | undefined;
+  billingCountry?: string | undefined;
+  language?: string | undefined;
+}
+
+/**
+ * Settles which customer a booking belongs to.
+ *
+ * Neither create form has a customer picker: a trip is sold to the people
+ * travelling, so the lead traveller — the first guest or the first passenger —
+ * is the customer. An existing record is reused when the booking's contact
+ * email or phone identifies one; matching on the name alone is deliberately
+ * not enough, as it is elsewhere in the app.
+ *
+ * `origin` only names the product in the audit entry, so the trail says where
+ * the customer came from.
+ */
+async function resolveBookingCustomerId(
+  tx: Prisma.TransactionClient,
+  booking: CustomerSourceBooking,
+  lead: { firstName: string; lastName: string } | undefined,
+  actorId: string,
+  origin: "flight" | "cruise",
+): Promise<string> {
+  if (booking.customerId) return booking.customerId;
+
+  if (!lead) {
+    throw new Error(
+      `A ${origin} booking needs at least one traveller to own it.`,
+    );
+  }
+
+  const email = booking.contactEmail ?? null;
+  const phone = booking.contactPhone ?? null;
+
+  const identifiers: Prisma.CustomerWhereInput[] = [];
+  if (email) identifiers.push({ email });
+  if (phone) identifiers.push({ phone });
+
+  if (identifiers.length > 0) {
+    const existing = await tx.customer.findFirst({
+      where: { OR: identifiers },
+      select: { id: true },
+      orderBy: { createdAt: "asc" },
+    });
+    if (existing) return existing.id;
+  }
+
+  const reference = await nextCustomerReference(tx);
+
+  const customer = await tx.customer.create({
+    data: {
+      reference,
+      firstName: lead.firstName,
+      lastName: lead.lastName,
+      email,
+      phone,
+      billingAddressLine1: booking.billingAddressLine1 ?? null,
+      billingCity: booking.billingCity ?? null,
+      billingState: booking.billingState ?? null,
+      billingPostalCode: booking.billingPostalCode ?? null,
+      billingCountry: booking.billingCountry ?? null,
+      preferredLanguage: booking.language ?? null,
+    },
+    select: { id: true },
+  });
+
+  await recordAudit(
+    {
+      action: AuditAction.CREATE,
+      entityType: "Customer",
+      entityId: customer.id,
+      adminUserId: actorId,
+      summary: `Created customer ${reference} from a ${origin} booking`,
+    },
+    tx,
+  );
+
+  return customer.id;
+}
+
+// --- Flight bookings --------------------------------------------------------
+
 export interface CreateFlightBookingInput {
   booking: FlightBookingInput;
   /** Minor-unit amounts, already converted against the booking's currency. */
@@ -122,16 +221,25 @@ export interface CreateFlightBookingInput {
   };
   passengers: PassengerInput[];
   segments: FlightSegmentInput[];
+  /** How the total is divided, when `booking.splitCharges` says it is. */
+  splits?: ChargeSplitDraft[];
 }
 
 export async function createFlightBooking(
-  { booking, amounts, passengers, segments }: CreateFlightBookingInput,
+  { booking, amounts, passengers, segments, splits = [] }: CreateFlightBookingInput,
   actorId: string,
 ): Promise<{ id: string; bookingNumber: string }> {
   const mcoSupplierId = await resolveMcoSupplierId(booking.mcoSupplierName);
 
   return prisma.$transaction(async (tx) => {
     const bookingNumber = await nextBookingNumber(tx);
+    const customerId = await resolveBookingCustomerId(
+      tx,
+      booking,
+      passengers[0],
+      actorId,
+      "flight",
+    );
 
     const created = await tx.booking.create({
       data: {
@@ -143,7 +251,7 @@ export async function createFlightBooking(
         priority: derivePriority(booking.departureDate, new Date()),
         chargeOutcome: booking.chargeOutcome,
         bookingTypeId: booking.bookingTypeId ?? null,
-        customerId: booking.customerId,
+        customerId,
         createdById: actorId,
         assignedAgentId: booking.assignedAgentId ?? null,
         supplierId: booking.supplierId ?? null,
@@ -214,6 +322,20 @@ export async function createFlightBooking(
             isRoundTrip: booking.returnDate !== undefined,
           },
         },
+
+        // Only written when the booking claims to be split: a row here would
+        // otherwise describe a division the booking says does not exist.
+        ...(booking.splitCharges && splits.length > 0
+          ? {
+              chargeSplits: {
+                create: splits.map((split, index) => ({
+                  sequence: index + 1,
+                  title: split.title,
+                  amountMinor: split.amountMinor,
+                })),
+              },
+            }
+          : {}),
 
         passengers: {
           create: passengers.map((passenger, index) => ({
@@ -739,12 +861,6 @@ export function redactPassengers(
 
 // --- Cruise bookings --------------------------------------------------------
 
-/** One line of a split total, already converted against the currency. */
-export interface ChargeSplitDraft {
-  title: string;
-  amountMinor: number;
-}
-
 export interface CreateCruiseBookingInput {
   booking: CruiseBookingInput;
   /** Minor-unit amounts, already converted against the booking's currency. */
@@ -759,76 +875,6 @@ export interface CreateCruiseBookingInput {
   guests: CruiseGuestInput[];
   /** How the total is divided, when `booking.splitCharges` says it is. */
   splits?: ChargeSplitDraft[];
-}
-
-/**
- * Settles which customer a cruise booking belongs to.
- *
- * The cruise form has no customer picker: a cruise is sold to the people
- * sailing, so the first guest is the customer. An existing record is reused
- * when the booking's contact email or phone identifies one — matching on the
- * name alone is deliberately not enough, as it is elsewhere in the app.
- */
-async function resolveCruiseCustomerId(
-  tx: Prisma.TransactionClient,
-  booking: CruiseBookingInput,
-  guests: CruiseGuestInput[],
-  actorId: string,
-): Promise<string> {
-  if (booking.customerId) return booking.customerId;
-
-  const lead = guests[0];
-  if (!lead) {
-    throw new Error("A cruise booking needs at least one guest to own it.");
-  }
-
-  const email = booking.contactEmail ?? null;
-  const phone = booking.contactPhone ?? null;
-
-  const identifiers: Prisma.CustomerWhereInput[] = [];
-  if (email) identifiers.push({ email });
-  if (phone) identifiers.push({ phone });
-
-  if (identifiers.length > 0) {
-    const existing = await tx.customer.findFirst({
-      where: { OR: identifiers },
-      select: { id: true },
-      orderBy: { createdAt: "asc" },
-    });
-    if (existing) return existing.id;
-  }
-
-  const reference = await nextCustomerReference(tx);
-
-  const customer = await tx.customer.create({
-    data: {
-      reference,
-      firstName: lead.firstName,
-      lastName: lead.lastName,
-      email,
-      phone,
-      billingAddressLine1: booking.billingAddressLine1 ?? null,
-      billingCity: booking.billingCity ?? null,
-      billingState: booking.billingState ?? null,
-      billingPostalCode: booking.billingPostalCode ?? null,
-      billingCountry: booking.billingCountry ?? null,
-      preferredLanguage: booking.language ?? null,
-    },
-    select: { id: true },
-  });
-
-  await recordAudit(
-    {
-      action: AuditAction.CREATE,
-      entityType: "Customer",
-      entityId: customer.id,
-      adminUserId: actorId,
-      summary: `Created customer ${reference} from a cruise booking`,
-    },
-    tx,
-  );
-
-  return customer.id;
 }
 
 /**
@@ -848,11 +894,12 @@ export async function createCruiseBooking(
 
   return prisma.$transaction(async (tx) => {
     const bookingNumber = await nextBookingNumber(tx);
-    const customerId = await resolveCruiseCustomerId(
+    const customerId = await resolveBookingCustomerId(
       tx,
       booking,
-      guests,
+      guests[0],
       actorId,
+      "cruise",
     );
 
     const created = await tx.booking.create({

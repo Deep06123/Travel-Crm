@@ -2,11 +2,9 @@ import { expect, test } from "@playwright/test";
 
 import {
   cleanupFixtures,
-  createTestCustomer,
   createTestUser,
   fillCardDetails,
   signIn,
-  type TestCustomer,
   type TestUser,
 } from "./fixtures";
 
@@ -21,13 +19,11 @@ import {
  */
 
 let operations: TestUser;
-let customer: TestCustomer;
 
 const GUIDE = '[aria-label="Fields that need attention"]';
 
 test.beforeAll(async () => {
   operations = await createTestUser("OPERATIONS", "form-guide-ops");
-  customer = await createTestCustomer();
 });
 
 test.afterAll(async () => {
@@ -43,9 +39,12 @@ test("it names every rejected field, with the panel it lives in", async ({
   // Every booking needs a card: the form will not submit without one.
   await fillCardDetails(page);
 
-  // Customer left unselected, a blank surname, and a malformed billing
-  // address. The billing one is deliberately not a card field: the card is
-  // checked in the browser and never gets as far as a rejection to list.
+  // A return before departure, a blank surname, and a malformed billing
+  // address — three panels, so the box has to name each one. The billing one
+  // is deliberately not a card field: the card is checked in the browser and
+  // never gets as far as a rejection to list.
+  await page.locator('input[name="departureDate"]').fill("2027-11-09");
+  await page.locator('input[name="returnDate"]').fill("2027-11-02");
   await page.locator('input[name="passengers.0.firstName"]').fill("Aster");
   await page.locator('input[name="passengers.0.lastName"]').fill(" ");
   await page.locator('input[name="billingEmails"]').fill("not-an-email");
@@ -58,8 +57,10 @@ test("it names every rejected field, with the panel it lives in", async ({
 
   // Each entry carries its panel, and the row where there is one. The wording
   // is the schema's own, not a second copy written for the box.
-  await expect(guide).toContainText("Booking details → Customer");
-  await expect(guide).toContainText("Select a customer.");
+  await expect(guide).toContainText("Flight information → Returning date");
+  await expect(guide).toContainText(
+    "The return date cannot be before departure.",
+  );
   await expect(guide).toContainText(
     "Passenger information → Passenger 1 → Last name",
   );
@@ -79,17 +80,19 @@ test("an entry opens the collapsed panel its field is hidden in", async ({
   // Every booking needs a card: the form will not submit without one.
   await fillCardDetails(page);
 
-  await page.locator('select[name="customerId"]').selectOption(customer.id);
   await page.locator('input[name="passengers.0.firstName"]').fill("Aster");
   await page.locator('input[name="passengers.0.lastName"]').fill("Collapsed");
 
-  // Gross fare is in Accounting information, which starts collapsed. Open it,
-  // enter something the money parser rejects, then close it again — which is
-  // exactly the state an operator ends up in, unable to see the problem.
+  // The split amounts are in Accounting information, which starts collapsed.
+  // Open it, enter something the money parser rejects, then close it again —
+  // which is exactly the state an operator ends up in, unable to see the
+  // problem.
   await page
     .getByRole("button", { name: "Expand Accounting information" })
     .click();
-  await page.locator('input[name="baseFare"]').fill("not-a-number");
+  await page.locator('select[name="splitCharges"]').selectOption("true");
+  await page.locator('input[name="splits.0.title"]').fill("Deposit");
+  await page.locator('input[name="splits.0.amount"]').fill("not-a-number");
   await page
     .getByRole("button", { name: "Collapse Accounting information" })
     .click();
@@ -98,7 +101,12 @@ test("an entry opens the collapsed panel its field is hidden in", async ({
 
   const guide = page.locator(GUIDE);
   await expect(guide).toBeVisible();
-  await expect(guide).toContainText("Accounting information → Gross fare");
+  // The splits are a fieldset within the panel, so the entry names the row it
+  // is in as well — the same way a passenger row is named.
+  await expect(guide).toContainText(
+    "Accounting information → How the total is split 1 → Amount",
+  );
+  await expect(guide).toContainText("Enter a valid amount in USD.");
 
   // The panel is still shut at this point, and a hidden field cannot take
   // focus — so the entry has to open it before focusing.
@@ -106,12 +114,12 @@ test("an entry opens the collapsed panel its field is hidden in", async ({
     page.getByRole("button", { name: "Expand Accounting information" }),
   ).toHaveCount(1);
 
-  await guide.getByRole("button", { name: /Gross fare/ }).click();
+  await guide.getByRole("button", { name: /Amount/ }).click();
 
   await expect(
     page.getByRole("button", { name: "Collapse Accounting information" }),
   ).toHaveCount(1);
-  await expect(page.locator('input[name="baseFare"]')).toBeFocused();
+  await expect(page.locator('input[name="splits.0.amount"]')).toBeFocused();
 });
 
 test("it takes itself away, unless the pointer is on it", async ({ page }) => {
@@ -162,7 +170,6 @@ test("it stays quiet when the booking is accepted", async ({ page }) => {
   // Every booking needs a card: the form will not submit without one.
   await fillCardDetails(page);
 
-  await page.locator('select[name="customerId"]').selectOption(customer.id);
   await page.locator('input[name="passengers.0.firstName"]').fill("Aster");
   await page.locator('input[name="passengers.0.lastName"]').fill("Accepted");
   await page.locator('input[name="pnrLocator"]').fill("OK123");

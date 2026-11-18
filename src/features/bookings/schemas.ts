@@ -250,7 +250,9 @@ export const flightBookingSchema = z
     ticketingReference: optionalText(100),
 
     // D. Customer and billing
-    customerId: requiredText(40, "Select a customer."),
+    // Optional: the flight form has no customer picker either. Left empty, the
+    // customer is created from the first passenger when the booking is saved.
+    customerId: optionalText(40),
     contactName: optionalText(200),
     contactEmail: z
       .string()

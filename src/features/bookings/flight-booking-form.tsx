@@ -13,6 +13,7 @@ import { Panel } from "@/components/ui/panel";
 
 import { BookingDocuments } from "./booking-documents";
 import { BillingInformation, useCardEntry } from "./billing-information";
+import { ChargeSplits } from "./charge-splits";
 import { ItinerarySource } from "./itinerary-source";
 import {
   ChargeOutcome,
@@ -135,10 +136,12 @@ export function FlightBookingForm({
 
           {/* Per-booking email override. Left blank, the template decides —
               which keeps an automatic confirmation reading the same whoever
-              happened to trigger it. */}
+              happened to trigger it. Given a line of its own because a subject
+              is long enough that a third of a row reads badly. */}
           <Field
             id="customEmailSubject"
             label="Subject"
+            className="sm:col-span-2 lg:col-span-3"
             hint="Leave blank to use the standard subject."
             error={error("customEmailSubject")}
           >
@@ -152,36 +155,12 @@ export function FlightBookingForm({
             )}
           </Field>
 
-          {/* The customer lives here now; there is no separate customer panel. */}
-          <Field
-            id="customerId"
-            label="Customer"
-            required
-            hint="Required. Create the customer first if they are not listed."
-            error={error("customerId")}
-          >
-            {(props) => (
-              <StickySelect
-                {...props}
-                name="customerId"
-                required
-                defaultValue={value("customerId", preselectedCustomerId ?? "")}
-              >
-                <option value="">— Select a customer —</option>
-                {options.customers.map((customer) => (
-                  <option key={customer.id} value={customer.id}>
-                    {customer.reference} — {customer.firstName} {customer.lastName}
-                  </option>
-                ))}
-              </StickySelect>
-            )}
-          </Field>
-
-          <Field id="bookedAt" label="Booking date" hint="Defaults to now." error={error("bookedAt")}>
-            {(props) => (
-              <Input {...props} name="bookedAt" type="datetime-local" defaultValue={value("bookedAt")} />
-            )}
-          </Field>
+          {/* No customer picker: the customer is taken from the first
+              passenger below, or carried over when the booking was started
+              from a customer record. The booking date is always now. */}
+          {preselectedCustomerId ? (
+            <input type="hidden" name="customerId" value={preselectedCustomerId} />
+          ) : null}
 
           <Field id="assignedAgentId" label="Assigned agent" error={error("assignedAgentId")}>
             {(props) => (
@@ -468,26 +447,20 @@ export function FlightBookingForm({
         </div>
       </Panel>
 
-      {/* F — Accounting. Five figures, per the review sheet. Currency is no
-          longer chosen per booking: it rides along as a hidden field carrying
-          the operator default, because the service needs it to convert these
-          decimal strings to minor units. */}
+      {/* F — Accounting. Currency is not chosen per booking: it rides along as
+          a hidden field carrying the operator default, because the service
+          needs it to convert the decimal strings the splits are typed in to
+          minor units.
+
+          The gross fare and the MCO are no longer asked for here, and the
+          total fare is typed where it is checked — at the foot of the splits.
+          It still submits under `total`, so the field is kept as a hidden
+          input for the splits editor to write through to. */}
       <Panel title="Accounting information" defaultOpen={false}>
         <input type="hidden" name="currency" value={options.defaultCurrency} />
+        <input type="hidden" name="total" defaultValue={value("total")} />
 
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          <Field id="baseFare" label="Gross fare" hint="Digits and a decimal point." error={error("baseFare")}>
-            {(props) => <Input {...props} name="baseFare" inputMode="decimal" placeholder="1029.97" defaultValue={value("baseFare")} />}
-          </Field>
-
-          <Field id="grossMco" label="MCO" hint="Digits and a decimal point." error={error("grossMco")}>
-            {(props) => <Input {...props} name="grossMco" inputMode="decimal" placeholder="1029.97" defaultValue={value("grossMco")} />}
-          </Field>
-
-          <Field id="total" label="Total fare" hint="Digits and a decimal point." error={error("total")}>
-            {(props) => <Input {...props} name="total" inputMode="decimal" placeholder="1029.97" defaultValue={value("total")} />}
-          </Field>
-
           {/* Typed, not picked. The list below is a suggestion of the
               suppliers already on file; a name that is not among them is
               accepted and created with the booking. */}
@@ -504,6 +477,7 @@ export function FlightBookingForm({
                   name="mcoSupplierName"
                   list="mco-supplier-names"
                   autoComplete="off"
+                  placeholder="Skyhyplanners"
                   defaultValue={value("mcoSupplierName")}
                 />
                 <datalist id="mco-supplier-names">
@@ -515,14 +489,13 @@ export function FlightBookingForm({
             )}
           </Field>
 
-          <Field id="splitCharges" label="Split charges" error={error("splitCharges")}>
-            {(props) => (
-              <StickySelect {...props} name="splitCharges" defaultValue={value("splitCharges", "false")}>
-                <option value="false">No</option>
-                <option value="true">Yes</option>
-              </StickySelect>
-            )}
-          </Field>
+          {/* Both the flag and, when it is Yes, the charges it stands for. */}
+          <ChargeSplits
+            value={value}
+            error={error}
+            sectionHasError={sectionHasError}
+            currency={options.defaultCurrency}
+          />
         </div>
       </Panel>
 

@@ -2,11 +2,9 @@ import { expect, test } from "@playwright/test";
 
 import {
   cleanupFixtures,
-  createTestCustomer,
   createTestUser,
   fillCardDetails,
   signIn,
-  type TestCustomer,
   type TestUser,
 } from "./fixtures";
 
@@ -19,10 +17,9 @@ import {
  * drops to its first option — React assigns `select.value` imperatively and
  * marks no `<option selected>` for the reset to find.
  *
- * So every rejected booking silently cleared Customer, Booking type, Supplier
- * and the rest while appearing to keep everything else. Customer is required,
- * which turned one missed field into "Select a customer." for a customer the
- * operator had already chosen.
+ * So every rejected booking silently cleared Booking type, Language, Supplier
+ * and the rest while appearing to keep everything else — turning one missed
+ * field into a second round of re-entering choices already made.
  *
  * These drive the real forms because the bug lives in the interaction between
  * React's reset and the DOM. Nothing below it — not the schema, not the
@@ -30,18 +27,16 @@ import {
  */
 
 let operations: TestUser;
-let customer: TestCustomer;
 
 test.beforeAll(async () => {
   operations = await createTestUser("OPERATIONS", "formstate-ops");
-  customer = await createTestCustomer();
 });
 
 test.afterAll(async () => {
   await cleanupFixtures();
 });
 
-test("a rejected flight booking keeps the selected customer", async ({
+test("a rejected flight booking keeps what was chosen", async ({
   page,
 }) => {
   await signIn(page, operations);
@@ -50,10 +45,10 @@ test("a rejected flight booking keeps the selected customer", async ({
   // Every booking needs a card: the form will not submit without one.
   await fillCardDetails(page);
 
-  const customerSelect = page.locator('select[name="customerId"]');
+  const languageSelect = page.locator('select[name="language"]');
   const chargeSelect = page.locator('select[name="chargeOutcome"]');
 
-  await customerSelect.selectOption(customer.id);
+  await languageSelect.selectOption("es");
   await chargeSelect.selectOption("CHARGED");
   await page.locator('input[name="pnrLocator"]').fill("STATE1");
 
@@ -67,13 +62,9 @@ test("a rejected flight booking keeps the selected customer", async ({
   );
 
   // The selects survive the reset, not just the text inputs.
-  await expect(customerSelect).toHaveValue(customer.id);
+  await expect(languageSelect).toHaveValue("es");
   await expect(chargeSelect).toHaveValue("CHARGED");
   await expect(page.locator('input[name="pnrLocator"]')).toHaveValue("STATE1");
-
-  // And the error is about what is actually missing — not about a customer
-  // that was selected all along.
-  await expect(page.getByText("Select a customer.")).toHaveCount(0);
 });
 
 test("a rejected cruise booking keeps what was typed", async ({
